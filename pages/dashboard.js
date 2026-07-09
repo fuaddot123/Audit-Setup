@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 import { supabase } from "../lib/supabaseClient";
 import Sidebar from "../components/Sidebar";
 import AuditKeuangan from "../components/AuditKeuangan";
+import Timeline from "../components/Timeline";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -30,6 +31,8 @@ export default function Dashboard() {
       <Sidebar active={active} onSelect={setActive} profile={profile} />
       {active === "keuangan" ? (
         <AuditKeuangan profile={profile} />
+      ) : active === "timeline" ? (
+        <Timeline />
       ) : (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#9AA0AC", flexDirection: "column" }}>
           <div className="display" style={{ fontSize: 19, fontWeight: 600, color: "#5B6270", marginBottom: 6 }}>Modul ini belum dibuat</div>
