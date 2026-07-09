@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 
 const DAY_HEADERS = ["Senin", "Selasa", "Rabu", "Kamis", "Jum'at", "Sabtu", "Minggu"];
+const PALETTE = ["#F4B740", "#EC4899", "#8B5CF6", "#22D3EE", "#34D399", "#F97316", "#60A5FA", "#F472B6", "#A3E635", "#FB7185"];
 const MONTH_NAMES = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
 
 function toDate(str) { const d = new Date(str + "T00:00:00"); return d; }
@@ -82,8 +83,9 @@ export default function Timeline() {
     }
   }
 
-  function branchColor() {
-    return "#EAF4F1";
+  function branchColor(branchId) {
+    const idx = branches.findIndex((b) => b.id === branchId);
+    return PALETTE[(idx >= 0 ? idx : 0) % PALETTE.length];
   }
 
   const events = rawEvents.map((e) => ({
@@ -176,14 +178,14 @@ export default function Timeline() {
     setCurrent({ year, month });
   }
 
-  if (loading) return <div style={{ padding: 40, color: "#8B909C" }}>Memuat data…</div>;
+  if (loading) return <div style={{ padding: 40, color: "var(--text-secondary)" }}>Memuat data…</div>;
 
   return (
     <div style={{ flex: 1 }}>
-      <div style={{ background: "#fff", padding: "18px 28px", borderBottom: "1px solid #E4E5E9", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+      <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
         <div>
           <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Timeline</div>
-          <div style={{ color: "#8B909C", fontSize: 12.5 }}>Jadwal audit tiap cabang, satu tampilan buat seluruh tim</div>
+          <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Jadwal audit tiap cabang, satu tampilan buat seluruh tim</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button className="btn-ghost" onClick={() => changeMonth(-1)}>{"<"}</button>
@@ -193,14 +195,14 @@ export default function Timeline() {
         </div>
       </div>
 
-      {error && <div style={{ margin: "14px 28px 0", background: "#FBEBE7", border: "1px solid #F0C6BC", color: "#9C3B29", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
+      {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
 
       <div style={{ padding: 24 }}>
-        <div style={{ background: "#fff", border: "1px solid #E4E5E9", borderRadius: 12, overflow: "hidden" }}>
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
           {/* header hari */}
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", borderBottom: "1px solid #E4E5E9" }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)", borderBottom: "1px solid var(--border)" }}>
             {DAY_HEADERS.map((d, i) => (
-              <div key={d} style={{ padding: "10px 12px", fontSize: 13, fontWeight: 600, color: i >= 5 ? "#C4432B" : "#1A1D24", borderRight: i < 6 ? "1px solid #EDEEF1" : "none" }}>{d}</div>
+              <div key={d} style={{ padding: "10px 12px", fontSize: 13, fontWeight: 600, color: i >= 5 ? "var(--danger-text)" : "var(--text-primary)", borderRight: i < 6 ? "1px solid var(--border)" : "none" }}>{d}</div>
             ))}
           </div>
 
@@ -208,7 +210,7 @@ export default function Timeline() {
             const wEvents = eventsForWeek(week, events);
             const { events: laneEvents, laneCount } = assignLanes(wEvents);
             return (
-              <div key={wi} style={{ borderBottom: wi < weeks.length - 1 ? "1px solid #E4E5E9" : "none" }}>
+              <div key={wi} style={{ borderBottom: wi < weeks.length - 1 ? "1px solid var(--border)" : "none" }}>
                 {/* tanggal */}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)" }}>
                   {week.map((d, di) => {
@@ -217,7 +219,7 @@ export default function Timeline() {
                       <div
                         key={di}
                         onClick={() => openAdd(d)}
-                        style={{ padding: "8px 10px 2px", fontSize: 12.5, color: inMonth ? (di >= 5 ? "#C4432B" : "#5B6270") : "#C7CAD1", borderRight: di < 6 ? "1px solid #F1F2F4" : "none", cursor: "pointer", fontStyle: inMonth ? "normal" : "italic" }}
+                        style={{ padding: "8px 10px 2px", fontSize: 12.5, color: inMonth ? (di >= 5 ? "var(--danger-text)" : "var(--text-secondary)") : "var(--text-faint)", borderRight: di < 6 ? "1px solid var(--border)" : "none", cursor: "pointer", fontStyle: inMonth ? "normal" : "italic" }}
                       >
                         {d.getDate()}
                       </div>
@@ -235,8 +237,8 @@ export default function Timeline() {
                         gridColumn: `${e.startIdx + 1} / ${e.endIdx + 2}`,
                         gridRow: e.lane + 1,
                         background: e.color,
-                        borderLeft: "3px solid #1F6F5C",
-                        color: "#1A1D24",
+                        borderLeft: "3px solid rgba(0,0,0,0.25)",
+                        color: "#1A1024",
                         margin: "0 2px",
                         borderRadius: 4,
                         padding: "3px 8px",
@@ -259,16 +261,16 @@ export default function Timeline() {
             );
           })}
         </div>
-        <div style={{ fontSize: 12, color: "#9AA0AC", marginTop: 10 }}>Klik tanggal kosong buat tambah jadwal baru, atau klik blok warna buat edit/hapus.</div>
+        <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 10 }}>Klik tanggal kosong buat tambah jadwal baru, atau klik blok warna buat edit/hapus.</div>
       </div>
 
       {showModal && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(20,22,28,0.45)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setShowModal(false)}>
-          <div style={{ background: "#fff", borderRadius: 14, padding: 24, width: 380, maxWidth: "90%" }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ position: "fixed", inset: 0, background: "var(--overlay)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setShowModal(false)}>
+          <div style={{ background: "var(--surface)", borderRadius: 14, padding: 24, width: 380, maxWidth: "90%" }} onClick={(e) => e.stopPropagation()}>
             <div className="display" style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>{editingId ? "Edit jadwal" : "Jadwal baru"}</div>
 
             <div style={{ marginBottom: 12 }}>
-              <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "#5B6270", marginBottom: 5 }}>Cabang</label>
+              <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Cabang</label>
               <select className="input" value={form.branch_id} onChange={(e) => setForm({ ...form, branch_id: e.target.value })}>
                 <option value="">— pilih cabang —</option>
                 {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
@@ -276,29 +278,29 @@ export default function Timeline() {
             </div>
 
             <div style={{ marginBottom: 12 }}>
-              <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "#5B6270", marginBottom: 5 }}>Nama yang audit</label>
+              <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Nama yang audit</label>
               <input className="input" placeholder="Misal: Budi" value={form.auditor_name} onChange={(e) => setForm({ ...form, auditor_name: e.target.value })} />
             </div>
 
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
               <div>
-                <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "#5B6270", marginBottom: 5 }}>Mulai</label>
+                <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Mulai</label>
                 <input className="input" type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} />
               </div>
               <div>
-                <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "#5B6270", marginBottom: 5 }}>Selesai</label>
+                <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Selesai</label>
                 <input className="input" type="date" value={form.end_date} onChange={(e) => setForm({ ...form, end_date: e.target.value })} />
               </div>
             </div>
 
             <div style={{ marginBottom: 18 }}>
-              <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "#5B6270", marginBottom: 5 }}>Catatan (opsional)</label>
+              <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Catatan (opsional)</label>
               <input className="input" placeholder="Misal: Report Monthly" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
             </div>
 
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
               {editingId ? (
-                <button className="btn-ghost" disabled={saving} style={{ color: "#9C3B29", borderColor: "#F0C6BC" }} onClick={deleteEvent}>Hapus</button>
+                <button className="btn-ghost" disabled={saving} style={{ color: "var(--danger-text)", borderColor: "var(--danger-border)" }} onClick={deleteEvent}>Hapus</button>
               ) : <span />}
               <div style={{ display: "flex", gap: 8 }}>
                 <button className="btn-ghost" onClick={() => setShowModal(false)}>Batal</button>

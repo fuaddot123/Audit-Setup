@@ -1,9 +1,9 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 
 const INDO_MONTHS = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
 function monthLabel(period) {
-  if (!period) return "–";
+  if (!period) return "\u2013";
   const [y, m] = period.split("-");
   return INDO_MONTHS[parseInt(m, 10) - 1] + " " + y;
 }
@@ -12,13 +12,14 @@ function rupiah(n) {
   n = parseFloat(n) || 0;
   return (n < 0 ? "-" : "") + "Rp " + Math.round(Math.abs(n)).toLocaleString("id-ID");
 }
-function pct(n) { return n == null || !isFinite(n) ? "–" : (n * 100).toFixed(1) + "%"; }
+function pct(n) { return n == null || !isFinite(n) ? "\u2013" : (n * 100).toFixed(1) + "%"; }
+function esc(s) { return String(s == null ? "" : s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
 
 const TONE = {
-  good: { dot: "#1F6F5C", bg: "#EAF4F1", text: "#1F6F5C" },
-  warn: { dot: "#B8792A", bg: "#FBF1E4", text: "#8A5A1D" },
-  bad: { dot: "#B5432E", bg: "#FBEBE7", text: "#9C3B29" },
-  none: { dot: "#B8BCC4", bg: "#F1F2F4", text: "#6B7180" },
+  good: { dot: "var(--success-dot)", bg: "var(--success-bg)", text: "var(--success-text)" },
+  warn: { dot: "var(--warning-dot)", bg: "var(--warning-bg)", text: "var(--warning-text)" },
+  bad: { dot: "var(--danger-text)", bg: "var(--danger-bg)", text: "var(--danger-text)" },
+  none: { dot: "var(--neutral-dot)", bg: "var(--neutral-bg)", text: "var(--neutral-text)" },
 };
 
 function computeStatus(entry, settings) {
@@ -37,9 +38,17 @@ function computeStatus(entry, settings) {
   else if (posisi * 100 <= settings.efisien) { indikator = "Efisien"; keterangan = "Penggunaan baik, saldo cadangan memadai"; tone = "good"; }
   else if (posisi * 100 <= settings.monitoring) { indikator = "Monitoring"; keterangan = "Perlu dipantau, posisi kas mendekati limit"; tone = "warn"; }
   else { indikator = "Tindak Lanjut"; keterangan = "Posisi kas melebihi ambang, perlu tindak lanjut"; tone = "bad"; }
-  if (lim > 0 && pk > lim && sisa >= 0) keterangan += " · saldo melebihi limit";
+  if (lim > 0 && pk > lim && sisa >= 0) keterangan += " \u00b7 saldo melebihi limit";
   return { sisa, terpakai, posisi, indikator, keterangan, tone };
 }
+
+const FILTERS = [
+  { key: "all", label: "Semua cabang" },
+  { key: "none", label: "Belum diisi" },
+  { key: "good", label: "Efisien / Terkendali" },
+  { key: "warn", label: "Monitoring" },
+  { key: "bad", label: "Pengecekan / Tindak Lanjut" },
+];
 
 export default function AuditKeuangan({ profile }) {
   const [branches, setBranches] = useState([]);
@@ -52,6 +61,9 @@ export default function AuditKeuangan({ profile }) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
+  const [filter, setFilter] = useState("all");
+  const [showExportAll, setShowExportAll] = useState(false);
+  const [exportAllPeriod, setExportAllPeriod] = useState(null);
 
   const canEdit = profile.role === "auditor" || profile.role === "admin";
 
@@ -92,6 +104,11 @@ export default function AuditKeuangan({ profile }) {
     setSelectedBranch(branch);
     const p = latestPeriod(branch.id) || todayMonth();
     selectPeriod(branch.id, p);
+  }
+
+  function closeModal() {
+    setSelectedBranch(null);
+    setSelectedPeriod(null);
   }
 
   function selectPeriod(branchId, period) {
@@ -157,9 +174,9 @@ export default function AuditKeuangan({ profile }) {
       .status{background:${TONE[c.tone].dot}1A;border:1px solid ${TONE[c.tone].dot};border-radius:10px;padding:14px 16px;color:${TONE[c.tone].dot};font-weight:600;}
     </style></head><body>
       <h1>Laporan Audit Kas Kecil</h1>
-      <div style="font-size:13px;color:#5B6270;margin-bottom:20px">Cabang: ${selectedBranch.name} &middot; Bulan: ${monthLabel(selectedPeriod)}</div>
+      <div style="font-size:13px;color:#5B6270;margin-bottom:20px">Cabang: ${esc(selectedBranch.name)} &middot; Bulan: ${esc(monthLabel(selectedPeriod))}</div>
       <table>${rowsHtml}</table>
-      <div class="status">${c.indikator} &mdash; ${c.keterangan}</div>
+      <div class="status">${esc(c.indikator)} &mdash; ${esc(c.keterangan)}</div>
       <script>window.onload=function(){setTimeout(function(){window.print();},400);}<\/script>
     </body></html>`;
     const w = window.open("", "_blank");
@@ -167,98 +184,227 @@ export default function AuditKeuangan({ profile }) {
     w.document.open(); w.document.write(html); w.document.close();
   }
 
-  const currentEntry = selectedBranch ? (entriesByBranch[selectedBranch.id] || {})[selectedPeriod] : null;
-  const current = useMemo(() => computeStatus(selectedPeriod ? { ...(currentEntry || {}), ...form } : null, settings), [form, currentEntry, selectedPeriod, settings]);
+  function allPeriods() {
+    const set = new Set();
+    Object.values(entriesByBranch).forEach((byPeriod) => Object.keys(byPeriod).forEach((p) => set.add(p)));
+    return Array.from(set).sort().reverse();
+  }
 
-  if (loading) return <div style={{ padding: 40, color: "#8B909C" }}>Memuat data…</div>;
+  function exportAllReport() {
+    const period = exportAllPeriod;
+    if (!period) { alert("Pilih bulan dulu."); return; }
+    let totalSb = 0, totalSm = 0, totalLim = 0, totalPk = 0, totalSisa = 0, countFilled = 0;
+    const rows = branches.map((b, i) => {
+      const e = (entriesByBranch[b.id] || {})[period];
+      if (!e) {
+        return `<tr><td style="padding:7px 6px;border-bottom:1px solid #E4E5E9">${i + 1}</td><td style="padding:7px 6px;border-bottom:1px solid #E4E5E9">${esc(b.name)}</td><td colspan="7" style="padding:7px 6px;border-bottom:1px solid #E4E5E9;color:#9AA0AC;font-style:italic">Belum diisi</td></tr>`;
+      }
+      const c = computeStatus(e, settings);
+      totalSb += parseFloat(e.saldo_sebelumnya) || 0;
+      totalSm += parseFloat(e.saldo_masuk) || 0;
+      totalLim += parseFloat(e.limit_kas) || 0;
+      totalPk += parseFloat(e.pengeluaran) || 0;
+      totalSisa += c.sisa;
+      countFilled++;
+      const badgeColor = TONE[c.tone].dot;
+      return `<tr>
+        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9">${i + 1}</td>
+        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;font-weight:600">${esc(b.name)}</td>
+        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${rupiah(e.saldo_sebelumnya)}</td>
+        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${rupiah(e.saldo_masuk)}</td>
+        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${rupiah(e.limit_kas)}</td>
+        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${rupiah(e.pengeluaran)}</td>
+        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${rupiah(c.sisa)}</td>
+        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${pct(c.terpakai)}</td>
+        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${pct(c.posisi)}</td>
+        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9"><span style="display:inline-block;padding:2px 8px;border-radius:10px;background:${badgeColor}1A;color:${badgeColor};font-weight:600;font-size:11px">${esc(c.indikator)}</span></td>
+      </tr>`;
+    }).join("");
+
+    const legend = `
+      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:#5B6270;margin-top:14px">
+        <div><b>Efisien/Terkendali:</b> \u2264 ${settings.efisien}% posisi kas</div>
+        <div><b>Monitoring:</b> ${settings.efisien}\u2013${settings.monitoring}%</div>
+        <div><b>Pengecekan/Tindak Lanjut:</b> &gt; ${settings.monitoring}% atau saldo minus</div>
+      </div>`;
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Laporan Audit Kas Kecil - Semua Cabang</title><style>
+      body{font-family:Arial,Helvetica,sans-serif;color:#1A1D24;padding:30px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+      h1{font-size:19px;margin:0 0 3px;}
+      table{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:16px;}
+      th{text-align:left;padding:7px 6px;border-bottom:2px solid #1A1D24;font-size:10.5px;text-transform:uppercase;color:#5B6270;}
+      tfoot td{font-weight:700;border-top:2px solid #1A1D24;padding:8px 6px;}
+    </style></head><body>
+      <h1>Laporan Audit Kas Kecil \u2014 Semua Cabang</h1>
+      <div style="font-size:12.5px;color:#5B6270">Bulan: ${esc(monthLabel(period))} &middot; Dicetak ${esc(new Date().toLocaleString("id-ID"))}</div>
+      <table>
+        <thead><tr>
+          <th>No</th><th>Cabang</th><th style="text-align:right">Saldo Sebelumnya</th><th style="text-align:right">Saldo Masuk</th>
+          <th style="text-align:right">Limit</th><th style="text-align:right">Pengeluaran</th><th style="text-align:right">Sisa Saldo</th>
+          <th style="text-align:right">% Terpakai</th><th style="text-align:right">% Posisi Kas</th><th>Indikator</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+        <tfoot><tr>
+          <td colspan="2">Total (${countFilled} cabang terisi)</td>
+          <td style="text-align:right">${rupiah(totalSb)}</td>
+          <td style="text-align:right">${rupiah(totalSm)}</td>
+          <td style="text-align:right">${rupiah(totalLim)}</td>
+          <td style="text-align:right">${rupiah(totalPk)}</td>
+          <td style="text-align:right">${rupiah(totalSisa)}</td>
+          <td colspan="3"></td>
+        </tr></tfoot>
+      </table>
+      ${legend}
+      <script>window.onload=function(){setTimeout(function(){window.print();},400);}<\/script>
+    </body></html>`;
+    const w = window.open("", "_blank");
+    if (!w) { alert("Popup diblokir. Izinkan popup lalu coba lagi."); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+    setShowExportAll(false);
+  }
+
+  const currentEntry = selectedBranch ? (entriesByBranch[selectedBranch.id] || {})[selectedPeriod] : null;
+  const current = computeStatus(selectedPeriod ? { ...(currentEntry || {}), ...form } : null, settings);
+
+  const visibleBranches = branches.filter((b) => {
+    if (filter === "all") return true;
+    const lp = latestPeriod(b.id);
+    const st = lp ? computeStatus(entriesByBranch[b.id][lp], settings) : null;
+    const tone = st ? st.tone : "none";
+    return tone === filter;
+  });
+
+  if (loading) return <div style={{ padding: 40, color: "var(--text-secondary)" }}>Memuat data\u2026</div>;
 
   return (
     <div style={{ flex: 1 }}>
-      <div style={{ background: "#fff", padding: "18px 28px", borderBottom: "1px solid #E4E5E9" }}>
-        <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Audit Keuangan</div>
-        <div style={{ color: "#8B909C", fontSize: 12.5 }}>Pemantauan penggunaan kas kecil per cabang, per bulan — tersambung Supabase</div>
+      <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+        <div>
+          <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Audit Keuangan</div>
+          <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Pemantauan penggunaan kas kecil per cabang, per bulan</div>
+        </div>
+        <button className="btn" onClick={() => { setExportAllPeriod(allPeriods()[0] || null); setShowExportAll(true); }}>
+          Export Semua Cabang (PDF)
+        </button>
       </div>
-      {error && <div style={{ margin: "14px 28px 0", background: "#FBEBE7", border: "1px solid #F0C6BC", color: "#9C3B29", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
-      <div style={{ display: "flex", gap: 16, padding: "20px 28px", alignItems: "flex-start" }}>
-        <div style={{ background: "#fff", border: "1px solid #E4E5E9", borderRadius: 12, width: 300, flexShrink: 0, overflow: "hidden" }}>
-          <div style={{ padding: "12px 16px", borderBottom: "1px solid #EDEEF1", fontSize: 12.5, fontWeight: 600, color: "#6B7180" }}>CABANG ({branches.length})</div>
-          <div style={{ maxHeight: 520, overflowY: "auto" }}>
-            {branches.map((b) => {
-              const lp = latestPeriod(b.id);
-              const e = lp ? entriesByBranch[b.id][lp] : null;
-              const st = e ? computeStatus(e, settings) : null;
-              const tone = st ? st.tone : "none";
-              const active = selectedBranch?.id === b.id;
-              return (
-                <div key={b.id} onClick={() => openBranch(b)} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderLeft: `4px solid ${TONE[tone].dot}`, cursor: "pointer", background: active ? "#EFF1F0" : "transparent", borderBottom: "1px solid #F1F2F4" }}>
-                  <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 14, fontWeight: 500 }}>{b.name}</div>
-                    <div style={{ fontSize: 11.5, color: TONE[tone].text }}>{e ? `${st.indikator} · ${monthLabel(lp)}` : "Belum diisi"}</div>
-                  </div>
-                </div>
-              );
-            })}
+
+      {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
+
+      <div style={{ padding: "20px 28px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+          <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.4 }}>
+            Pilih cabang untuk audit ({visibleBranches.length})
           </div>
+          <select className="input" style={{ width: 220 }} value={filter} onChange={(e) => setFilter(e.target.value)}>
+            {FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+          </select>
         </div>
 
-        <div style={{ flex: 1, background: "#fff", border: "1px solid #E4E5E9", borderRadius: 12, padding: 24, minHeight: 520 }}>
-          {!selectedBranch ? (
-            <div style={{ textAlign: "center", color: "#9AA0AC", paddingTop: 160 }}>Pilih cabang di sebelah kiri</div>
-          ) : (
-            <>
-              <div className="display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 14 }}>{selectedBranch.name}</div>
-
-              <div style={{ marginBottom: 14, maxWidth: 220 }}>
-                <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "#5B6270", marginBottom: 5 }}>Bulan audit</label>
-                <input type="month" className="input" value={selectedPeriod || ""} onChange={(e) => selectPeriod(selectedBranch.id, e.target.value)} />
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 14 }}>
+          {visibleBranches.map((b) => {
+            const lp = latestPeriod(b.id);
+            const e = lp ? entriesByBranch[b.id][lp] : null;
+            const st = e ? computeStatus(e, settings) : null;
+            const tone = st ? st.tone : "none";
+            return (
+              <div
+                key={b.id}
+                onClick={() => openBranch(b)}
+                style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 18px", cursor: "pointer", borderTop: `3px solid ${TONE[tone].dot}` }}
+              >
+                <div className="display" style={{ fontSize: 15.5, fontWeight: 600, marginBottom: 8 }}>{b.name}</div>
+                <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: TONE[tone].bg, color: TONE[tone].text, fontSize: 11.5, fontWeight: 600, marginBottom: 10 }}>
+                  {st ? st.indikator : "Belum diisi"}
+                </span>
+                <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
+                  {e ? `Sisa ${rupiah(st.sisa)} \u00b7 ${monthLabel(lp)}` : "Belum ada audit pada periode ini"}
+                </div>
               </div>
+            );
+          })}
+        </div>
+      </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
-                {[["saldo_sebelumnya", "Saldo bulan sebelumnya"], ["saldo_masuk", "Saldo masuk bulan berjalan"], ["limit_kas", "Limit kas kecil"], ["pengeluaran", "Pengeluaran kas kecil"]].map(([key, label]) => (
-                  <div key={key}>
-                    <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "#5B6270", marginBottom: 5 }}>{label}</label>
-                    <input className="input" type="number" placeholder="0" disabled={!canEdit} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} />
-                  </div>
-                ))}
+      {selectedBranch && (
+        <div style={{ position: "fixed", inset: 0, background: "var(--overlay)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={closeModal}>
+          <div style={{ background: "var(--surface)", borderRadius: 14, padding: 24, width: 440, maxWidth: "92%", maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+              <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>{selectedBranch.name}</div>
+              <span onClick={closeModal} style={{ cursor: "pointer", color: "var(--text-faint)", fontSize: 20, lineHeight: 1 }}>&times;</span>
+            </div>
+
+            <div style={{ marginBottom: 14, maxWidth: 220 }}>
+              <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Bulan audit</label>
+              <input type="month" className="input" value={selectedPeriod || ""} onChange={(e) => selectPeriod(selectedBranch.id, e.target.value)} />
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
+              {[["saldo_sebelumnya", "Saldo bulan sebelumnya"], ["saldo_masuk", "Saldo masuk bulan berjalan"], ["limit_kas", "Limit kas kecil"], ["pengeluaran", "Pengeluaran kas kecil"]].map(([key, label]) => (
+                <div key={key}>
+                  <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>{label}</label>
+                  <input className="input" type="number" placeholder="0" disabled={!canEdit} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} />
+                </div>
+              ))}
+            </div>
+
+            {canEdit && (
+              <div style={{ display: "flex", gap: 10, marginBottom: 20, alignItems: "center" }}>
+                <button className="btn" disabled={saving} onClick={saveEntry}>{saving ? "Menyimpan\u2026" : "Simpan"}</button>
+                {savedFlash && <span style={{ color: "var(--success-text)", fontSize: 13 }}>Tersimpan \u2713</span>}
               </div>
+            )}
 
-              {canEdit && (
-                <div style={{ display: "flex", gap: 10, marginBottom: 20, alignItems: "center" }}>
-                  <button className="btn" disabled={saving} onClick={saveEntry}>{saving ? "Menyimpan…" : "Simpan"}</button>
-                  {savedFlash && <span style={{ color: "#1F6F5C", fontSize: 13 }}>Tersimpan ✓</span>}
+            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 18 }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-secondary)" }}>DIHITUNG OTOMATIS</div>
+                <button className="btn-ghost" disabled={!currentEntry} onClick={exportReport}>Export PDF</button>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 }}>
+                <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
+                  <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>Sisa saldo</div>
+                  <div className="mono" style={{ fontSize: 15, fontWeight: 600 }}>{rupiah(current?.sisa)}</div>
+                </div>
+                <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
+                  <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>% Terpakai</div>
+                  <div className="mono" style={{ fontSize: 15, fontWeight: 600 }}>{pct(current?.terpakai)}</div>
+                </div>
+                <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
+                  <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>% Posisi kas</div>
+                  <div className="mono" style={{ fontSize: 15, fontWeight: 600 }}>{pct(current?.posisi)}</div>
+                </div>
+              </div>
+              {current && (
+                <div style={{ background: TONE[current.tone].bg, borderRadius: 10, padding: "12px 14px" }}>
+                  <div style={{ fontWeight: 600, color: TONE[current.tone].text }}>{current.indikator}</div>
+                  <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{current.keterangan}</div>
                 </div>
               )}
-
-              <div style={{ borderTop: "1px solid #EDEEF1", paddingTop: 18 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                  <div style={{ fontSize: 12.5, fontWeight: 600, color: "#6B7180" }}>DIHITUNG OTOMATIS</div>
-                  <button className="btn-ghost" disabled={!currentEntry} onClick={exportReport}>Export PDF</button>
-                </div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 16 }}>
-                  <div style={{ background: "#F7F8FA", border: "1px solid #EDEEF1", borderRadius: 10, padding: "12px 14px" }}>
-                    <div style={{ fontSize: 11.5, color: "#8B909C" }}>Sisa saldo</div>
-                    <div className="mono" style={{ fontSize: 17, fontWeight: 600 }}>{rupiah(current?.sisa)}</div>
-                  </div>
-                  <div style={{ background: "#F7F8FA", border: "1px solid #EDEEF1", borderRadius: 10, padding: "12px 14px" }}>
-                    <div style={{ fontSize: 11.5, color: "#8B909C" }}>% Terpakai</div>
-                    <div className="mono" style={{ fontSize: 17, fontWeight: 600 }}>{pct(current?.terpakai)}</div>
-                  </div>
-                  <div style={{ background: "#F7F8FA", border: "1px solid #EDEEF1", borderRadius: 10, padding: "12px 14px" }}>
-                    <div style={{ fontSize: 11.5, color: "#8B909C" }}>% Posisi kas</div>
-                    <div className="mono" style={{ fontSize: 17, fontWeight: 600 }}>{pct(current?.posisi)}</div>
-                  </div>
-                </div>
-                {current && (
-                  <div style={{ background: TONE[current.tone].bg, borderRadius: 10, padding: "14px 16px" }}>
-                    <div style={{ fontWeight: 600, color: TONE[current.tone].text }}>{current.indikator}</div>
-                    <div style={{ fontSize: 13, color: "#5B6270" }}>{current.keterangan}</div>
-                  </div>
-                )}
-              </div>
-            </>
-          )}
+            </div>
+          </div>
         </div>
-      </div>
+      )}
+
+      {showExportAll && (
+        <div style={{ position: "fixed", inset: 0, background: "var(--overlay)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setShowExportAll(false)}>
+          <div style={{ background: "var(--surface)", borderRadius: 14, padding: 24, width: 360, maxWidth: "90%" }} onClick={(e) => e.stopPropagation()}>
+            <div className="display" style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>Export laporan semua cabang</div>
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Bulan</label>
+              {allPeriods().length ? (
+                <select className="input" value={exportAllPeriod || ""} onChange={(e) => setExportAllPeriod(e.target.value)}>
+                  {allPeriods().map((p) => <option key={p} value={p}>{monthLabel(p)}</option>)}
+                </select>
+              ) : (
+                <div style={{ fontSize: 13, color: "var(--text-faint)" }}>Belum ada data tersimpan di cabang manapun.</div>
+              )}
+            </div>
+            <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+              <button className="btn-ghost" onClick={() => setShowExportAll(false)}>Batal</button>
+              <button className="btn" disabled={!exportAllPeriod} onClick={exportAllReport}>Export PDF</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

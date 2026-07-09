@@ -23,7 +23,7 @@ export default function Dashboard() {
   }, [router]);
 
   if (loading || !profile) {
-    return <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", color: "#8B909C" }}>Memuat…</div>;
+    return <div style={{ minHeight: "100vh", background: "var(--bg-page)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)" }}>Memuat\u2026</div>;
   }
 
   return (
@@ -34,8 +34,8 @@ export default function Dashboard() {
       ) : active === "timeline" ? (
         <Timeline />
       ) : (
-        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "#9AA0AC", flexDirection: "column" }}>
-          <div className="display" style={{ fontSize: 19, fontWeight: 600, color: "#5B6270", marginBottom: 6 }}>Modul ini belum dibuat</div>
+        <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-faint)", flexDirection: "column" }}>
+          <div className="display" style={{ fontSize: 19, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>Modul ini belum dibuat</div>
           <div style={{ fontSize: 13.5, maxWidth: 320, textAlign: "center" }}>Sama seperti Audit Keuangan, modul ini akan dibangun berikutnya dengan tabel dan alur yang sama.</div>
         </div>
       )}

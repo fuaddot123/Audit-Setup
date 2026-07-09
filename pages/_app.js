@@ -1,13 +1,10 @@
-import Head from "next/head";
 import "../styles/globals.css";
+import { ThemeProvider } from "../lib/ThemeContext";
 
 export default function App({ Component, pageProps }) {
   return (
-    <>
-      <Head>
-        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
-      </Head>
+    <ThemeProvider>
       <Component {...pageProps} />
-    </>
+    </ThemeProvider>
   );
 }

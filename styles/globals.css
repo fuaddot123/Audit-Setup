@@ -1,25 +1,86 @@
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
 
+:root {
+  --sidebar-text: #F3EFFF;
+  --sidebar-text-muted: #C9BFEA;
+  --sidebar-active-bg: rgba(255,255,255,0.16);
+  --sidebar-border: rgba(255,255,255,0.15);
+  --bg-page: #0F0B1F;
+  --surface: #1B1533;
+  --surface-alt: #211A3D;
+  --sidebar-bg: #150F28;
+  --border: rgba(139,110,255,0.18);
+  --text-primary: #F3EFFF;
+  --text-secondary: #A79FC7;
+  --text-faint: #726B94;
+  --accent: #8B5CF6;
+  --accent-hover: #7C3AED;
+  --accent-tint: rgba(139,110,255,0.16);
+  --gold: #F4B740;
+  --overlay: rgba(0,0,0,0.6);
+  --danger-bg: rgba(248,113,113,0.12);
+  --danger-border: rgba(248,113,113,0.35);
+  --danger-text: #F87171;
+  --success-dot: #4ADE80;
+  --success-bg: rgba(74,222,128,0.12);
+  --success-text: #4ADE80;
+  --warning-dot: #F4B740;
+  --warning-bg: rgba(244,183,64,0.12);
+  --warning-text: #F4B740;
+  --neutral-dot: #726B94;
+  --neutral-bg: rgba(114,107,148,0.15);
+  --neutral-text: #A79FC7;
+}
+
+[data-theme="light"] {
+  --bg-page: #F4F5F7;
+  --surface: #FFFFFF;
+  --surface-alt: #F7F8FA;
+  --sidebar-bg: #3D1A63;
+  --border: rgba(61,26,99,0.14);
+  --text-primary: #1A1D24;
+  --text-secondary: #5B6270;
+  --text-faint: #9AA0AC;
+  --accent: #8B5CF6;
+  --accent-hover: #7C3AED;
+  --accent-tint: rgba(139,92,246,0.12);
+  --gold: #F4B740;
+  --overlay: rgba(20,22,28,0.45);
+  --danger-bg: #FBEBE7;
+  --danger-border: #F0C6BC;
+  --danger-text: #9C3B29;
+  --success-dot: #1F6F5C;
+  --success-bg: #EAF4F1;
+  --success-text: #1F6F5C;
+  --warning-dot: #B8792A;
+  --warning-bg: #FBF1E4;
+  --warning-text: #8A5A1D;
+  --neutral-dot: #B8BCC4;
+  --neutral-bg: #F1F2F4;
+  --neutral-text: #6B7180;
+}
+
 * { box-sizing: border-box; }
-html, body { padding: 0; margin: 0; background: #F4F5F7; color: #1A1D24; font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
+html, body { padding: 0; margin: 0; background: var(--bg-page); color: var(--text-primary); font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; transition: background 0.15s, color 0.15s; }
 .display { font-family: 'Fraunces', Georgia, serif; }
 .mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
 
 input, select, button { font-family: inherit; }
 .input {
-  width: 100%; border: 1px solid #D8DAE0; border-radius: 8px;
+  width: 100%; border: 1px solid var(--border); border-radius: 8px;
   padding: 9px 12px; font-size: 14px; font-family: 'IBM Plex Mono', monospace;
-  background: #fff; color: #1A1D24;
+  background: var(--surface); color: var(--text-primary);
 }
-.input:focus { outline: none; border-color: #1F6F5C; box-shadow: 0 0 0 3px rgba(31,111,92,0.12); }
+.input:focus { outline: none; border-color: var(--gold); box-shadow: 0 0 0 3px rgba(244,183,64,0.15); }
+.input::placeholder { color: var(--text-faint); }
 .btn {
-  background: #1F6F5C; color: #fff; border: none; border-radius: 8px;
+  background: var(--accent); color: #fff; border: none; border-radius: 8px;
   padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer;
 }
-.btn:hover { background: #195A4B; }
-.btn:disabled { background: #A9B3AE; cursor: not-allowed; }
+.btn:hover { background: var(--accent-hover); }
+.btn:disabled { background: #4B4568; color: #8A84A6; cursor: not-allowed; }
 .btn-ghost {
-  background: transparent; color: #5B6270; border: 1px solid #D8DAE0; border-radius: 8px;
+  background: transparent; color: var(--text-secondary); border: 1px solid var(--border); border-radius: 8px;
   padding: 9px 14px; font-size: 13px; font-weight: 500; cursor: pointer;
 }
-.btn-ghost:hover { background: #EDEEF1; }
+.btn-ghost:hover { background: var(--accent-tint); border-color: var(--gold); color: var(--text-primary); }
