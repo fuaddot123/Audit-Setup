@@ -1,0 +1,25 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600&family=Inter:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500;600&display=swap');
+
+* { box-sizing: border-box; }
+html, body { padding: 0; margin: 0; background: #F4F5F7; color: #1A1D24; font-family: 'Inter', ui-sans-serif, system-ui, sans-serif; }
+.display { font-family: 'Fraunces', Georgia, serif; }
+.mono { font-family: 'IBM Plex Mono', ui-monospace, monospace; }
+
+input, select, button { font-family: inherit; }
+.input {
+  width: 100%; border: 1px solid #D8DAE0; border-radius: 8px;
+  padding: 9px 12px; font-size: 14px; font-family: 'IBM Plex Mono', monospace;
+  background: #fff; color: #1A1D24;
+}
+.input:focus { outline: none; border-color: #1F6F5C; box-shadow: 0 0 0 3px rgba(31,111,92,0.12); }
+.btn {
+  background: #1F6F5C; color: #fff; border: none; border-radius: 8px;
+  padding: 10px 18px; font-size: 14px; font-weight: 600; cursor: pointer;
+}
+.btn:hover { background: #195A4B; }
+.btn:disabled { background: #A9B3AE; cursor: not-allowed; }
+.btn-ghost {
+  background: transparent; color: #5B6270; border: 1px solid #D8DAE0; border-radius: 8px;
+  padding: 9px 14px; font-size: 13px; font-weight: 500; cursor: pointer;
+}
+.btn-ghost:hover { background: #EDEEF1; }
