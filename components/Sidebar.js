@@ -5,7 +5,7 @@ import { useTheme } from "../lib/ThemeContext";
 const MODULES = [
   { key: "keuangan", label: "Audit Keuangan", ready: true },
   { key: "timeline", label: "Timeline", ready: true },
-  { key: "sop", label: "Audit SOP", ready: false },
+  { key: "sop", label: "Audit SOP", ready: true },
   { key: "service", label: "Audit Service", ready: false },
   { key: "stok", label: "Audit Kesehatan Stok", ready: false },
   { key: "kpi", label: "KPI", ready: false },

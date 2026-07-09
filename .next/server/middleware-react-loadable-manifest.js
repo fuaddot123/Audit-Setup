@@ -1,1 +1,1 @@
-self.__REACT_LOADABLE_MANIFEST="{}"
+self.__REACT_LOADABLE_MANIFEST="{\"components\\\\sop\\\\SopLaporan.js -> xlsx\":{\"id\":\"components\\\\sop\\\\SopLaporan.js -> xlsx\",\"files\":[\"static/chunks/node_modules_xlsx_xlsx_mjs.js\"]}}"
