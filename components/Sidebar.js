@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useRouter } from "next/router";
 import { supabase } from "../lib/supabaseClient";
 import { useTheme } from "../lib/ThemeContext";
@@ -5,26 +6,58 @@ import { useTheme } from "../lib/ThemeContext";
 const MODULES = [
   { key: "keuangan", label: "Audit Keuangan", ready: true },
   { key: "timeline", label: "Timeline", ready: true },
-  { key: "sop", label: "Audit SOP", ready: true },
+  {
+    key: "sop", label: "Audit SOP", ready: true, subs: [
+      { key: "dashboard", label: "Dashboard Audit" },
+      { key: "cabang", label: "Audit Cabang" },
+      { key: "ranking", label: "Ranking Cabang" },
+      { key: "laporan", label: "Laporan Audit" },
+    ],
+  },
   { key: "service", label: "Audit Service", ready: false },
   { key: "stok", label: "Audit Kesehatan Stok", ready: false },
   { key: "kpi", label: "KPI", ready: false },
 ];
 
-export default function Sidebar({ active, onSelect, profile }) {
+function ChevronIcon({ open }) {
+  return (
+    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"
+      style={{ transform: open ? "rotate(180deg)" : "none", transition: "transform .15s", flexShrink: 0 }}>
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
+export default function Sidebar({ active, activeSub, onSelect, profile }) {
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
+  const [expanded, setExpanded] = useState({ [active]: true });
 
   async function handleLogout() {
     await supabase.auth.signOut();
     router.replace("/login");
   }
 
+  function clickModule(m) {
+    if (m.subs) {
+      const willOpen = !expanded[m.key];
+      setExpanded((p) => ({ ...p, [m.key]: willOpen }));
+      if (active !== m.key) onSelect(m.key, m.subs[0].key);
+    } else {
+      onSelect(m.key, null);
+    }
+  }
+
+  function clickSub(m, s) {
+    setExpanded((p) => ({ ...p, [m.key]: true }));
+    onSelect(m.key, s.key);
+  }
+
   const roleLabel = { admin: "Admin", auditor: "Auditor", ceo: "CEO" }[profile?.role] || "\u2026";
 
   return (
     <div style={{ width: 240, flexShrink: 0, background: "var(--sidebar-bg)", minHeight: "100vh", padding: "22px 14px", display: "flex", flexDirection: "column", borderRight: "1px solid var(--border)" }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 10px", marginBottom: 26 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 10px 18px", marginBottom: 12, borderBottom: "1px solid var(--sidebar-border)" }}>
         <svg width="36" height="36" viewBox="0 0 64 64" style={{ flexShrink: 0 }}>
           <circle cx="32" cy="32" r="28.5" fill="#2A1F52" stroke="#F4B740" strokeWidth="5" />
           <path d="M27 18 L32 7 L37 18 Z" fill="#FFFFFF" />
@@ -36,21 +69,48 @@ export default function Sidebar({ active, onSelect, profile }) {
         </svg>
         <div className="display" style={{ color: "var(--sidebar-text)", fontSize: 18, fontWeight: 600 }}>KLA Audit</div>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, overflowY: "auto" }}>
         {MODULES.map((m) => {
           const isActive = active === m.key;
+          const isOpen = !!expanded[m.key];
           return (
-            <div
-              key={m.key}
-              onClick={() => onSelect(m.key)}
-              style={{
-                display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 10,
-                cursor: "pointer",
-                background: isActive ? "var(--sidebar-active-bg)" : "transparent",
-                borderLeft: isActive ? "3px solid #F4B740" : "3px solid transparent",
-              }}
-            >
-              <span style={{ color: isActive ? "var(--sidebar-text)" : "var(--sidebar-text-muted)", fontSize: 14, fontWeight: 500, flex: 1 }}>{m.label}</span>
+            <div key={m.key}>
+              <div
+                onClick={() => clickModule(m)}
+                onMouseEnter={(e) => { if (!(isActive && !m.subs)) e.currentTarget.style.background = "var(--sidebar-hover-bg, rgba(255,255,255,0.04))"; }}
+                onMouseLeave={(e) => { if (!(isActive && !m.subs)) e.currentTarget.style.background = "transparent"; }}
+                style={{
+                  display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 12,
+                  cursor: "pointer", transition: "background .12s",
+                  background: isActive && !m.subs ? "linear-gradient(90deg, rgba(244,183,64,0.14), rgba(244,183,64,0.02))" : "transparent",
+                  boxShadow: isActive && !m.subs ? "inset 3px 0 0 0 #F4B740" : "inset 3px 0 0 0 transparent",
+                }}
+              >
+                <span style={{ color: isActive ? "var(--sidebar-text)" : "var(--sidebar-text-muted)", fontSize: 14, fontWeight: 500, flex: 1 }}>{m.label}</span>
+                {m.subs && <ChevronIcon open={isOpen} />}
+              </div>
+
+              {m.subs && isOpen && (
+                <div style={{ display: "flex", flexDirection: "column", gap: 2, margin: "2px 0 4px", paddingLeft: 14 }}>
+                  {m.subs.map((s) => {
+                    const subActive = isActive && activeSub === s.key;
+                    return (
+                      <div
+                        key={s.key}
+                        onClick={() => clickSub(m, s)}
+                        style={{
+                          display: "flex", alignItems: "center", padding: "9px 14px", borderRadius: 10,
+                          cursor: "pointer",
+                          background: subActive ? "linear-gradient(90deg, rgba(244,183,64,0.14), rgba(244,183,64,0.02))" : "transparent",
+                          boxShadow: subActive ? "inset 3px 0 0 0 #F4B740" : "inset 3px 0 0 0 transparent",
+                        }}
+                      >
+                        <span style={{ color: subActive ? "var(--sidebar-text)" : "var(--sidebar-text-muted)", fontSize: 13, fontWeight: subActive ? 600 : 400 }}>{s.label}</span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           );
         })}

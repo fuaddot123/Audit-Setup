@@ -92,7 +92,8 @@ export default function SopDashboard() {
         {/* Grid kartu per cabang */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 14 }}>
           {branchStats.map(({ branch, row, score, tiers }) => (
-            <div key={branch.id} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 16 }}>
+            <div key={branch.id} style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 16, overflow: "hidden" }}>
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: row ? scoreColor(score) : "var(--border)" }} />
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
                 <div style={{ fontWeight: 600, fontSize: 14.5 }}>{branch.name}</div>
                 {score !== null && score < ALERT_THRESHOLD && (
@@ -107,11 +108,14 @@ export default function SopDashboard() {
                     Status: {statusLabel(row.status)} &middot; {row.data?.audit_date ? formatDate(row.data.audit_date) : ""}
                   </div>
                   {tiers && (
-                    <div style={{ display: "flex", gap: 8, fontSize: 11 }}>
-                      <TierPill label="Tier 1" value={tiers.tier1} />
-                      <TierPill label="Tier 2" value={tiers.tier2} />
-                      <TierPill label="Tier 3" value={tiers.tier3} />
-                    </div>
+                    <>
+                      <div style={{ height: 1, background: "var(--border)", margin: "10px 0" }} />
+                      <div style={{ display: "flex", gap: 8, fontSize: 11 }}>
+                        <TierPill label="Tier 1" value={tiers.tier1} />
+                        <TierPill label="Tier 2" value={tiers.tier2} />
+                        <TierPill label="Tier 3" value={tiers.tier3} />
+                      </div>
+                    </>
                   )}
                 </>
               ) : (

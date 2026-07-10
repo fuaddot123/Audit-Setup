@@ -239,7 +239,8 @@ function RankCard({ row, rank }) {
   const medalColor = rank === 1 ? "#F4B740" : rank === 2 ? "#B8C0CC" : rank === 3 ? "#C0813E" : "var(--text-faint)";
   const achColor = row.ach >= 100 ? "#1a9e6e" : row.ach >= 80 ? "#b07212" : "#a32020";
   return (
-    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 18, borderLeft: rank === 1 ? "3px solid #F4B740" : "3px solid transparent" }}>
+    <div style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 18, overflow: "hidden" }}>
+      {rank <= 3 && <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: `linear-gradient(90deg, ${medalColor}, transparent)` }} />}
       <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 12 }}>
         <div style={{ width: 34, height: 34, borderRadius: "50%", background: medalColor, color: "#1A1024", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 800, fontSize: 13, flexShrink: 0 }}>
           #{rank}

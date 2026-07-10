@@ -4,6 +4,7 @@ import {
   CATS, TOTAL_ITEMS, ALERT_THRESHOLD, calcWeightedFromRecord, calcTierScores,
   scoreInfo, formatRupiah, nowPeriode, periodeLabel,
 } from "../../lib/sopConfig";
+import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
 
 export default function SopLaporan() {
   const [branches, setBranches] = useState([]);
@@ -217,7 +218,95 @@ export default function SopLaporan() {
     win.document.close();
   }
 
-  if (loading) return <div style={{ padding: 40, color: "var(--text-secondary)" }}>Memuat\u2026</div>;
+  // ── PDF RINGKASAN: gaya "Laporan Audit Kas Kecil" (header ungu-emas, kartu, tabel, donut) ──
+  function exportSummaryPDF() {
+    setError(null);
+    const now = new Date();
+    const printedAtLabel = now.toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }) + ", " + now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+
+    const rowsData = branches.map((b) => {
+      const rec = latestFor(b.id, pdfPeriod);
+      if (!rec) return { branch: b, rec: null };
+      const w = calcWeightedFromRecord(rec.data);
+      const tiers = calcTierScores(rec.data);
+      return { branch: b, rec, score: w, tiers, info: scoreInfo(w) };
+    });
+
+    const audited = rowsData.filter((r) => r.rec);
+    const grouped = { Sempurna: 0, Baik: 0, "Perlu Perbaikan": 0 };
+    audited.forEach((r) => { grouped[r.info.lbl] = (grouped[r.info.lbl] || 0) + 1; });
+    const total = branches.length;
+    const avgScore = audited.length ? Math.round(audited.reduce((s, r) => s + r.score, 0) / audited.length) : 0;
+    let top = null, low = null;
+    audited.forEach((r) => {
+      if (!top || r.score > top.score) top = r;
+      if (!low || r.score < low.score) low = r;
+    });
+
+    const colorMap = { Sempurna: "#1a9e6e", Baik: "#b07212", "Perlu Perbaikan": "#a32020" };
+
+    const tableRows = branches.map((b, i) => {
+      const row = rowsData.find((r) => r.branch.id === b.id);
+      if (!row.rec) {
+        return { cells: [String(i + 1), b.name, null, null, null, null, null, null], badge: null };
+      }
+      return {
+        cells: [
+          String(i + 1), b.name,
+          formatDate(row.rec.data?.audit_date),
+          row.score + "%",
+          (row.tiers?.tier1 ?? "\u2014") + "%",
+          (row.tiers?.tier2 ?? "\u2014") + "%",
+          (row.tiers?.tier3 ?? "\u2014") + "%",
+          row.info.lbl,
+        ],
+        badge: { label: row.info.lbl, color: colorMap[row.info.lbl] },
+      };
+    });
+
+    const donutSegments = Object.entries(grouped)
+      .filter(([, count]) => count > 0)
+      .map(([label, count]) => ({ label, count, pct: audited.length ? Math.round((count / audited.length) * 100) : 0, color: colorMap[label] }));
+
+    const html = buildSummaryReportHtml({
+      reportTitle: "LAPORAN AUDIT SOP",
+      scopeLabel: "SEMUA CABANG",
+      periodLabel: periodeLabel(pdfPeriod),
+      printedAtLabel,
+      summaryCards: [
+        { icon: "building", label: "TOTAL CABANG", value: String(total), sub: "Cabang", color: "#2A1F52" },
+        { icon: "shieldCheck", label: "SEMPURNA", value: String(grouped.Sempurna), sub: `Cabang (${audited.length ? Math.round((grouped.Sempurna / audited.length) * 100) : 0}%)`, color: "#1a9e6e" },
+        { icon: "alertCircle", label: "BAIK", value: String(grouped.Baik), sub: `Cabang (${audited.length ? Math.round((grouped.Baik / audited.length) * 100) : 0}%)`, color: "#b07212" },
+        { icon: "alertTriangle", label: "PERLU PERBAIKAN", value: String(grouped["Perlu Perbaikan"]), sub: `Cabang (${audited.length ? Math.round((grouped["Perlu Perbaikan"] / audited.length) * 100) : 0}%)`, color: "#a32020" },
+      ],
+      tableHeaders: ["No", "Cabang", "Tanggal Audit", "Skor SOP", "Tier 1", "Tier 2", "Tier 3", "Status"],
+      tableRows,
+      donutSegments,
+      donutCenterLines: [String(total), "Cabang"],
+      legendItems: [
+        { icon: "shieldCheck", color: "#1a9e6e", title: "SEMPURNA", desc: "Skor SOP \u2265 90%" },
+        { icon: "alertCircle", color: "#b07212", title: "BAIK", desc: `Skor SOP ${ALERT_THRESHOLD}% s.d. 89%` },
+        { icon: "alertTriangle", color: "#a32020", title: "PERLU PERBAIKAN", desc: `Skor SOP < ${ALERT_THRESHOLD}%` },
+      ],
+      summaryList: [
+        { icon: "shieldCheck", label: "Cabang Sudah Diaudit", value: `${audited.length} / ${total}` },
+        { icon: "alertCircle", label: "Rata-rata Skor SOP", value: avgScore + "%" },
+        { icon: "arrowUp", label: "Skor Tertinggi", value: top ? `${top.branch.name} (${top.score}%)` : "\u2014" },
+        { icon: "arrowDown", label: "Skor Terendah", value: low ? `${low.branch.name} (${low.score}%)` : "\u2014", strong: true },
+      ],
+      notes: [
+        "Laporan ini merupakan ringkasan hasil audit SOP untuk seluruh cabang pada periode yang dipilih.",
+        "Status indikator berdasarkan skor tertimbang checklist SOP (Tier 1: Customer Experience, Tier 2: Operasional, Tier 3: Compliance).",
+        `Harap lakukan tindak lanjut untuk cabang dengan indikator "Perlu Perbaikan".`,
+      ],
+      pageLabel: "Halaman 1 dari 1",
+    });
+
+    const opened = openPrintWindow("Laporan Audit SOP", html);
+    if (!opened) setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF.");
+  }
+
+
 
   return (
     <div style={{ flex: 1 }}>
@@ -250,7 +339,10 @@ export default function SopLaporan() {
               {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
           </Row>
-          <button className="btn" onClick={exportPDF}>Cetak / Simpan PDF</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn" onClick={exportPDF}>Cetak Detail per Cabang</button>
+            <button className="btn-ghost" onClick={exportSummaryPDF}>Cetak Ringkasan Semua Cabang</button>
+          </div>
         </ReportCard>
 
         <ReportCard title="Export Semua Riwayat" desc="Seluruh riwayat audit SOP dari semua periode dan cabang, dalam satu file.">

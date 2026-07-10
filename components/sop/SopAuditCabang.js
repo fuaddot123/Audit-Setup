@@ -149,8 +149,9 @@ export default function SopAuditCabang({ profile }) {
                 <div
                   key={b.id}
                   onClick={() => pickBranch(b)}
-                  style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 18px", cursor: "pointer", fontWeight: 600, fontSize: 14.5 }}
+                  style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", fontWeight: 600, fontSize: 14.5, overflow: "hidden" }}
                 >
+                  <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
                   {b.name}
                   <div style={{ fontSize: 11.5, fontWeight: 400, color: "var(--text-faint)", marginTop: 4 }}>Mulai audit &rarr;</div>
                 </div>
@@ -213,7 +214,7 @@ export default function SopAuditCabang({ profile }) {
               const w = TIER_WEIGHTS[c.id];
               const tierTag = TIER3_CATS.includes(c.id) ? "T3" : TIER1_CATS.includes(c.id) ? "T1" : "T2";
               return (
-                <div key={c.id} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, overflow: "hidden" }}>
+                <div key={c.id} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden" }}>
                   <div
                     onClick={() => setOpenCats((p) => ({ ...p, [c.id]: !isOpen }))}
                     style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "13px 16px", cursor: "pointer" }}

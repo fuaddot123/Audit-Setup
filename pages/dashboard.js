@@ -10,7 +10,13 @@ export default function Dashboard() {
   const router = useRouter();
   const [profile, setProfile] = useState(null);
   const [active, setActive] = useState("keuangan");
+  const [activeSub, setActiveSub] = useState(null);
   const [loading, setLoading] = useState(true);
+
+  function handleSelect(moduleKey, subKey) {
+    setActive(moduleKey);
+    setActiveSub(subKey || null);
+  }
 
   useEffect(() => {
     (async () => {
@@ -29,13 +35,13 @@ export default function Dashboard() {
 
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
-      <Sidebar active={active} onSelect={setActive} profile={profile} />
+      <Sidebar active={active} activeSub={activeSub} onSelect={handleSelect} profile={profile} />
       {active === "keuangan" ? (
         <AuditKeuangan profile={profile} />
       ) : active === "timeline" ? (
         <Timeline />
       ) : active === "sop" ? (
-        <AuditSOP profile={profile} />
+        <AuditSOP profile={profile} sub={activeSub || "dashboard"} />
       ) : (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-faint)", flexDirection: "column" }}>
           <div className="display" style={{ fontSize: 19, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>Modul ini belum dibuat</div>

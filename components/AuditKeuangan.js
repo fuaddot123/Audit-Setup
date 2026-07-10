@@ -1,5 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { buildSummaryReportHtml, openPrintWindow } from "../lib/pdfReportTemplate";
 
 const INDO_MONTHS = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
 function monthLabel(period) {
@@ -8,6 +9,16 @@ function monthLabel(period) {
   return INDO_MONTHS[parseInt(m, 10) - 1] + " " + y;
 }
 function todayMonth() { return new Date().toISOString().slice(0, 7); }
+function getPrevPeriod(period) {
+  const [y, m] = period.split("-").map(Number);
+  const d = new Date(y, m - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+function addMonthsToPeriod(period, delta) {
+  const [y, m] = period.split("-").map(Number);
+  const d = new Date(y, m - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
 function rupiah(n) {
   n = parseFloat(n) || 0;
   return (n < 0 ? "-" : "") + "Rp " + Math.round(Math.abs(n)).toLocaleString("id-ID");
@@ -29,7 +40,8 @@ function computeStatus(entry, settings) {
   const lim = parseFloat(entry.limit_kas) || 0;
   const pk = parseFloat(entry.pengeluaran) || 0;
   const total = sb + sm;
-  const sisa = total - pk;
+  const hasManualSisa = entry.sisa_saldo !== undefined && entry.sisa_saldo !== null && entry.sisa_saldo !== "";
+  const sisa = hasManualSisa ? (parseFloat(entry.sisa_saldo) || 0) : total - pk;
   const terpakai = sm > 0 ? pk / sm : 0;
   const posisi = total > 0 ? pk / total : 0;
   let indikator, keterangan, tone;
@@ -40,6 +52,34 @@ function computeStatus(entry, settings) {
   else { indikator = "Tindak Lanjut"; keterangan = "Posisi kas melebihi ambang, perlu tindak lanjut"; tone = "bad"; }
   if (lim > 0 && pk > lim && sisa >= 0) keterangan += " \u00b7 saldo melebihi limit";
   return { sisa, terpakai, posisi, indikator, keterangan, tone };
+}
+
+function formatThousands(v) {
+  const n = v === "" || v === null || v === undefined ? "" : String(v).replace(/[^\d]/g, "");
+  if (!n) return "";
+  return n.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+}
+function parseThousands(v) {
+  return String(v || "").replace(/[^\d]/g, "");
+}
+
+const ICON_PATHS = {
+  wallet: <><rect x="3" y="6" width="18" height="13" rx="2" /><path d="M17 12h2M3 10h18" /></>,
+  calendar: <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M16 3v4M8 3v4M3 10h18" /></>,
+  history: <><path d="M3 12a9 9 0 1 0 3-6.7" /><path d="M3 3v5h5" /><path d="M12 7v5l3 2" /></>,
+  arrowDown: <><path d="M12 5v13M6 13l6 5 6-5" /></>,
+  arrowUp: <><path d="M12 19V6M6 11l6-5 6 5" /></>,
+  fileDown: <><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5M12 12v6M9.5 15.5L12 18l2.5-2.5" /></>,
+  check: <><path d="M20 6L9 17l-5-5" /></>,
+  alertCircle: <><circle cx="12" cy="12" r="9" /><path d="M12 8v5M12 16h.01" /></>,
+  alertTriangle: <><path d="M12 3l10 18H2L12 3z" /><path d="M12 9v5M12 17h.01" /></>,
+};
+function Icon({ name, size = 14 }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ flexShrink: 0 }}>
+      {ICON_PATHS[name]}
+    </svg>
+  );
 }
 
 const FILTERS = [
@@ -56,12 +96,13 @@ export default function AuditKeuangan({ profile }) {
   const [entriesByBranch, setEntriesByBranch] = useState({});
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
-  const [form, setForm] = useState({ saldo_sebelumnya: "", saldo_masuk: "", limit_kas: "", pengeluaran: "" });
+  const [form, setForm] = useState({ saldo_sebelumnya: "", saldo_masuk: "", limit_kas: "", pengeluaran: "", sisa_saldo: "" });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
   const [savedFlash, setSavedFlash] = useState(false);
   const [filter, setFilter] = useState("all");
+  const [viewPeriod, setViewPeriod] = useState(todayMonth());
   const [showExportAll, setShowExportAll] = useState(false);
   const [exportAllPeriod, setExportAllPeriod] = useState(null);
 
@@ -102,8 +143,7 @@ export default function AuditKeuangan({ profile }) {
 
   function openBranch(branch) {
     setSelectedBranch(branch);
-    const p = latestPeriod(branch.id) || todayMonth();
-    selectPeriod(branch.id, p);
+    selectPeriod(branch.id, viewPeriod);
   }
 
   function closeModal() {
@@ -114,10 +154,24 @@ export default function AuditKeuangan({ profile }) {
   function selectPeriod(branchId, period) {
     setSelectedPeriod(period);
     const e = (entriesByBranch[branchId] || {})[period];
-    setForm(e
-      ? { saldo_sebelumnya: e.saldo_sebelumnya, saldo_masuk: e.saldo_masuk, limit_kas: e.limit_kas, pengeluaran: e.pengeluaran }
-      : { saldo_sebelumnya: "", saldo_masuk: "", limit_kas: "", pengeluaran: "" });
+    const branch = branches.find((b) => b.id === branchId);
+    if (e) {
+      setForm({ saldo_sebelumnya: e.saldo_sebelumnya, saldo_masuk: e.saldo_masuk, limit_kas: e.limit_kas, pengeluaran: e.pengeluaran, sisa_saldo: e.sisa_saldo ?? "" });
+      return;
+    }
+    const prevEntry = (entriesByBranch[branchId] || {})[getPrevPeriod(period)];
+    const carryForward = prevEntry
+      ? (prevEntry.sisa_saldo !== undefined && prevEntry.sisa_saldo !== null
+          ? parseFloat(prevEntry.sisa_saldo) || 0
+          : (parseFloat(prevEntry.saldo_sebelumnya) || 0) + (parseFloat(prevEntry.saldo_masuk) || 0) - (parseFloat(prevEntry.pengeluaran) || 0))
+      : "";
+    setForm({ saldo_sebelumnya: carryForward, saldo_masuk: "", limit_kas: branch?.limit_kas || "", pengeluaran: "", sisa_saldo: "" });
   }
+
+  // true kalau ini audit pertama untuk cabang ini (belum ada histori sama sekali untuk narik saldo)
+  const isFirstEverEntry = selectedBranch && selectedPeriod
+    ? !(entriesByBranch[selectedBranch.id] || {})[selectedPeriod] && !(entriesByBranch[selectedBranch.id] || {})[getPrevPeriod(selectedPeriod)]
+    : false;
 
   async function saveEntry() {
     if (!selectedBranch || !selectedPeriod) return;
@@ -132,6 +186,7 @@ export default function AuditKeuangan({ profile }) {
         saldo_masuk: parseFloat(form.saldo_masuk) || 0,
         limit_kas: parseFloat(form.limit_kas) || 0,
         pengeluaran: parseFloat(form.pengeluaran) || 0,
+        sisa_saldo: parseFloat(form.sisa_saldo) || 0,
         status: "draft",
         submitted_by: (await supabase.auth.getUser()).data.user.id,
       };
@@ -145,6 +200,7 @@ export default function AuditKeuangan({ profile }) {
       const grouped = { ...entriesByBranch };
       grouped[selectedBranch.id] = { ...(grouped[selectedBranch.id] || {}), [selectedPeriod]: res.data };
       setEntriesByBranch(grouped);
+
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 2000);
     } catch (err) {
@@ -193,12 +249,14 @@ export default function AuditKeuangan({ profile }) {
   function exportAllReport() {
     const period = exportAllPeriod;
     if (!period) { alert("Pilih bulan dulu."); return; }
+
+    const colorMap = { good: "#1a9e6e", warn: "#b07212", bad: "#a32020", none: "#888" };
     let totalSb = 0, totalSm = 0, totalLim = 0, totalPk = 0, totalSisa = 0, countFilled = 0;
-    const rows = branches.map((b, i) => {
+    const groupCount = { good: 0, warn: 0, bad: 0 };
+
+    const tableRows = branches.map((b, i) => {
       const e = (entriesByBranch[b.id] || {})[period];
-      if (!e) {
-        return `<tr><td style="padding:7px 6px;border-bottom:1px solid #E4E5E9">${i + 1}</td><td style="padding:7px 6px;border-bottom:1px solid #E4E5E9">${esc(b.name)}</td><td colspan="7" style="padding:7px 6px;border-bottom:1px solid #E4E5E9;color:#9AA0AC;font-style:italic">Belum diisi</td></tr>`;
-      }
+      if (!e) return { cells: [String(i + 1), b.name, null, null, null, null, null, null, null], badge: null };
       const c = computeStatus(e, settings);
       totalSb += parseFloat(e.saldo_sebelumnya) || 0;
       totalSm += parseFloat(e.saldo_masuk) || 0;
@@ -206,70 +264,71 @@ export default function AuditKeuangan({ profile }) {
       totalPk += parseFloat(e.pengeluaran) || 0;
       totalSisa += c.sisa;
       countFilled++;
-      const badgeColor = TONE[c.tone].dot;
-      return `<tr>
-        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9">${i + 1}</td>
-        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;font-weight:600">${esc(b.name)}</td>
-        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${rupiah(e.saldo_sebelumnya)}</td>
-        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${rupiah(e.saldo_masuk)}</td>
-        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${rupiah(e.limit_kas)}</td>
-        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${rupiah(e.pengeluaran)}</td>
-        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${rupiah(c.sisa)}</td>
-        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${pct(c.terpakai)}</td>
-        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9;text-align:right">${pct(c.posisi)}</td>
-        <td style="padding:7px 6px;border-bottom:1px solid #E4E5E9"><span style="display:inline-block;padding:2px 8px;border-radius:10px;background:${badgeColor}1A;color:${badgeColor};font-weight:600;font-size:11px">${esc(c.indikator)}</span></td>
-      </tr>`;
-    }).join("");
+      groupCount[c.tone]++;
+      return {
+        cells: [
+          String(i + 1), b.name,
+          rupiah(e.saldo_sebelumnya), rupiah(e.saldo_masuk), rupiah(e.limit_kas), rupiah(e.pengeluaran), rupiah(c.sisa),
+          pct(c.terpakai), pct(c.posisi),
+        ],
+        badge: { label: c.indikator, color: colorMap[c.tone] },
+      };
+    });
 
-    const legend = `
-      <div style="display:flex;gap:16px;flex-wrap:wrap;font-size:11px;color:#5B6270;margin-top:14px">
-        <div><b>Efisien/Terkendali:</b> \u2264 ${settings.efisien}% posisi kas</div>
-        <div><b>Monitoring:</b> ${settings.efisien}\u2013${settings.monitoring}%</div>
-        <div><b>Pengecekan/Tindak Lanjut:</b> &gt; ${settings.monitoring}% atau saldo minus</div>
-      </div>`;
+    const total = branches.length;
+    const donutSegments = [
+      { label: "Terkendali / Efisien", count: groupCount.good, pct: countFilled ? Math.round((groupCount.good / countFilled) * 100) : 0, color: colorMap.good },
+      { label: "Monitoring", count: groupCount.warn, pct: countFilled ? Math.round((groupCount.warn / countFilled) * 100) : 0, color: colorMap.warn },
+      { label: "Pengecekan / Tindak Lanjut", count: groupCount.bad, pct: countFilled ? Math.round((groupCount.bad / countFilled) * 100) : 0, color: colorMap.bad },
+    ].filter((s) => s.count > 0);
 
-    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Laporan Audit Kas Kecil - Semua Cabang</title><style>
-      body{font-family:Arial,Helvetica,sans-serif;color:#1A1D24;padding:30px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
-      h1{font-size:19px;margin:0 0 3px;}
-      table{width:100%;border-collapse:collapse;font-size:11.5px;margin-top:16px;}
-      th{text-align:left;padding:7px 6px;border-bottom:2px solid #1A1D24;font-size:10.5px;text-transform:uppercase;color:#5B6270;}
-      tfoot td{font-weight:700;border-top:2px solid #1A1D24;padding:8px 6px;}
-    </style></head><body>
-      <h1>Laporan Audit Kas Kecil \u2014 Semua Cabang</h1>
-      <div style="font-size:12.5px;color:#5B6270">Bulan: ${esc(monthLabel(period))} &middot; Dicetak ${esc(new Date().toLocaleString("id-ID"))}</div>
-      <table>
-        <thead><tr>
-          <th>No</th><th>Cabang</th><th style="text-align:right">Saldo Sebelumnya</th><th style="text-align:right">Saldo Masuk</th>
-          <th style="text-align:right">Limit</th><th style="text-align:right">Pengeluaran</th><th style="text-align:right">Sisa Saldo</th>
-          <th style="text-align:right">% Terpakai</th><th style="text-align:right">% Posisi Kas</th><th>Indikator</th>
-        </tr></thead>
-        <tbody>${rows}</tbody>
-        <tfoot><tr>
-          <td colspan="2">Total (${countFilled} cabang terisi)</td>
-          <td style="text-align:right">${rupiah(totalSb)}</td>
-          <td style="text-align:right">${rupiah(totalSm)}</td>
-          <td style="text-align:right">${rupiah(totalLim)}</td>
-          <td style="text-align:right">${rupiah(totalPk)}</td>
-          <td style="text-align:right">${rupiah(totalSisa)}</td>
-          <td colspan="3"></td>
-        </tr></tfoot>
-      </table>
-      ${legend}
-      <script>window.onload=function(){setTimeout(function(){window.print();},400);}<\/script>
-    </body></html>`;
-    const w = window.open("", "_blank");
-    if (!w) { alert("Popup diblokir. Izinkan popup lalu coba lagi."); return; }
-    w.document.open(); w.document.write(html); w.document.close();
+    const html = buildSummaryReportHtml({
+      reportTitle: "LAPORAN AUDIT KAS KECIL",
+      scopeLabel: "SEMUA CABANG",
+      periodLabel: monthLabel(period),
+      printedAtLabel: new Date().toLocaleString("id-ID"),
+      summaryCards: [
+        { icon: "building", label: "TOTAL CABANG", value: String(total), sub: "Cabang", color: "#2A1F52" },
+        { icon: "shieldCheck", label: "TERKENDALI / EFISIEN", value: String(groupCount.good), sub: `Cabang (${countFilled ? Math.round((groupCount.good / countFilled) * 100) : 0}%)`, color: colorMap.good },
+        { icon: "alertCircle", label: "MONITORING", value: String(groupCount.warn), sub: `Cabang (${countFilled ? Math.round((groupCount.warn / countFilled) * 100) : 0}%)`, color: colorMap.warn },
+        { icon: "alertTriangle", label: "PENGECEKAN / TINDAK LANJUT", value: String(groupCount.bad), sub: `Cabang (${countFilled ? Math.round((groupCount.bad / countFilled) * 100) : 0}%)`, color: colorMap.bad },
+      ],
+      tableHeaders: ["No", "Cabang", "Saldo Sebelumnya", "Saldo Masuk", "Limit", "Pengeluaran", "Sisa Saldo", "% Terpakai", "% Posisi Kas", "Indikator"],
+      tableRows,
+      donutSegments,
+      donutCenterLines: [String(total), "Cabang"],
+      legendItems: [
+        { icon: "shieldCheck", color: colorMap.good, title: "TERKENDALI / EFISIEN", desc: `Posisi kas \u2264 ${settings.efisien}%` },
+        { icon: "alertCircle", color: colorMap.warn, title: "MONITORING", desc: `Posisi kas ${settings.efisien}% s.d. ${settings.monitoring}%` },
+        { icon: "alertTriangle", color: colorMap.bad, title: "PENGECEKAN / TINDAK LANJUT", desc: `Posisi kas > ${settings.monitoring}% atau saldo minus` },
+      ],
+      summaryList: [
+        { icon: "arrowDown", label: "Total Saldo Sebelumnya", value: rupiah(totalSb) },
+        { icon: "arrowDown", label: "Total Saldo Masuk", value: rupiah(totalSm) },
+        { icon: "arrowUp", label: "Total Pengeluaran", value: rupiah(totalPk) },
+        { icon: "wallet", label: "Total Sisa Saldo", value: rupiah(totalSisa), strong: true },
+      ],
+      notes: [
+        `Laporan ini merupakan ringkasan hasil audit kas kecil untuk seluruh cabang pada bulan yang dipilih (${countFilled} dari ${total} cabang terisi).`,
+        "Status indikator berdasarkan persentase posisi kas (pengeluaran dibanding total saldo tersedia) terhadap ambang batas yang ditetapkan.",
+        `Harap lakukan tindak lanjut untuk cabang dengan indikator "Pengecekan" atau "Tindak Lanjut".`,
+      ],
+      pageLabel: "Halaman 1 dari 1",
+    });
+
+    const opened = openPrintWindow("Laporan Audit Kas Kecil", html);
+    if (!opened) { alert("Popup diblokir. Izinkan popup lalu coba lagi."); return; }
     setShowExportAll(false);
   }
 
   const currentEntry = selectedBranch ? (entriesByBranch[selectedBranch.id] || {})[selectedPeriod] : null;
   const current = computeStatus(selectedPeriod ? { ...(currentEntry || {}), ...form } : null, settings);
+  const sisaHitung = (parseFloat(form.saldo_sebelumnya) || 0) + (parseFloat(form.saldo_masuk) || 0) - (parseFloat(form.pengeluaran) || 0);
 
   const visibleBranches = branches.filter((b) => {
     if (filter === "all") return true;
-    const lp = latestPeriod(b.id);
-    const st = lp ? computeStatus(entriesByBranch[b.id][lp], settings) : null;
+    const e = (entriesByBranch[b.id] || {})[viewPeriod];
+    const st = e ? computeStatus(e, settings) : null;
     const tone = st ? st.tone : "none";
     return tone === filter;
   });
@@ -291,33 +350,47 @@ export default function AuditKeuangan({ profile }) {
       {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
 
       <div style={{ padding: "20px 28px" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
           <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.4 }}>
             Pilih cabang untuk audit ({visibleBranches.length})
           </div>
-          <select className="input" style={{ width: 220 }} value={filter} onChange={(e) => setFilter(e.target.value)}>
-            {FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-          </select>
+          <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px" }}>
+              <button className="btn-ghost" onClick={() => setViewPeriod(addMonthsToPeriod(viewPeriod, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
+              <div className="mono" style={{ fontWeight: 600, minWidth: 130, textAlign: "center", fontSize: 13.5 }}>{monthLabel(viewPeriod)}</div>
+              <button className="btn-ghost" onClick={() => setViewPeriod(addMonthsToPeriod(viewPeriod, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
+            </div>
+            <select className="input" style={{ width: 200 }} value={filter} onChange={(e) => setFilter(e.target.value)}>
+              {FILTERS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
+            </select>
+          </div>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 14 }}>
           {visibleBranches.map((b) => {
-            const lp = latestPeriod(b.id);
-            const e = lp ? entriesByBranch[b.id][lp] : null;
+            const e = (entriesByBranch[b.id] || {})[viewPeriod];
             const st = e ? computeStatus(e, settings) : null;
             const tone = st ? st.tone : "none";
+            const toneIcon = tone === "good" ? "check" : tone === "warn" ? "alertCircle" : tone === "bad" ? "alertTriangle" : "wallet";
             return (
               <div
                 key={b.id}
                 onClick={() => openBranch(b)}
-                style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 18px", cursor: "pointer", borderTop: `3px solid ${TONE[tone].dot}` }}
+                style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", overflow: "hidden" }}
               >
-                <div className="display" style={{ fontSize: 15.5, fontWeight: 600, marginBottom: 8 }}>{b.name}</div>
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: TONE[tone].dot }} />
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                  <div className="display" style={{ fontSize: 15.5, fontWeight: 600 }}>{b.name}</div>
+                  <div style={{ width: 26, height: 26, borderRadius: 8, background: TONE[tone].bg, color: TONE[tone].dot, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                    <Icon name={toneIcon} size={14} />
+                  </div>
+                </div>
                 <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: TONE[tone].bg, color: TONE[tone].text, fontSize: 11.5, fontWeight: 600, marginBottom: 10 }}>
                   {st ? st.indikator : "Belum diisi"}
                 </span>
+                <div style={{ height: 1, background: "var(--border)", margin: "10px 0" }} />
                 <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
-                  {e ? `Sisa ${rupiah(st.sisa)} \u00b7 ${monthLabel(lp)}` : "Belum ada audit pada periode ini"}
+                  {e ? `Sisa ${rupiah(st.sisa)} \u00b7 ${monthLabel(viewPeriod)}` : "Belum ada audit pada periode ini"}
                 </div>
               </div>
             );
@@ -327,58 +400,113 @@ export default function AuditKeuangan({ profile }) {
 
       {selectedBranch && (
         <div style={{ position: "fixed", inset: 0, background: "var(--overlay)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={closeModal}>
-          <div style={{ background: "var(--surface)", borderRadius: 14, padding: 24, width: 440, maxWidth: "92%", maxHeight: "90vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-              <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>{selectedBranch.name}</div>
-              <span onClick={closeModal} style={{ cursor: "pointer", color: "var(--text-faint)", fontSize: 20, lineHeight: 1 }}>&times;</span>
+          <div style={{ background: "var(--surface)", borderRadius: 16, width: 440, maxWidth: "92%", maxHeight: "90vh", overflowY: "auto", overflow: "hidden" }} onClick={(e) => e.stopPropagation()}>
+            {/* Header gradient */}
+            <div style={{ background: "linear-gradient(120deg, var(--sidebar-bg) 70%, var(--sidebar-active-bg) 100%)", padding: "18px 22px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div>
+                <div className="display" style={{ color: "var(--sidebar-text)", fontWeight: 600, fontSize: 17 }}>{selectedBranch.name}</div>
+                <div style={{ color: "var(--sidebar-text-muted)", fontSize: 12 }}>Audit Kas Kecil</div>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div style={{ width: 34, height: 34, borderRadius: "50%", background: "rgba(244,183,64,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: "#F4B740", flexShrink: 0 }}>
+                  <Icon name="wallet" size={17} />
+                </div>
+                <span onClick={closeModal} style={{ cursor: "pointer", color: "var(--sidebar-text-muted)", fontSize: 22, lineHeight: 1 }}>&times;</span>
+              </div>
             </div>
 
-            <div style={{ marginBottom: 14, maxWidth: 220 }}>
-              <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Bulan audit</label>
-              <input type="month" className="input" value={selectedPeriod || ""} onChange={(e) => selectPeriod(selectedBranch.id, e.target.value)} />
-            </div>
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 18 }}>
-              {[["saldo_sebelumnya", "Saldo bulan sebelumnya"], ["saldo_masuk", "Saldo masuk bulan berjalan"], ["limit_kas", "Limit kas kecil"], ["pengeluaran", "Pengeluaran kas kecil"]].map(([key, label]) => (
-                <div key={key}>
-                  <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>{label}</label>
-                  <input className="input" type="number" placeholder="0" disabled={!canEdit} value={form[key]} onChange={(e) => setForm({ ...form, [key]: e.target.value })} />
-                </div>
-              ))}
-            </div>
-
-            {canEdit && (
-              <div style={{ display: "flex", gap: 10, marginBottom: 20, alignItems: "center" }}>
-                <button className="btn" disabled={saving} onClick={saveEntry}>{saving ? "Menyimpan\u2026" : "Simpan"}</button>
-                {savedFlash && <span style={{ color: "var(--success-text)", fontSize: 13 }}>Tersimpan \u2713</span>}
+            <div style={{ padding: "20px 22px 22px" }}>
+              <div style={{ marginBottom: 16, maxWidth: 220 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 6 }}>
+                  <Icon name="calendar" size={13} /> Bulan audit
+                </label>
+                <input type="month" className="input" value={selectedPeriod || ""} onChange={(e) => selectPeriod(selectedBranch.id, e.target.value)} />
               </div>
-            )}
 
-            <div style={{ borderTop: "1px solid var(--border)", paddingTop: 18 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-secondary)" }}>DIHITUNG OTOMATIS</div>
-                <button className="btn-ghost" disabled={!currentEntry} onClick={exportReport}>Export PDF</button>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 10, marginBottom: 16 }}>
-                <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
-                  <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>Sisa saldo</div>
-                  <div className="mono" style={{ fontSize: 15, fontWeight: 600 }}>{rupiah(current?.sisa)}</div>
+              {isFirstEverEntry ? (
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 6 }}>
+                    <Icon name="history" size={13} /> Saldo sebelumnya (audit pertama cabang ini)
+                  </label>
+                  <div style={{ position: "relative" }}>
+                    <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 13 }}>Rp</span>
+                    <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.saldo_sebelumnya)} onChange={(e) => setForm({ ...form, saldo_sebelumnya: parseThousands(e.target.value) })} style={{ paddingLeft: 32 }} />
+                  </div>
                 </div>
-                <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
-                  <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>% Terpakai</div>
-                  <div className="mono" style={{ fontSize: 15, fontWeight: 600 }}>{pct(current?.terpakai)}</div>
-                </div>
-                <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px" }}>
-                  <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>% Posisi kas</div>
-                  <div className="mono" style={{ fontSize: 15, fontWeight: 600 }}>{pct(current?.posisi)}</div>
-                </div>
-              </div>
-              {current && (
-                <div style={{ background: TONE[current.tone].bg, borderRadius: 10, padding: "12px 14px" }}>
-                  <div style={{ fontWeight: 600, color: TONE[current.tone].text }}>{current.indikator}</div>
-                  <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>{current.keterangan}</div>
+              ) : (
+                <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 11.5, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 5 }}>
+                    <Icon name="history" size={13} /> Saldo sebelumnya <span style={{ color: "var(--text-faint)" }}>(otomatis)</span>
+                  </span>
+                  <span className="mono" style={{ fontSize: 13.5, fontWeight: 600 }}>{rupiah(form.saldo_sebelumnya)}</span>
                 </div>
               )}
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 18 }}>
+                <div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 6 }}>
+                    <Icon name="arrowDown" size={13} /> Saldo masuk
+                  </label>
+                  <div style={{ position: "relative" }}>
+                    <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 13 }}>Rp</span>
+                    <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.saldo_masuk)} onChange={(e) => setForm({ ...form, saldo_masuk: parseThousands(e.target.value) })} style={{ paddingLeft: 32 }} />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 6 }}>
+                    <Icon name="arrowUp" size={13} /> Pengeluaran
+                  </label>
+                  <div style={{ position: "relative" }}>
+                    <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 13 }}>Rp</span>
+                    <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.pengeluaran)} onChange={(e) => setForm({ ...form, pengeluaran: parseThousands(e.target.value) })} style={{ paddingLeft: 32 }} />
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 6 }}>
+                  <Icon name="wallet" size={13} /> Sisa saldo (hitung fisik uang kas)
+                </label>
+                <div style={{ position: "relative" }}>
+                  <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 13 }}>Rp</span>
+                  <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.sisa_saldo)} onChange={(e) => setForm({ ...form, sisa_saldo: parseThousands(e.target.value) })} style={{ paddingLeft: 32 }} />
+                </div>
+                {canEdit && (
+                  <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 5 }}>
+                    Hasil hitungan rumus: {rupiah(sisaHitung)}{" "}
+                    <span onClick={() => setForm((f) => ({ ...f, sisa_saldo: String(Math.round(sisaHitung)) }))} style={{ cursor: "pointer", color: "#F4B740", textDecoration: "underline" }}>
+                      pakai ini
+                    </span>
+                  </div>
+                )}
+              </div>
+
+              {/* Panel hasil — cuma % Posisi Kas + Indikator */}
+              {current && (
+                <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px", marginBottom: 18 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                    <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>% Posisi kas</span>
+                    <span style={{ fontSize: 15, fontWeight: 700, color: TONE[current.tone].dot }}>{pct(current.posisi)}</span>
+                  </div>
+                  <div style={{ height: 6, background: "var(--border)", borderRadius: 4, overflow: "hidden", marginBottom: 12 }}>
+                    <div style={{ height: "100%", width: `${Math.min(current.posisi * 100, 100)}%`, background: TONE[current.tone].dot, transition: "width .2s" }} />
+                  </div>
+                  <div style={{ background: TONE[current.tone].bg, borderRadius: 8, padding: "9px 12px" }}>
+                    <div style={{ fontWeight: 700, color: TONE[current.tone].text, marginBottom: 2 }}>{current.indikator}</div>
+                    <div style={{ fontSize: 12.5, color: TONE[current.tone].text }}>{current.keterangan}</div>
+                  </div>
+                </div>
+              )}
+
+              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                {canEdit && (
+                  <button className="btn" disabled={saving} onClick={saveEntry} style={{ flex: 1 }}>{saving ? "Menyimpan\u2026" : "Simpan"}</button>
+                )}
+                <button className="btn-ghost" disabled={!currentEntry} onClick={exportReport} title="Export PDF" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  <Icon name="fileDown" size={15} /> {!canEdit && "Export PDF"}
+                </button>
+                {savedFlash && <span style={{ color: "var(--success-text)", fontSize: 13 }}>Tersimpan \u2713</span>}
+              </div>
             </div>
           </div>
         </div>
