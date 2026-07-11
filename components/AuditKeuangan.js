@@ -97,6 +97,9 @@ export default function AuditKeuangan({ profile }) {
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [form, setForm] = useState({ saldo_sebelumnya: "", saldo_masuk: "", limit_kas: "", pengeluaran: "", sisa_saldo: "" });
+  const [editingLimit, setEditingLimit] = useState(false);
+  const [limitDraft, setLimitDraft] = useState("");
+  const [savingLimit, setSavingLimit] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -106,7 +109,7 @@ export default function AuditKeuangan({ profile }) {
   const [showExportAll, setShowExportAll] = useState(false);
   const [exportAllPeriod, setExportAllPeriod] = useState(null);
 
-  const canEdit = profile.role === "auditor" || profile.role === "admin";
+  const canEdit = profile.role === "auditor" || profile.role === "super_admin";
 
   useEffect(() => { loadAll(); }, []);
 
@@ -143,12 +146,14 @@ export default function AuditKeuangan({ profile }) {
 
   function openBranch(branch) {
     setSelectedBranch(branch);
+    setEditingLimit(false);
     selectPeriod(branch.id, viewPeriod);
   }
 
   function closeModal() {
     setSelectedBranch(null);
     setSelectedPeriod(null);
+    setEditingLimit(false);
   }
 
   function selectPeriod(branchId, period) {
@@ -172,6 +177,25 @@ export default function AuditKeuangan({ profile }) {
   const isFirstEverEntry = selectedBranch && selectedPeriod
     ? !(entriesByBranch[selectedBranch.id] || {})[selectedPeriod] && !(entriesByBranch[selectedBranch.id] || {})[getPrevPeriod(selectedPeriod)]
     : false;
+
+  async function saveLimitOnly() {
+    if (!selectedBranch) return;
+    setSavingLimit(true);
+    setError(null);
+    try {
+      const newLimit = parseFloat(limitDraft) || 0;
+      const { error: err } = await supabase.from("branches").update({ limit_kas: newLimit }).eq("id", selectedBranch.id);
+      if (err) throw err;
+      setBranches((prev) => prev.map((b) => (b.id === selectedBranch.id ? { ...b, limit_kas: newLimit } : b)));
+      setSelectedBranch((prev) => ({ ...prev, limit_kas: newLimit }));
+      setForm((f) => ({ ...f, limit_kas: newLimit }));
+      setEditingLimit(false);
+    } catch (err) {
+      setError("Gagal mengubah limit: " + err.message);
+    } finally {
+      setSavingLimit(false);
+    }
+  }
 
   async function saveEntry() {
     if (!selectedBranch || !selectedPeriod) return;
@@ -200,6 +224,13 @@ export default function AuditKeuangan({ profile }) {
       const grouped = { ...entriesByBranch };
       grouped[selectedBranch.id] = { ...(grouped[selectedBranch.id] || {}), [selectedPeriod]: res.data };
       setEntriesByBranch(grouped);
+
+      // Kalau cabang ini belum pernah punya limit kas tersimpan, kunci sekarang buat seterusnya
+      if (!selectedBranch.limit_kas && payload.limit_kas > 0) {
+        await supabase.from("branches").update({ limit_kas: payload.limit_kas }).eq("id", selectedBranch.id);
+        setBranches((prev) => prev.map((b) => (b.id === selectedBranch.id ? { ...b, limit_kas: payload.limit_kas } : b)));
+        setSelectedBranch((prev) => ({ ...prev, limit_kas: payload.limit_kas }));
+      }
 
       setSavedFlash(true);
       setTimeout(() => setSavedFlash(false), 2000);
@@ -335,6 +366,159 @@ export default function AuditKeuangan({ profile }) {
 
   if (loading) return <div style={{ padding: 40, color: "var(--text-secondary)" }}>Memuat data\u2026</div>;
 
+  // ── Tampilan: halaman penuh isi audit (bukan modal lagi) ──
+  if (selectedBranch) {
+    return (
+      <div style={{ flex: 1 }}>
+        <div style={{ background: "var(--surface)", padding: "16px 28px", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, zIndex: 10 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+            <div>
+              <button className="btn-ghost" style={{ marginBottom: 8, fontSize: 12.5 }} onClick={closeModal}>&larr; Pilih cabang lain</button>
+              <div className="display" style={{ fontSize: 19, fontWeight: 600 }}>Audit Keuangan &mdash; {selectedBranch.name}</div>
+              <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
+                Audit Kas Kecil {currentEntry && <span style={{ color: "var(--text-faint)" }}>&middot; sudah pernah diisi, kamu mengedit data yang ada</span>}
+              </div>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, color: "var(--text-secondary)", marginBottom: 3 }}>
+                  <Icon name="calendar" size={13} /> Bulan audit
+                </label>
+                <input type="month" className="input" value={selectedPeriod || ""} onChange={(e) => selectPeriod(selectedBranch.id, e.target.value)} />
+              </div>
+              {canEdit && (
+                <button className="btn" disabled={saving} onClick={saveEntry} style={{ alignSelf: "flex-end" }}>
+                  {saving ? "Menyimpan\u2026" : savedFlash ? "\u2713 Tersimpan" : "Simpan"}
+                </button>
+              )}
+              <button className="btn-ghost" disabled={!currentEntry} onClick={exportReport} title="Export PDF" style={{ alignSelf: "flex-end", display: "flex", alignItems: "center", gap: 6 }}>
+                <Icon name="fileDown" size={15} />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
+
+        <div style={{ padding: 24, maxWidth: 560 }}>
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
+            {isFirstEverEntry ? (
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
+                  <Icon name="history" size={13} /> Saldo sebelumnya (audit pertama cabang ini)
+                </label>
+                <div style={{ position: "relative" }}>
+                  <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
+                  <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.saldo_sebelumnya)} onChange={(e) => setForm({ ...form, saldo_sebelumnya: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
+                </div>
+              </div>
+            ) : (
+              <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 11.5, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 5 }}>
+                  <Icon name="history" size={13} /> Saldo sebelumnya <span style={{ color: "var(--text-faint)" }}>(otomatis)</span>
+                </span>
+                <span className="mono" style={{ fontSize: 13.5, fontWeight: 600 }}>{rupiah(form.saldo_sebelumnya)}</span>
+              </div>
+            )}
+
+            {!selectedBranch.limit_kas && (
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
+                  <Icon name="wallet" size={13} /> Limit kas kecil cabang ini (baru, sekali diisi lalu terkunci)
+                </label>
+                <div style={{ position: "relative" }}>
+                  <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
+                  <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.limit_kas)} onChange={(e) => setForm({ ...form, limit_kas: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
+                </div>
+              </div>
+            )}
+
+            {selectedBranch.limit_kas > 0 && profile?.role === "super_admin" && (
+              editingLimit ? (
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
+                    <Icon name="wallet" size={13} /> Ubah limit kas kecil <span style={{ color: "var(--text-faint)" }}>(khusus Super Admin)</span>
+                  </label>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div style={{ position: "relative", flex: 1 }}>
+                      <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
+                      <input className="input" type="text" inputMode="numeric" placeholder="0" value={formatThousands(limitDraft)} onChange={(e) => setLimitDraft(parseThousands(e.target.value))} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} autoFocus />
+                    </div>
+                    <button className="btn" disabled={savingLimit} onClick={saveLimitOnly}>{savingLimit ? "..." : "Simpan"}</button>
+                    <button className="btn-ghost" onClick={() => setEditingLimit(false)}>Batal</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, fontSize: 11.5, color: "var(--text-faint)" }}>
+                  <span>Limit kas kecil: <span className="mono" style={{ color: "var(--text-secondary)", fontWeight: 600 }}>{rupiah(selectedBranch.limit_kas)}</span></span>
+                  <span onClick={() => { setLimitDraft(String(selectedBranch.limit_kas)); setEditingLimit(true); }} style={{ cursor: "pointer", color: "#F4B740", textDecoration: "underline" }}>Ubah</span>
+                </div>
+              )
+            )}
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
+                  <Icon name="arrowDown" size={13} /> Saldo masuk
+                </label>
+                <div style={{ position: "relative" }}>
+                  <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
+                  <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.saldo_masuk)} onChange={(e) => setForm({ ...form, saldo_masuk: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
+                </div>
+              </div>
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
+                  <Icon name="arrowUp" size={13} /> Pengeluaran
+                </label>
+                <div style={{ position: "relative" }}>
+                  <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
+                  <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.pengeluaran)} onChange={(e) => setForm({ ...form, pengeluaran: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
+                </div>
+              </div>
+            </div>
+
+            <div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
+                <Icon name="wallet" size={13} /> Sisa saldo (hitung fisik uang kas)
+              </label>
+              <div style={{ position: "relative" }}>
+                <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
+                <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.sisa_saldo)} onChange={(e) => setForm({ ...form, sisa_saldo: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
+              </div>
+              {canEdit && (
+                <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 5 }}>
+                  Hasil hitungan rumus: {rupiah(sisaHitung)}{" "}
+                  <span onClick={() => setForm((f) => ({ ...f, sisa_saldo: String(Math.round(sisaHitung)) }))} style={{ cursor: "pointer", color: "#F4B740", textDecoration: "underline" }}>
+                    pakai ini
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Panel hasil — cuma % Posisi Kas + Indikator */}
+          {current && (
+            <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px" }}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>% Posisi kas</span>
+                <span style={{ fontSize: 15, fontWeight: 700, color: TONE[current.tone].dot }}>{pct(current.posisi)}</span>
+              </div>
+              <div style={{ height: 6, background: "var(--border)", borderRadius: 4, overflow: "hidden", marginBottom: 12 }}>
+                <div style={{ height: "100%", width: `${Math.min(current.posisi * 100, 100)}%`, background: TONE[current.tone].dot, transition: "width .2s" }} />
+              </div>
+              <div style={{ background: TONE[current.tone].bg, borderRadius: 8, padding: "9px 12px" }}>
+                <div style={{ fontWeight: 700, color: TONE[current.tone].text, marginBottom: 2 }}>{current.indikator}</div>
+                <div style={{ fontSize: 12.5, color: TONE[current.tone].text }}>{current.keterangan}</div>
+              </div>
+            </div>
+          )}
+          {savedFlash && <div style={{ color: "var(--success-text)", fontSize: 13, marginTop: 10 }}>Tersimpan \u2713</div>}
+        </div>
+      </div>
+    );
+  }
+
+  // ── Tampilan: daftar cabang ──
   return (
     <div style={{ flex: 1 }}>
       <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
@@ -378,7 +562,7 @@ export default function AuditKeuangan({ profile }) {
                 onClick={() => openBranch(b)}
                 style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", overflow: "hidden" }}
               >
-                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: TONE[tone].dot }} />
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: tone === "none" ? "linear-gradient(90deg, #7c3aed, #F4B740)" : TONE[tone].dot }} />
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
                   <div className="display" style={{ fontSize: 15.5, fontWeight: 600 }}>{b.name}</div>
                   <div style={{ width: 26, height: 26, borderRadius: 8, background: TONE[tone].bg, color: TONE[tone].dot, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
@@ -397,120 +581,6 @@ export default function AuditKeuangan({ profile }) {
           })}
         </div>
       </div>
-
-      {selectedBranch && (
-        <div style={{ position: "fixed", inset: 0, background: "var(--overlay)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={closeModal}>
-          <div style={{ background: "var(--surface)", borderRadius: 16, width: 440, maxWidth: "92%", maxHeight: "90vh", overflowY: "auto", overflow: "hidden" }} onClick={(e) => e.stopPropagation()}>
-            {/* Header gradient */}
-            <div style={{ background: "linear-gradient(120deg, var(--sidebar-bg) 70%, var(--sidebar-active-bg) 100%)", padding: "18px 22px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <div className="display" style={{ color: "var(--sidebar-text)", fontWeight: 600, fontSize: 17 }}>{selectedBranch.name}</div>
-                <div style={{ color: "var(--sidebar-text-muted)", fontSize: 12 }}>Audit Kas Kecil</div>
-              </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <div style={{ width: 34, height: 34, borderRadius: "50%", background: "rgba(244,183,64,0.15)", display: "flex", alignItems: "center", justifyContent: "center", color: "#F4B740", flexShrink: 0 }}>
-                  <Icon name="wallet" size={17} />
-                </div>
-                <span onClick={closeModal} style={{ cursor: "pointer", color: "var(--sidebar-text-muted)", fontSize: 22, lineHeight: 1 }}>&times;</span>
-              </div>
-            </div>
-
-            <div style={{ padding: "20px 22px 22px" }}>
-              <div style={{ marginBottom: 16, maxWidth: 220 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 6 }}>
-                  <Icon name="calendar" size={13} /> Bulan audit
-                </label>
-                <input type="month" className="input" value={selectedPeriod || ""} onChange={(e) => selectPeriod(selectedBranch.id, e.target.value)} />
-              </div>
-
-              {isFirstEverEntry ? (
-                <div style={{ marginBottom: 14 }}>
-                  <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 6 }}>
-                    <Icon name="history" size={13} /> Saldo sebelumnya (audit pertama cabang ini)
-                  </label>
-                  <div style={{ position: "relative" }}>
-                    <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 13 }}>Rp</span>
-                    <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.saldo_sebelumnya)} onChange={(e) => setForm({ ...form, saldo_sebelumnya: parseThousands(e.target.value) })} style={{ paddingLeft: 32 }} />
-                  </div>
-                </div>
-              ) : (
-                <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                  <span style={{ fontSize: 11.5, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 5 }}>
-                    <Icon name="history" size={13} /> Saldo sebelumnya <span style={{ color: "var(--text-faint)" }}>(otomatis)</span>
-                  </span>
-                  <span className="mono" style={{ fontSize: 13.5, fontWeight: 600 }}>{rupiah(form.saldo_sebelumnya)}</span>
-                </div>
-              )}
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 18 }}>
-                <div>
-                  <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 6 }}>
-                    <Icon name="arrowDown" size={13} /> Saldo masuk
-                  </label>
-                  <div style={{ position: "relative" }}>
-                    <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 13 }}>Rp</span>
-                    <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.saldo_masuk)} onChange={(e) => setForm({ ...form, saldo_masuk: parseThousands(e.target.value) })} style={{ paddingLeft: 32 }} />
-                  </div>
-                </div>
-                <div>
-                  <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 6 }}>
-                    <Icon name="arrowUp" size={13} /> Pengeluaran
-                  </label>
-                  <div style={{ position: "relative" }}>
-                    <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 13 }}>Rp</span>
-                    <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.pengeluaran)} onChange={(e) => setForm({ ...form, pengeluaran: parseThousands(e.target.value) })} style={{ paddingLeft: 32 }} />
-                  </div>
-                </div>
-              </div>
-
-              <div style={{ marginBottom: 16 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 6 }}>
-                  <Icon name="wallet" size={13} /> Sisa saldo (hitung fisik uang kas)
-                </label>
-                <div style={{ position: "relative" }}>
-                  <span style={{ position: "absolute", left: 12, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 13 }}>Rp</span>
-                  <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.sisa_saldo)} onChange={(e) => setForm({ ...form, sisa_saldo: parseThousands(e.target.value) })} style={{ paddingLeft: 32 }} />
-                </div>
-                {canEdit && (
-                  <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 5 }}>
-                    Hasil hitungan rumus: {rupiah(sisaHitung)}{" "}
-                    <span onClick={() => setForm((f) => ({ ...f, sisa_saldo: String(Math.round(sisaHitung)) }))} style={{ cursor: "pointer", color: "#F4B740", textDecoration: "underline" }}>
-                      pakai ini
-                    </span>
-                  </div>
-                )}
-              </div>
-
-              {/* Panel hasil — cuma % Posisi Kas + Indikator */}
-              {current && (
-                <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 12, padding: "14px 16px", marginBottom: 18 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                    <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>% Posisi kas</span>
-                    <span style={{ fontSize: 15, fontWeight: 700, color: TONE[current.tone].dot }}>{pct(current.posisi)}</span>
-                  </div>
-                  <div style={{ height: 6, background: "var(--border)", borderRadius: 4, overflow: "hidden", marginBottom: 12 }}>
-                    <div style={{ height: "100%", width: `${Math.min(current.posisi * 100, 100)}%`, background: TONE[current.tone].dot, transition: "width .2s" }} />
-                  </div>
-                  <div style={{ background: TONE[current.tone].bg, borderRadius: 8, padding: "9px 12px" }}>
-                    <div style={{ fontWeight: 700, color: TONE[current.tone].text, marginBottom: 2 }}>{current.indikator}</div>
-                    <div style={{ fontSize: 12.5, color: TONE[current.tone].text }}>{current.keterangan}</div>
-                  </div>
-                </div>
-              )}
-
-              <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                {canEdit && (
-                  <button className="btn" disabled={saving} onClick={saveEntry} style={{ flex: 1 }}>{saving ? "Menyimpan\u2026" : "Simpan"}</button>
-                )}
-                <button className="btn-ghost" disabled={!currentEntry} onClick={exportReport} title="Export PDF" style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  <Icon name="fileDown" size={15} /> {!canEdit && "Export PDF"}
-                </button>
-                {savedFlash && <span style={{ color: "var(--success-text)", fontSize: 13 }}>Tersimpan \u2713</span>}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {showExportAll && (
         <div style={{ position: "fixed", inset: 0, background: "var(--overlay)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setShowExportAll(false)}>

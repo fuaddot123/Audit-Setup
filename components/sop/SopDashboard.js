@@ -93,7 +93,7 @@ export default function SopDashboard() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 14 }}>
           {branchStats.map(({ branch, row, score, tiers }) => (
             <div key={branch.id} style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 16, overflow: "hidden" }}>
-              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: row ? scoreColor(score) : "var(--border)" }} />
+              <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: row ? scoreColor(score) : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
                 <div style={{ fontWeight: 600, fontSize: 14.5 }}>{branch.name}</div>
                 {score !== null && score < ALERT_THRESHOLD && (

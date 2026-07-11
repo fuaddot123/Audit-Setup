@@ -14,8 +14,14 @@ const MODULES = [
       { key: "laporan", label: "Laporan Audit" },
     ],
   },
-  { key: "service", label: "Audit Service", ready: false },
-  { key: "stok", label: "Audit Kesehatan Stok", ready: false },
+  {
+    key: "stok", label: "Audit Stok", ready: true, subs: [
+      { key: "dashboard", label: "Dashboard" },
+      { key: "service", label: "Service Ratio" },
+      { key: "kesehatan", label: "Kesehatan Stok" },
+      { key: "laporan", label: "Laporan Audit Stok" },
+    ],
+  },
   { key: "kpi", label: "KPI", ready: false },
 ];
 
@@ -53,10 +59,10 @@ export default function Sidebar({ active, activeSub, onSelect, profile }) {
     onSelect(m.key, s.key);
   }
 
-  const roleLabel = { admin: "Admin", auditor: "Auditor", ceo: "CEO" }[profile?.role] || "\u2026";
+  const roleLabel = { super_admin: "Super Admin", auditor: "Auditor", ceo: "CEO" }[profile?.role] || "\u2026";
 
   return (
-    <div style={{ width: 240, flexShrink: 0, background: "var(--sidebar-bg)", minHeight: "100vh", padding: "22px 14px", display: "flex", flexDirection: "column", borderRight: "1px solid var(--border)" }}>
+    <div style={{ width: 240, flexShrink: 0, background: "var(--sidebar-bg)", height: "100vh", position: "sticky", top: 0, alignSelf: "flex-start", padding: "22px 14px", display: "flex", flexDirection: "column", borderRight: "1px solid var(--border)", overflowY: "auto" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 10px 18px", marginBottom: 12, borderBottom: "1px solid var(--sidebar-border)" }}>
         <svg width="36" height="36" viewBox="0 0 64 64" style={{ flexShrink: 0 }}>
           <circle cx="32" cy="32" r="28.5" fill="#2A1F52" stroke="#F4B740" strokeWidth="5" />
