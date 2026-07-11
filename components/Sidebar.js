@@ -22,7 +22,7 @@ const MODULES = [
       { key: "laporan", label: "Laporan Audit Stok" },
     ],
   },
-  { key: "kpi", label: "KPI", ready: false },
+  { key: "kpi", label: "KPI", ready: true },
 ];
 
 function ChevronIcon({ open }) {

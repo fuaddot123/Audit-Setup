@@ -1,10 +1,12 @@
 import StokDashboard from "./stok/StokDashboard";
 import StokServiceRatio from "./stok/StokServiceRatio";
+import StokKesehatan from "./stok/StokKesehatan";
+import StokLaporan from "./stok/StokLaporan";
 
 export default function AuditStok({ profile, sub }) {
   if (sub === "service") return <StokServiceRatio profile={profile} />;
-  if (sub === "kesehatan") return <PlaceholderPage title="Kesehatan Stok" desc="Sedang disiapkan \u2014 menyusul setelah Service Ratio." />;
-  if (sub === "laporan") return <PlaceholderPage title="Laporan Audit Stok" desc="Export Excel & PDF \u2014 menyusul setelah semua sub-modul siap." />;
+  if (sub === "kesehatan") return <StokKesehatan profile={profile} />;
+  if (sub === "laporan") return <StokLaporan profile={profile} />;
   return <StokDashboard profile={profile} />;
 }
 
