@@ -2,7 +2,8 @@ import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
   CATS, TOTAL_ITEMS, TIER_WEIGHTS, TIER1_CATS, TIER3_CATS, ALERT_THRESHOLD,
-  calcWeightedScore, scoreColor, periodFromDate, todayInputValue, periodeLabel,
+  calcWeightedScore, calcWeightedFromRecord, scoreColor, periodFromDate, todayInputValue, periodeLabel,
+  nowPeriode, addMonthsToPeriod,
 } from "../../lib/sopConfig";
 
 function emptyChecklist() {
@@ -14,6 +15,8 @@ function emptyChecklist() {
 export default function SopAuditCabang({ profile }) {
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
+  const [allRecords, setAllRecords] = useState([]); // semua audit_generic module='sop', buat status kartu
+  const [viewPeriod, setViewPeriod] = useState(nowPeriode());
   const [selectedBranch, setSelectedBranch] = useState(null); // objek branch
   const [existingRow, setExistingRow] = useState(null); // record audit_generic kalau sudah ada utk periode ini
   const [checklist, setChecklist] = useState(emptyChecklist());
@@ -31,6 +34,8 @@ export default function SopAuditCabang({ profile }) {
     setLoadingBranches(true);
     const { data, error: err } = await supabase.from("branches").select("*").order("name");
     if (!err) setBranches(data || []);
+    const { data: recs, error: recErr } = await supabase.from("audit_generic").select("*").eq("module", "sop");
+    if (!recErr) setAllRecords(recs || []);
     setLoadingBranches(false);
   }
 
@@ -39,7 +44,7 @@ export default function SopAuditCabang({ profile }) {
     setSaved(false);
     setError(null);
     setLoadingRecord(true);
-    const period = periodFromDate(auditDate);
+    const period = viewPeriod;
     const { data, error: err } = await supabase
       .from("audit_generic")
       .select("*")
@@ -51,11 +56,12 @@ export default function SopAuditCabang({ profile }) {
       setExistingRow(data);
       setChecklist({ ...emptyChecklist(), ...(data.data?.checks || {}) });
       setNotes(data.data?.notes || {});
-      if (data.data?.audit_date) setAuditDate(data.data.audit_date);
+      setAuditDate(data.data?.audit_date || (period === nowPeriode() ? todayInputValue() : period + "-01"));
     } else {
       setExistingRow(null);
       setChecklist(emptyChecklist());
       setNotes({});
+      setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
     }
     setLoadingRecord(false);
   }
@@ -63,6 +69,7 @@ export default function SopAuditCabang({ profile }) {
   function backToList() {
     setSelectedBranch(null);
     setExistingRow(null);
+    loadBranches();
   }
 
   function toggleItem(catId, idx) {
@@ -134,28 +141,69 @@ export default function SopAuditCabang({ profile }) {
 
   // ── Tampilan: pilih cabang ──
   if (!selectedBranch) {
+    const rowsByBranch = {};
+    allRecords.filter((r) => r.period === viewPeriod).forEach((r) => {
+      if (!rowsByBranch[r.branch_id]) rowsByBranch[r.branch_id] = r;
+    });
+
     return (
       <div style={{ flex: 1 }}>
-        <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)" }}>
-          <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Audit Cabang</div>
-          <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Pilih cabang untuk mulai atau lanjutkan checklist audit SOP</div>
+        <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Audit Cabang</div>
+            <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Pilih cabang untuk mulai atau lanjutkan checklist audit SOP</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px" }}>
+            <button className="btn-ghost" onClick={() => setViewPeriod(addMonthsToPeriod(viewPeriod, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
+            <div className="mono" style={{ fontWeight: 600, minWidth: 130, textAlign: "center", fontSize: 13.5 }}>{periodeLabel(viewPeriod)}</div>
+            <button className="btn-ghost" onClick={() => setViewPeriod(addMonthsToPeriod(viewPeriod, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
+          </div>
         </div>
         <div style={{ padding: 24 }}>
+          {(() => {
+            const scores = branches.map((b) => rowsByBranch[b.id]).filter(Boolean).map((r) => calcWeightedFromRecord(r.data));
+            const auditedCount = scores.length;
+            const avgScore = auditedCount ? Math.round(scores.reduce((s, v) => s + v, 0) / auditedCount) : null;
+            const alertCount = scores.filter((s) => s < ALERT_THRESHOLD).length;
+            return (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14, marginBottom: 20 }}>
+                <SummaryCard label="Cabang sudah diaudit" value={`${auditedCount} / ${branches.length}`} />
+                <SummaryCard label="Rata-rata skor" value={avgScore !== null ? `${avgScore}%` : "\u2014"} />
+                <SummaryCard label={`Di bawah ${ALERT_THRESHOLD}% (alert)`} value={alertCount} color={alertCount > 0 ? "var(--danger-text)" : "#1a9e6e"} />
+              </div>
+            );
+          })()}
           {loadingBranches ? (
             <div style={{ color: "var(--text-secondary)" }}>Memuat cabang\u2026</div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
-              {branches.map((b) => (
-                <div
-                  key={b.id}
-                  onClick={() => pickBranch(b)}
-                  style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", fontWeight: 600, fontSize: 14.5, overflow: "hidden" }}
-                >
-                  <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
-                  {b.name}
-                  <div style={{ fontSize: 11.5, fontWeight: 400, color: "var(--text-faint)", marginTop: 4 }}>Mulai audit &rarr;</div>
-                </div>
-              ))}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 12 }}>
+              {branches.map((b) => {
+                const row = rowsByBranch[b.id];
+                const score = row ? calcWeightedFromRecord(row.data) : null;
+                return (
+                  <div
+                    key={b.id}
+                    onClick={() => pickBranch(b)}
+                    style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", overflow: "hidden" }}
+                  >
+                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: row ? scoreColor(score) : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14.5 }}>{b.name}</div>
+                      {score !== null && score < ALERT_THRESHOLD && (
+                        <span style={{ fontSize: 9.5, fontWeight: 700, color: "var(--danger-text)", background: "var(--danger-bg)", padding: "2px 7px", borderRadius: 20 }}>ALERT</span>
+                      )}
+                    </div>
+                    {row ? (
+                      <>
+                        <div style={{ fontSize: 24, fontWeight: 800, color: scoreColor(score) }}>{score}%</div>
+                        <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Skor SOP &middot; {periodeLabel(viewPeriod)}</div>
+                      </>
+                    ) : (
+                      <div style={{ fontSize: 11.5, fontWeight: 400, color: "var(--text-faint)", marginTop: 4 }}>Belum ada audit &middot; Mulai &rarr;</div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -269,6 +317,15 @@ export default function SopAuditCabang({ profile }) {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function SummaryCard({ label, value, color }) {
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 18px" }}>
+      <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: color || "var(--text-primary)" }}>{value}</div>
     </div>
   );
 }

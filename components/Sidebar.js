@@ -8,7 +8,6 @@ const MODULES = [
   { key: "timeline", label: "Timeline", ready: true },
   {
     key: "sop", label: "Audit SOP", ready: true, subs: [
-      { key: "dashboard", label: "Dashboard Audit" },
       { key: "cabang", label: "Audit Cabang" },
       { key: "ranking", label: "Ranking Cabang" },
       { key: "laporan", label: "Laporan Audit" },
@@ -16,7 +15,6 @@ const MODULES = [
   },
   {
     key: "stok", label: "Audit Stok", ready: true, subs: [
-      { key: "dashboard", label: "Dashboard" },
       { key: "service", label: "Service Ratio" },
       { key: "kesehatan", label: "Kesehatan Stok" },
       { key: "laporan", label: "Laporan Audit Stok" },

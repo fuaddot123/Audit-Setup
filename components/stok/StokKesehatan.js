@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import {
   skorRugi, calcSkorTemuan, calcSkorTotal, calcKesehatanPct, kesehatanStatusInfo, formatKesehatanPct,
-  periodFromDate, todayInputValue, periodeLabel,
+  periodFromDate, todayInputValue, periodeLabel, nowPeriode, addMonthsToPeriod,
 } from "../../lib/stokConfig";
 
 const EMPTY_FORM = { temuan_count: "", bonus_count: "", untung_rugi: "", tidak_visit: false };
@@ -10,6 +10,8 @@ const EMPTY_FORM = { temuan_count: "", bonus_count: "", untung_rugi: "", tidak_v
 export default function StokKesehatan({ profile }) {
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
+  const [allRecords, setAllRecords] = useState([]);
+  const [viewPeriod, setViewPeriod] = useState(nowPeriode());
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [existingRow, setExistingRow] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
@@ -25,6 +27,8 @@ export default function StokKesehatan({ profile }) {
     setLoadingBranches(true);
     const { data, error: err } = await supabase.from("branches").select("*").order("name");
     if (!err) setBranches(data || []);
+    const { data: recs, error: recErr } = await supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan");
+    if (!recErr) setAllRecords(recs || []);
     setLoadingBranches(false);
   }
 
@@ -33,7 +37,7 @@ export default function StokKesehatan({ profile }) {
     setSaved(false);
     setError(null);
     setLoadingRecord(true);
-    const period = periodFromDate(auditDate);
+    const period = viewPeriod;
     const { data, error: err } = await supabase
       .from("audit_generic")
       .select("*")
@@ -49,10 +53,11 @@ export default function StokKesehatan({ profile }) {
         untung_rugi: data.data?.untung_rugi ?? "",
         tidak_visit: !!data.data?.tidak_visit,
       });
-      if (data.data?.audit_date) setAuditDate(data.data.audit_date);
+      setAuditDate(data.data?.audit_date || (period === nowPeriode() ? todayInputValue() : period + "-01"));
     } else {
       setExistingRow(null);
       setForm(EMPTY_FORM);
+      setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
     }
     setLoadingRecord(false);
   }
@@ -60,6 +65,7 @@ export default function StokKesehatan({ profile }) {
   function backToList() {
     setSelectedBranch(null);
     setExistingRow(null);
+    loadBranches();
   }
 
   function setDigitField(key, val) {
@@ -69,7 +75,6 @@ export default function StokKesehatan({ profile }) {
   }
 
   function setRugiField(val) {
-    // izinkan minus di depan buat rugi
     const cleaned = val.replace(/[^\d-]/g, "").replace(/(?!^)-/g, "");
     setForm((f) => ({ ...f, untung_rugi: cleaned }));
     setSaved(false);
@@ -127,28 +132,70 @@ export default function StokKesehatan({ profile }) {
 
   // ── Tampilan: pilih cabang ──
   if (!selectedBranch) {
+    const rowsByBranch = {};
+    allRecords.filter((r) => r.period === viewPeriod).forEach((r) => {
+      if (!rowsByBranch[r.branch_id]) rowsByBranch[r.branch_id] = r;
+    });
+
     return (
       <div style={{ flex: 1 }}>
-        <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)" }}>
-          <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Kesehatan Stok</div>
-          <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Skor temuan barang & kerugian per cabang, per bulan</div>
+        <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
+          <div>
+            <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Kesehatan Stok</div>
+            <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Skor temuan barang & kerugian per cabang, per bulan</div>
+          </div>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px" }}>
+            <button className="btn-ghost" onClick={() => setViewPeriod(addMonthsToPeriod(viewPeriod, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
+            <div className="mono" style={{ fontWeight: 600, minWidth: 130, textAlign: "center", fontSize: 13.5 }}>{periodeLabel(viewPeriod)}</div>
+            <button className="btn-ghost" onClick={() => setViewPeriod(addMonthsToPeriod(viewPeriod, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
+          </div>
         </div>
         <div style={{ padding: 24 }}>
+          {(() => {
+            const rows = branches.map((b) => rowsByBranch[b.id]).filter((r) => r && !r.data.tidak_visit);
+            const auditedCount = rows.length;
+            const avgPct = auditedCount ? rows.reduce((s, r) => s + (r.data.kesehatan_pct || 0), 0) / auditedCount : null;
+            const alertCount = rows.filter((r) => kesehatanStatusInfo(r.data.kesehatan_pct || 0).lbl === "Perlu Perhatian").length;
+            return (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14, marginBottom: 20 }}>
+                <SummaryCard label="Cabang sudah diaudit" value={`${auditedCount} / ${branches.length}`} />
+                <SummaryCard label="Rata-rata Kesehatan" value={avgPct !== null ? formatKesehatanPct(avgPct) : "\u2014"} />
+                <SummaryCard label="Perlu Perhatian (alert)" value={alertCount} color={alertCount > 0 ? "var(--danger-text)" : "#1a9e6e"} />
+              </div>
+            );
+          })()}
           {loadingBranches ? (
             <div style={{ color: "var(--text-secondary)" }}>Memuat cabang\u2026</div>
           ) : (
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
-              {branches.map((b) => (
-                <div
-                  key={b.id}
-                  onClick={() => pickBranch(b)}
-                  style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", fontWeight: 600, fontSize: 14.5, overflow: "hidden" }}
-                >
-                  <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
-                  {b.name}
-                  <div style={{ fontSize: 11.5, fontWeight: 400, color: "var(--text-faint)", marginTop: 4 }}>Mulai audit &rarr;</div>
-                </div>
-              ))}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 12 }}>
+              {branches.map((b) => {
+                const row = rowsByBranch[b.id];
+                const tidakVisit = row?.data?.tidak_visit;
+                const pct = row && !tidakVisit ? row.data.kesehatan_pct || 0 : null;
+                const rStatus = pct !== null ? kesehatanStatusInfo(pct) : null;
+                return (
+                  <div
+                    key={b.id}
+                    onClick={() => pickBranch(b)}
+                    style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", overflow: "hidden" }}
+                  >
+                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: row ? (tidakVisit ? "#888" : rStatus.color) : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
+                    <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: row ? 8 : 4 }}>{b.name}</div>
+                    {row ? (
+                      tidakVisit ? (
+                        <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: "#88888822", color: "#888", fontSize: 11, fontWeight: 600 }}>Tidak Visit</span>
+                      ) : (
+                        <>
+                          <div style={{ fontSize: 22, fontWeight: 800, color: rStatus.color }}>{formatKesehatanPct(pct)}</div>
+                          <span style={{ display: "inline-block", marginTop: 6, padding: "3px 10px", borderRadius: 20, background: `${rStatus.color}22`, color: rStatus.color, fontSize: 11, fontWeight: 600 }}>{rStatus.lbl}</span>
+                        </>
+                      )
+                    ) : (
+                      <div style={{ fontSize: 11.5, fontWeight: 400, color: "var(--text-faint)" }}>Belum ada audit &middot; Mulai &rarr;</div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </div>
@@ -256,6 +303,15 @@ function MiniStat({ label, value }) {
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", textAlign: "center" }}>
       <div style={{ color: "var(--text-faint)", marginBottom: 2 }}>{label}</div>
       <div className="mono" style={{ fontWeight: 700, fontSize: 14 }}>{value}</div>
+    </div>
+  );
+}
+
+function SummaryCard({ label, value, color }) {
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 18px" }}>
+      <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: color || "var(--text-primary)" }}>{value}</div>
     </div>
   );
 }

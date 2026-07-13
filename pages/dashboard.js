@@ -43,9 +43,9 @@ export default function Dashboard() {
       ) : active === "timeline" ? (
         <Timeline />
       ) : active === "sop" ? (
-        <AuditSOP profile={profile} sub={activeSub || "dashboard"} />
+        <AuditSOP profile={profile} sub={activeSub || "cabang"} />
       ) : active === "stok" ? (
-        <AuditStok profile={profile} sub={activeSub || "dashboard"} />
+        <AuditStok profile={profile} sub={activeSub || "service"} />
       ) : active === "kpi" ? (
         <AuditKPI profile={profile} />
       ) : (

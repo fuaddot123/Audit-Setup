@@ -534,6 +534,20 @@ export default function AuditKeuangan({ profile }) {
       {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
 
       <div style={{ padding: "20px 28px" }}>
+        {(() => {
+          const stats = branches.map((b) => (entriesByBranch[b.id] || {})[viewPeriod]).map((e) => (e ? computeStatus(e, settings) : null));
+          const audited = stats.filter(Boolean);
+          const auditedCount = audited.length;
+          const avgPosisi = auditedCount ? audited.reduce((s, c) => s + c.posisi, 0) / auditedCount : null;
+          const alertCount = audited.filter((c) => c.tone === "bad").length;
+          return (
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14, marginBottom: 20 }}>
+              <SummaryCard label="Cabang sudah diaudit" value={`${auditedCount} / ${branches.length}`} />
+              <SummaryCard label="Rata-rata Posisi Kas" value={avgPosisi !== null ? pct(avgPosisi) : "\u2014"} />
+              <SummaryCard label="Perlu Pengecekan (alert)" value={alertCount} color={alertCount > 0 ? "var(--danger-text)" : "#1a9e6e"} />
+            </div>
+          );
+        })()}
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
           <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.4 }}>
             Pilih cabang untuk audit ({visibleBranches.length})
@@ -603,6 +617,15 @@ export default function AuditKeuangan({ profile }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function SummaryCard({ label, value, color }) {
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 18px" }}>
+      <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 }}>{label}</div>
+      <div style={{ fontSize: 24, fontWeight: 700, color: color || "var(--text-primary)" }}>{value}</div>
     </div>
   );
 }
