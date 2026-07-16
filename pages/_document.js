@@ -4,6 +4,7 @@ export default function Document() {
   return (
     <Html lang="id">
       <Head>
+        <title>KLA Radar</title>
         <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
       </Head>
       <body>
