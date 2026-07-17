@@ -1,9 +1,54 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
-  <circle cx="32" cy="32" r="28.5" fill="#3D1A63" stroke="#F4B740" stroke-width="5"/>
-  <path d="M27 18 L32 7 L37 18 Z" fill="#FFFFFF"/>
-  <rect x="26.5" y="18" width="11" height="24" rx="5.5" fill="#FFFFFF"/>
-  <path d="M26.5 36 L18 46 L26.5 43 Z" fill="#FFFFFF"/>
-  <path d="M37.5 36 L46 46 L37.5 43 Z" fill="#FFFFFF"/>
-  <circle cx="32" cy="25" r="3.2" fill="#3D1A63"/>
-  <path d="M28.5 41 L32 53 L35.5 41 Z" fill="#F4B740"/>
+  <defs>
+    <radialGradient id="bgGrad" cx="30%" cy="24%" r="75%">
+      <stop offset="0%" stop-color="#4b3a68"/>
+      <stop offset="72%" stop-color="#1c1730"/>
+    </radialGradient>
+    <radialGradient id="backdropGrad" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#4b3a68" stop-opacity="0.9"/>
+      <stop offset="100%" stop-color="#4b3a68" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="sweepGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#e0b04a" stop-opacity="0.75"/>
+      <stop offset="100%" stop-color="#e0b04a" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="blipGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#f2d99a"/>
+      <stop offset="100%" stop-color="#e0b04a"/>
+    </radialGradient>
+    <clipPath id="circleClip">
+      <circle cx="32" cy="32" r="24"/>
+    </clipPath>
+  </defs>
+
+  <!-- Badge squircle -->
+  <rect x="1.2" y="1.2" width="61.6" height="61.6" rx="14.6" fill="url(#bgGrad)"/>
+  <rect x="1.2" y="1.2" width="61.6" height="61.6" rx="14.6" fill="none" stroke="#e0b04a" stroke-width="1" opacity="0.5"/>
+
+  <!-- Ring accent (gold), batas lingkaran dalam -->
+  <circle cx="32" cy="32" r="24" fill="none" stroke="#e0b04a" stroke-width="1.1" opacity="0.55"/>
+
+  <!-- Lingkaran radar konsentris (ungu) -->
+  <circle cx="32" cy="32" r="17.5" fill="none" stroke="#a06be0" stroke-width="0.9" opacity="0.4"/>
+  <circle cx="32" cy="32" r="11" fill="none" stroke="#a06be0" stroke-width="0.9" opacity="0.35"/>
+  <circle cx="32" cy="32" r="5" fill="none" stroke="#a06be0" stroke-width="0.9" opacity="0.3"/>
+
+  <!-- Garis silang -->
+  <line x1="32" y1="8" x2="32" y2="56" stroke="#a06be0" stroke-width="0.6" opacity="0.2"/>
+  <line x1="8" y1="32" x2="56" y2="32" stroke="#a06be0" stroke-width="0.6" opacity="0.2"/>
+
+  <!-- Sapuan radar (statis) -->
+  <g clip-path="url(#circleClip)">
+    <path d="M32 32 L32 4 A28 28 0 0 1 51.8 12.2 Z" fill="url(#sweepGrad)"/>
+  </g>
+
+  <!-- Titik blip -->
+  <circle cx="38.2" cy="26.3" r="1.4" fill="url(#blipGlow)"/>
+  <circle cx="24.3" cy="40.6" r="1" fill="#e0b04a" opacity="0.9"/>
+
+  <!-- Backdrop lembut di belakang huruf -->
+  <circle cx="32" cy="32" r="11" fill="url(#backdropGrad)"/>
+
+  <!-- Huruf K -->
+  <text x="32" y="38.5" text-anchor="middle" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif" font-weight="800" font-size="13.7" fill="#f2d99a" letter-spacing="-0.3">K</text>
 </svg>

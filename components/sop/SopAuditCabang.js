@@ -21,6 +21,8 @@ export default function SopAuditCabang({ profile }) {
   const [existingRow, setExistingRow] = useState(null); // record audit_generic kalau sudah ada utk periode ini
   const [checklist, setChecklist] = useState(emptyChecklist());
   const [notes, setNotes] = useState({});
+  const [photos, setPhotos] = useState({}); // { catId_idx: url }
+  const [uploadingKey, setUploadingKey] = useState(null);
   const [openCats, setOpenCats] = useState({});
   const [auditDate, setAuditDate] = useState(todayInputValue());
   const [saving, setSaving] = useState(false);
@@ -56,11 +58,13 @@ export default function SopAuditCabang({ profile }) {
       setExistingRow(data);
       setChecklist({ ...emptyChecklist(), ...(data.data?.checks || {}) });
       setNotes(data.data?.notes || {});
+      setPhotos(data.data?.photos || {});
       setAuditDate(data.data?.audit_date || (period === nowPeriode() ? todayInputValue() : period + "-01"));
     } else {
       setExistingRow(null);
       setChecklist(emptyChecklist());
       setNotes({});
+      setPhotos({});
       setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
     }
     setLoadingRecord(false);
@@ -84,6 +88,36 @@ export default function SopAuditCabang({ profile }) {
 
   function setNote(id, val) {
     setNotes((prev) => ({ ...prev, [id]: val }));
+    setSaved(false);
+  }
+
+  async function uploadPhoto(key, file) {
+    if (!file || !selectedBranch) return;
+    if (!file.type.startsWith("image/")) { setError("File harus berupa gambar."); return; }
+    if (file.size > 5 * 1024 * 1024) { setError("Ukuran foto maksimal 5MB."); return; }
+    setUploadingKey(key);
+    setError(null);
+    try {
+      const ext = file.name.split(".").pop() || "jpg";
+      const path = `sop/${selectedBranch.id}/${viewPeriod}/${key}-${Date.now()}.${ext}`;
+      const { error: upErr } = await supabase.storage.from("findings").upload(path, file, { upsert: true });
+      if (upErr) throw upErr;
+      const { data: pub } = supabase.storage.from("findings").getPublicUrl(path);
+      setPhotos((prev) => ({ ...prev, [key]: pub.publicUrl }));
+      setSaved(false);
+    } catch (err) {
+      setError("Gagal upload foto: " + err.message);
+    } finally {
+      setUploadingKey(null);
+    }
+  }
+
+  function removePhoto(key) {
+    setPhotos((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
     setSaved(false);
   }
 
@@ -118,6 +152,7 @@ export default function SopAuditCabang({ profile }) {
           cats,
           checks: checklist,
           notes: cleanNotes,
+          photos,
           done: totalDone,
           score: weightedPct,
           auditor_name: profile?.full_name || null,
@@ -161,16 +196,76 @@ export default function SopAuditCabang({ profile }) {
         </div>
         <div style={{ padding: 24 }}>
           {(() => {
-            const scores = branches.map((b) => rowsByBranch[b.id]).filter(Boolean).map((r) => calcWeightedFromRecord(r.data));
-            const auditedCount = scores.length;
-            const avgScore = auditedCount ? Math.round(scores.reduce((s, v) => s + v, 0) / auditedCount) : null;
-            const alertCount = scores.filter((s) => s < ALERT_THRESHOLD).length;
+            const prevPeriod = addMonthsToPeriod(viewPeriod, -1);
+            const prevRowsByBranch = {};
+            allRecords.filter((r) => r.period === prevPeriod).forEach((r) => {
+              if (!prevRowsByBranch[r.branch_id]) prevRowsByBranch[r.branch_id] = r;
+            });
+
+            const total = branches.length;
+            const curList = branches.map((b) => {
+              const row = rowsByBranch[b.id];
+              return { branch: b, row, score: row ? calcWeightedFromRecord(row.data) : null };
+            }).filter((x) => x.row);
+            const prevList = branches.map((b) => {
+              const row = prevRowsByBranch[b.id];
+              return { branch: b, row, score: row ? calcWeightedFromRecord(row.data) : null };
+            }).filter((x) => x.row);
+
+            const auditedCount = curList.length;
+            const coverageTrend = total > 0 ? Math.round(((auditedCount - prevList.length) / total) * 100) : 0;
+            const belumCount = total - auditedCount;
+
+            const avgScore = auditedCount ? Math.round(curList.reduce((s, x) => s + x.score, 0) / auditedCount) : null;
+            const avgScorePrev = prevList.length ? Math.round(prevList.reduce((s, x) => s + x.score, 0) / prevList.length) : null;
+            const avgTrend = avgScore !== null && avgScorePrev !== null ? avgScore - avgScorePrev : null;
+
+            const alertCount = curList.filter((x) => x.score < ALERT_THRESHOLD).length;
+            const alertCountPrev = prevList.filter((x) => x.score < ALERT_THRESHOLD).length;
+            const alertTrend = alertCount - alertCountPrev;
+
+            const sortedBest = [...curList].sort((a, b) => b.score - a.score).slice(0, 3);
+            const sortedWorst = [...curList].sort((a, b) => a.score - b.score).slice(0, 3);
+
+            const findingCount = {};
+            curList.forEach((x) => {
+              const checks = x.row.data?.checks || {};
+              CATS.forEach((c) => {
+                c.items.forEach((text, i) => {
+                  const key = c.id + "_" + i;
+                  if (!checks[key]) findingCount[text] = (findingCount[text] || 0) + 1;
+                });
+              });
+            });
+            const topFindings = Object.entries(findingCount).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([text, count]) => ({ text, count }));
+
             return (
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14, marginBottom: 20 }}>
-                <SummaryCard label="Cabang sudah diaudit" value={`${auditedCount} / ${branches.length}`} />
-                <SummaryCard label="Rata-rata skor" value={avgScore !== null ? `${avgScore}%` : "\u2014"} />
-                <SummaryCard label={`Di bawah ${ALERT_THRESHOLD}% (alert)`} value={alertCount} color={alertCount > 0 ? "var(--danger-text)" : "#1a9e6e"} />
-              </div>
+              <>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 14, marginBottom: 20 }}>
+                  <KpiCard label="Cabang Diaudit" value={`${auditedCount} / ${total}`} trend={coverageTrend} trendGoodDirection="up" sub={periodeLabel(viewPeriod)} iconColor="#7c3aed" />
+                  <KpiCard label="Belum Diaudit" value={belumCount} trend={-coverageTrend} trendGoodDirection="down" sub="perlu follow up" iconColor="#b07212" />
+                  <KpiCard label="Rata-rata SOP" value={avgScore !== null ? `${avgScore}%` : "\u2014"} trend={avgTrend} trendGoodDirection="up" sub="periode aktif" iconColor="#2563eb" />
+                  <KpiCard label={`Di Bawah ${ALERT_THRESHOLD}%`} value={alertCount} trend={alertTrend} trendGoodDirection="down" sub={alertCount === 0 ? "aman" : "perlu perhatian"} iconColor="#a32020" flat={alertCount === 0} />
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16, marginBottom: 24 }}>
+                  <ListPanel title="Top 3 Cabang Terbaik" sub={periodeLabel(viewPeriod)}>
+                    {sortedBest.length === 0 ? <EmptyNote /> : sortedBest.map((x, i) => (
+                      <RankRow key={x.branch.id} rank={i + 1} label={x.branch.name} value={`${x.score}%`} valueColor="#1a9e6e" />
+                    ))}
+                  </ListPanel>
+                  <ListPanel title="Top 3 Cabang Terburuk" sub={periodeLabel(viewPeriod)}>
+                    {sortedWorst.length === 0 ? <EmptyNote /> : sortedWorst.map((x, i) => (
+                      <RankRow key={x.branch.id} rank={i + 1} label={x.branch.name} value={`${x.score}%`} valueColor={scoreColor(x.score)} />
+                    ))}
+                  </ListPanel>
+                  <ListPanel title="Top 5 Temuan Terbanyak" sub="Normalisasi nama temuan">
+                    {topFindings.length === 0 ? <EmptyNote text="Belum ada temuan periode ini." /> : topFindings.map((f, i) => (
+                      <RankRow key={i} rank={i + 1} label={f.text} truncate value={`${f.count} Temuan`} valueColor="var(--danger-text)" />
+                    ))}
+                  </ListPanel>
+                </div>
+              </>
             );
           })()}
           {loadingBranches ? (
@@ -258,7 +353,7 @@ export default function SopAuditCabang({ profile }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {CATS.map((c) => {
               const done = catScore(c.id);
-              const isOpen = openCats[c.id] ?? true;
+              const isOpen = openCats[c.id] ?? false;
               const w = TIER_WEIGHTS[c.id];
               const tierTag = TIER3_CATS.includes(c.id) ? "T3" : TIER1_CATS.includes(c.id) ? "T1" : "T2";
               return (
@@ -297,14 +392,39 @@ export default function SopAuditCabang({ profile }) {
                               <div style={{ fontSize: 13, color: checked ? "var(--text-faint)" : "var(--text-primary)", textDecoration: checked ? "line-through" : "none" }}>{txt}</div>
                             </div>
                             {!checked && (
-                              <textarea
-                                className="input"
-                                placeholder="Tulis keterangan kondisi yang tidak sesuai..."
-                                rows={2}
-                                value={notes[id] || ""}
-                                onChange={(e) => setNote(id, e.target.value)}
-                                style={{ marginTop: 8, marginLeft: 28, width: "calc(100% - 28px)", fontSize: 12.5, resize: "vertical" }}
-                              />
+                              <>
+                                <textarea
+                                  className="input"
+                                  placeholder="Tulis keterangan kondisi yang tidak sesuai..."
+                                  rows={2}
+                                  value={notes[id] || ""}
+                                  onChange={(e) => setNote(id, e.target.value)}
+                                  style={{ marginTop: 8, marginLeft: 28, width: "calc(100% - 28px)", fontSize: 12.5, resize: "vertical" }}
+                                />
+                                <div style={{ marginTop: 8, marginLeft: 28 }}>
+                                  {photos[id] ? (
+                                    <div style={{ position: "relative", display: "inline-block" }}>
+                                      <img src={photos[id]} alt="Bukti foto" style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)" }} />
+                                      <span
+                                        onClick={() => removePhoto(id)}
+                                        style={{ position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: "50%", background: "var(--danger-text)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, cursor: "pointer" }}
+                                      >&times;</span>
+                                    </div>
+                                  ) : (
+                                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--text-faint)", border: "1px dashed var(--border)", borderRadius: 8, padding: "8px 12px", cursor: "pointer" }}>
+                                      {uploadingKey === id ? (
+                                        "Mengunggah\u2026"
+                                      ) : (
+                                        <>
+                                          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" /></svg>
+                                          Tambah foto bukti
+                                        </>
+                                      )}
+                                      <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} disabled={uploadingKey === id} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPhoto(id, f); e.target.value = ""; }} />
+                                    </label>
+                                  )}
+                                </div>
+                              </>
                             )}
                           </div>
                         );
@@ -321,11 +441,48 @@ export default function SopAuditCabang({ profile }) {
   );
 }
 
-function SummaryCard({ label, value, color }) {
+function KpiCard({ label, value, trend, trendGoodDirection, sub, iconColor, flat }) {
+  const isGood = flat ? true : trendGoodDirection === "up" ? trend >= 0 : trend <= 0;
+  const trendColor = flat ? "var(--text-faint)" : isGood ? "#1a9e6e" : "var(--danger-text)";
+  const arrow = trend > 0 ? "\u25B2" : trend < 0 ? "\u25BC" : "\u2013";
   return (
-    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 18px" }}>
-      <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 }}>{label}</div>
-      <div style={{ fontSize: 24, fontWeight: 700, color: color || "var(--text-primary)" }}>{value}</div>
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", position: "relative", overflow: "hidden" }}>
+      <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: iconColor }} />
+      <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>{label}</div>
+      <div style={{ fontSize: 28, fontWeight: 800, color: "var(--text-primary)", marginBottom: 8 }}>{value}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        {!flat && trend !== null && trend !== undefined && (
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: trendColor, background: `${trendColor}22`, padding: "2px 8px", borderRadius: 20 }}>
+            {arrow} {Math.abs(trend)}%
+          </span>
+        )}
+        {flat && <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", background: "var(--surface-alt)", padding: "2px 8px", borderRadius: 20 }}>&mdash;</span>}
+        <span style={{ fontSize: 11.5, color: "var(--text-faint)" }}>{sub}</span>
+      </div>
     </div>
   );
+}
+
+function ListPanel({ title, sub, children }) {
+  return (
+    <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20 }}>
+      <div style={{ fontWeight: 700, fontSize: 14.5 }}>{title}</div>
+      <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginBottom: 14 }}>{sub}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{children}</div>
+    </div>
+  );
+}
+
+function RankRow({ rank, label, value, valueColor, truncate }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+      <div style={{ width: 24, height: 24, borderRadius: "50%", background: "var(--surface-alt)", color: "#7c3aed", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11.5, fontWeight: 700, flexShrink: 0 }}>{rank}</div>
+      <div style={{ flex: 1, fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: truncate ? "nowrap" : "normal" }} title={label}>{label}</div>
+      <div style={{ fontSize: 12.5, fontWeight: 700, color: valueColor, flexShrink: 0 }}>{value}</div>
+    </div>
+  );
+}
+
+function EmptyNote({ text = "Belum ada data periode ini." }) {
+  return <div style={{ fontSize: 12.5, color: "var(--text-faint)", padding: "8px 0" }}>{text}</div>;
 }

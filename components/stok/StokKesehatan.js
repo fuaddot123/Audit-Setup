@@ -20,6 +20,9 @@ export default function StokKesehatan({ profile }) {
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState(false);
   const [loadingRecord, setLoadingRecord] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncResult, setSyncResult] = useState(null);
+  const isSuperAdmin = profile?.role === "super_admin";
 
   useEffect(() => { loadBranches(); }, []);
 
@@ -30,6 +33,27 @@ export default function StokKesehatan({ profile }) {
     const { data: recs, error: recErr } = await supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan");
     if (!recErr) setAllRecords(recs || []);
     setLoadingBranches(false);
+  }
+
+  async function handleSync() {
+    setSyncing(true);
+    setSyncResult(null);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const res = await fetch("/api/sync-kesehatan-stok", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ period: viewPeriod, accessToken: session?.access_token, userId: profile?.id }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Sync gagal.");
+      setSyncResult(json);
+      await loadBranches();
+    } catch (err) {
+      setSyncResult({ error: err.message });
+    } finally {
+      setSyncing(false);
+    }
   }
 
   async function pickBranch(b) {
@@ -144,12 +168,28 @@ export default function StokKesehatan({ profile }) {
             <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Kesehatan Stok</div>
             <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Skor temuan barang & kerugian per cabang, per bulan</div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px" }}>
-            <button className="btn-ghost" onClick={() => setViewPeriod(addMonthsToPeriod(viewPeriod, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
-            <div className="mono" style={{ fontWeight: 600, minWidth: 130, textAlign: "center", fontSize: 13.5 }}>{periodeLabel(viewPeriod)}</div>
-            <button className="btn-ghost" onClick={() => setViewPeriod(addMonthsToPeriod(viewPeriod, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px" }}>
+              <button className="btn-ghost" onClick={() => setViewPeriod(addMonthsToPeriod(viewPeriod, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
+              <div className="mono" style={{ fontWeight: 600, minWidth: 130, textAlign: "center", fontSize: 13.5 }}>{periodeLabel(viewPeriod)}</div>
+              <button className="btn-ghost" onClick={() => setViewPeriod(addMonthsToPeriod(viewPeriod, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
+            </div>
+            {isSuperAdmin && (
+              <button className="btn" disabled={syncing} onClick={handleSync}>{syncing ? "Sync\u2026" : "Sync dari Google Sheet"}</button>
+            )}
           </div>
         </div>
+        {syncResult && (
+          <div style={{ margin: "14px 28px 0", background: syncResult.error ? "var(--danger-bg)" : "var(--success-bg)", border: `1px solid ${syncResult.error ? "rgba(248,113,113,0.35)" : "rgba(26,158,110,0.35)"}`, color: syncResult.error ? "var(--danger-text)" : "var(--success-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>
+            {syncResult.error ? `Gagal sync: ${syncResult.error}` : `Sync selesai: ${syncResult.totalSynced} data tersimpan, ${syncResult.totalSkipped} dilewati.`}
+            {syncResult.logs?.length > 0 && (
+              <details style={{ marginTop: 6 }}>
+                <summary style={{ cursor: "pointer" }}>Lihat detail ({syncResult.logs.length})</summary>
+                <ul style={{ margin: "6px 0 0", paddingLeft: 18 }}>{syncResult.logs.map((l, i) => <li key={i}>{l}</li>)}</ul>
+              </details>
+            )}
+          </div>
+        )}
         <div style={{ padding: 24 }}>
           {(() => {
             const rows = branches.map((b) => rowsByBranch[b.id]).filter((r) => r && !r.data.tidak_visit);

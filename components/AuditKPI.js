@@ -151,6 +151,110 @@ export default function AuditKPI({ profile }) {
     }
   }
 
+  function exportAuditorPDF() {
+    if (!selectedAuditor) return;
+    setError(null);
+    const now = new Date();
+    const printedAtLabel = now.toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }) + ", " + now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+
+    if (!history.length) { setError("Belum ada data KPI untuk auditor ini."); return; }
+
+    const rowsCalc = history.map((row) => {
+      const c = calcKPI({
+        coverage: row.realisasi_coverage, kepatuhan_sop: row.realisasi_kepatuhan_sop,
+        temuan_berulang: row.realisasi_temuan_berulang, temuan_audit: row.realisasi_temuan_audit,
+        ketepatan_laporan: row.realisasi_ketepatan_laporan,
+      });
+      return { row, calc: c, info: totalKpiInfo(c.total) };
+    });
+
+    const grouped = { Tercapai: 0, "Mendekati Target": 0, "Di Bawah Target": 0 };
+    rowsCalc.forEach((r) => { grouped[r.info.lbl] = (grouped[r.info.lbl] || 0) + 1; });
+    const colorMap = { Tercapai: "#1a9e6e", "Mendekati Target": "#b07212", "Di Bawah Target": "#a32020" };
+
+    const tableRows = rowsCalc.map((r) => ({
+      cells: [
+        periodeLabel(r.row.period),
+        fmtPct(r.calc.results.coverage.hasil), fmtPct(r.calc.results.kepatuhan_sop.hasil), fmtPct(r.calc.results.temuan_berulang.hasil),
+        fmtPct(r.calc.results.temuan_audit.hasil), fmtPct(r.calc.results.ketepatan_laporan.hasil), fmtPct(r.calc.total),
+      ],
+      badge: { label: r.info.lbl, color: colorMap[r.info.lbl] },
+    }));
+
+    const best = rowsCalc.reduce((a, b) => (!a || b.calc.total > a.calc.total ? b : a), null);
+    const worst = rowsCalc.reduce((a, b) => (!a || b.calc.total < a.calc.total ? b : a), null);
+    const avgTotal = rowsCalc.reduce((s, r) => s + r.calc.total, 0) / rowsCalc.length;
+
+    const donutSegments = Object.entries(grouped).filter(([, c]) => c > 0).map(([label, count]) => ({ label, count, pct: Math.round((count / rowsCalc.length) * 100), color: colorMap[label] }));
+
+    const html = buildSummaryReportHtml({
+      reportTitle: "LAPORAN KPI AUDIT INTERNAL",
+      scopeLabel: (selectedAuditor.full_name || "\u2026").toUpperCase(),
+      periodLabel: `${rowsCalc.length} periode terakhir`,
+      printedAtLabel,
+      summaryCards: [
+        { icon: "building", label: "TOTAL PERIODE", value: String(rowsCalc.length), sub: "Bulan", color: "#2A1F52" },
+        { icon: "shieldCheck", label: "TERCAPAI", value: String(grouped.Tercapai), sub: "Bulan", color: "#1a9e6e" },
+        { icon: "alertCircle", label: "MENDEKATI TARGET", value: String(grouped["Mendekati Target"]), sub: "Bulan", color: "#b07212" },
+        { icon: "alertTriangle", label: "DI BAWAH TARGET", value: String(grouped["Di Bawah Target"]), sub: "Bulan", color: "#a32020" },
+      ],
+      tableHeaders: ["Periode", "Coverage", "Kepatuhan SOP", "Temuan Berulang", "Temuan Audit", "Ketepatan Laporan", "Total KPI"],
+      tableRows,
+      donutSegments,
+      donutCenterLines: [String(rowsCalc.length), "Periode"],
+      legendItems: [
+        { icon: "shieldCheck", color: "#1a9e6e", title: "TERCAPAI", desc: "Total KPI \u2265 100%" },
+        { icon: "alertCircle", color: "#b07212", title: "MENDEKATI TARGET", desc: "Total KPI 80% s.d. 99%" },
+        { icon: "alertTriangle", color: "#a32020", title: "DI BAWAH TARGET", desc: "Total KPI < 80%" },
+      ],
+      summaryList: [
+        { icon: "shieldCheck", label: "Rata-rata Total KPI", value: fmtPct(avgTotal) },
+        { icon: "arrowUp", label: "Bulan Terbaik", value: best ? `${periodeLabel(best.row.period)} (${fmtPct(best.calc.total)})` : "\u2014" },
+        { icon: "arrowDown", label: "Bulan Terendah", value: worst ? `${periodeLabel(worst.row.period)} (${fmtPct(worst.calc.total)})` : "\u2014", strong: true },
+      ],
+      notes: [
+        `Laporan ini merupakan riwayat KPI individu atas nama ${selectedAuditor.full_name || "\u2026"}.`,
+        "Total KPI dihitung dari penjumlahan Hasil (Bobot \u00d7 pencapaian) kelima indikator tiap bulan.",
+      ],
+      pageLabel: "Halaman 1 dari 1",
+    });
+    const opened = openPrintWindow(`Laporan KPI - ${selectedAuditor.full_name || ""}`, html);
+    if (!opened) setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF.");
+  }
+
+  async function exportAuditorExcel() {
+    if (!selectedAuditor) return;
+    setExportBusy(true);
+    setError(null);
+    try {
+      const XLSX = await import("xlsx");
+      if (!history.length) { setError("Belum ada data KPI untuk auditor ini."); setExportBusy(false); return; }
+      const rows = history.map((row) => {
+        const c = calcKPI({
+          coverage: row.realisasi_coverage, kepatuhan_sop: row.realisasi_kepatuhan_sop,
+          temuan_berulang: row.realisasi_temuan_berulang, temuan_audit: row.realisasi_temuan_audit,
+          ketepatan_laporan: row.realisasi_ketepatan_laporan,
+        });
+        const info = totalKpiInfo(c.total);
+        const out = { Auditor: selectedAuditor.full_name || "\u2026", Periode: periodeLabel(row.period) };
+        KPI_ITEMS.forEach((item) => {
+          out[item.label + " (Realisasi)"] = c.results[item.key].real;
+          out[item.label + " (Hasil)"] = fmtPct(c.results[item.key].hasil);
+        });
+        out["Total KPI"] = fmtPct(c.total);
+        out["Status"] = info.lbl;
+        return out;
+      });
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Riwayat KPI");
+      XLSX.writeFile(wb, `KPI_${(selectedAuditor.full_name || "auditor").replace(/\s+/g, "_")}.xlsx`);
+    } catch (err) {
+      setError("Gagal export Excel: " + err.message);
+    } finally {
+      setExportBusy(false);
+    }
+  }
+
   async function loadAuditors() {
     setLoadingAuditors(true);
     const { data, error: err } = await supabase.from("profiles").select("*").order("full_name");
@@ -353,8 +457,14 @@ export default function AuditKPI({ profile }) {
               </div>
             )}
 
-            <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 12 }}>
-              Riwayat Total KPI &mdash; {selectedAuditor.full_name}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12, flexWrap: "wrap", gap: 8 }}>
+              <div style={{ fontSize: 12.5, fontWeight: 600, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.4 }}>
+                Riwayat Total KPI &mdash; {selectedAuditor.full_name}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn-ghost" onClick={exportAuditorPDF}>Cetak PDF ({selectedAuditor.full_name})</button>
+                <button className="btn-ghost" disabled={exportBusy} onClick={exportAuditorExcel}>{exportBusy ? "..." : "Download Excel"}</button>
+              </div>
             </div>
             {history.length === 0 ? (
               <div style={{ fontSize: 13, color: "var(--text-faint)" }}>Belum ada data tersimpan.</div>

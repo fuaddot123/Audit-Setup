@@ -2,10 +2,10 @@ import { useState } from "react";
 import { useRouter } from "next/router";
 import { supabase } from "../lib/supabaseClient";
 import { useTheme } from "../lib/ThemeContext";
+import RadarLogo from "./RadarLogo";
 
 const MODULES = [
   { key: "keuangan", label: "Audit Keuangan", ready: true },
-  { key: "timeline", label: "Timeline", ready: true },
   {
     key: "sop", label: "Audit SOP", ready: true, subs: [
       { key: "cabang", label: "Audit Cabang" },
@@ -20,7 +20,17 @@ const MODULES = [
       { key: "laporan", label: "Laporan Audit Stok" },
     ],
   },
+  {
+    key: "pengajuan", label: "Form Pengajuan", ready: false, subs: [
+      { key: "adjust", label: "Barang Adjust" },
+      { key: "inventaris", label: "Barang Inventaris" },
+      { key: "hadiah", label: "Barang Hadiah Undian" },
+    ],
+  },
   { key: "kpi", label: "KPI", ready: true },
+  { key: "laporan_bulanan", label: "Laporan Bulanan", ready: false },
+  { key: "laporan_tahunan", label: "Laporan Tahunan", ready: false },
+  { key: "timeline", label: "Timeline", ready: true },
 ];
 
 function ChevronIcon({ open }) {
@@ -62,16 +72,8 @@ export default function Sidebar({ active, activeSub, onSelect, profile }) {
   return (
     <div style={{ width: 240, flexShrink: 0, background: "var(--sidebar-bg)", height: "100vh", position: "sticky", top: 0, alignSelf: "flex-start", padding: "22px 14px", display: "flex", flexDirection: "column", borderRight: "1px solid var(--border)", overflowY: "auto" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "0 10px 18px", marginBottom: 12, borderBottom: "1px solid var(--sidebar-border)" }}>
-        <svg width="36" height="36" viewBox="0 0 64 64" style={{ flexShrink: 0 }}>
-          <circle cx="32" cy="32" r="28.5" fill="#2A1F52" stroke="#F4B740" strokeWidth="5" />
-          <path d="M27 18 L32 7 L37 18 Z" fill="#FFFFFF" />
-          <rect x="26.5" y="18" width="11" height="24" rx="5.5" fill="#FFFFFF" />
-          <path d="M26.5 36 L18 46 L26.5 43 Z" fill="#FFFFFF" />
-          <path d="M37.5 36 L46 46 L37.5 43 Z" fill="#FFFFFF" />
-          <circle cx="32" cy="25" r="3.2" fill="#2A1F52" />
-          <path d="M28.5 41 L32 53 L35.5 41 Z" fill="#F4B740" />
-        </svg>
-        <div className="display" style={{ color: "var(--sidebar-text)", fontSize: 18, fontWeight: 600 }}>KLA Audit</div>
+        <RadarLogo size={36} />
+        <div className="display" style={{ color: "var(--sidebar-text)", fontSize: 18, fontWeight: 600 }}>KLA Radar</div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, overflowY: "auto" }}>
         {MODULES.map((m) => {

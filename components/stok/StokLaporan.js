@@ -5,6 +5,7 @@ import {
   nowPeriode, periodeLabel,
 } from "../../lib/stokConfig";
 import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
+import BranchMultiSelect from "../BranchMultiSelect";
 
 export default function StokLaporan() {
   const [branches, setBranches] = useState([]);
@@ -16,6 +17,8 @@ export default function StokLaporan() {
 
   const [servicePeriod, setServicePeriod] = useState(nowPeriode());
   const [kesehatanPeriod, setKesehatanPeriod] = useState(nowPeriode());
+  const [serviceBranchIds, setServiceBranchIds] = useState([]);
+  const [kesehatanBranchIds, setKesehatanBranchIds] = useState([]);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -30,6 +33,8 @@ export default function StokLaporan() {
       ]);
       if (brRes.error) throw brRes.error;
       setBranches(brRes.data || []);
+      setServiceBranchIds((brRes.data || []).map((b) => b.id));
+      setKesehatanBranchIds((brRes.data || []).map((b) => b.id));
       setServiceRecords(svcRes.data || []);
       setKesehatanRecords(kshRes.data || []);
     } catch (err) {
@@ -64,8 +69,11 @@ export default function StokLaporan() {
     setError(null);
     const now = new Date();
     const printedAtLabel = now.toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }) + ", " + now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+    const scopeBranches = branches.filter((b) => serviceBranchIds.includes(b.id));
+    if (!scopeBranches.length) { setError("Pilih minimal 1 cabang dulu."); return; }
+    const scopeLabel = serviceBranchIds.length === branches.length ? "SEMUA CABANG" : scopeBranches.map((b) => b.name).join(", ").toUpperCase();
 
-    const rows = branches.map((b) => {
+    const rows = scopeBranches.map((b) => {
       const rec = latestFor(serviceRecords, b.id, servicePeriod);
       if (!rec) return { branch: b, rec: null };
       const status = serviceStatusInfo(rec.data.ratio || 0);
@@ -77,9 +85,9 @@ export default function StokLaporan() {
     const grouped = { Terkendali: 0, Monitoring: 0, "Perlu Perhatian": 0 };
     audited.forEach((r) => { grouped[r.status.lbl] = (grouped[r.status.lbl] || 0) + 1; });
     const colorMap = { Terkendali: "#1a9e6e", Monitoring: "#b07212", "Perlu Perhatian": "#a32020" };
-    const total = branches.length;
+    const total = scopeBranches.length;
 
-    const tableRows = branches.map((b, i) => {
+    const tableRows = scopeBranches.map((b, i) => {
       const row = rows.find((r) => r.branch.id === b.id);
       if (!row.rec) return { cells: [String(i + 1), b.name, null, null, null, null, null, null], badge: null };
       const d = row.rec.data;
@@ -100,7 +108,7 @@ export default function StokLaporan() {
 
     const html = buildSummaryReportHtml({
       reportTitle: "LAPORAN SERVICE RATIO",
-      scopeLabel: "SEMUA CABANG",
+      scopeLabel,
       periodLabel: periodeLabel(servicePeriod),
       printedAtLabel,
       summaryCards: [
@@ -167,8 +175,11 @@ export default function StokLaporan() {
     setError(null);
     const now = new Date();
     const printedAtLabel = now.toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }) + ", " + now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+    const scopeBranches = branches.filter((b) => kesehatanBranchIds.includes(b.id));
+    if (!scopeBranches.length) { setError("Pilih minimal 1 cabang dulu."); return; }
+    const scopeLabel = kesehatanBranchIds.length === branches.length ? "SEMUA CABANG" : scopeBranches.map((b) => b.name).join(", ").toUpperCase();
 
-    const rows = branches.map((b) => {
+    const rows = scopeBranches.map((b) => {
       const rec = latestFor(kesehatanRecords, b.id, kesehatanPeriod);
       if (!rec) return { branch: b, rec: null };
       if (rec.data.tidak_visit) return { branch: b, rec, tidakVisit: true };
@@ -181,9 +192,9 @@ export default function StokLaporan() {
     const grouped = { Terkendali: 0, Waspada: 0, Monitoring: 0, "Perlu Perhatian": 0 };
     audited.forEach((r) => { grouped[r.status.lbl] = (grouped[r.status.lbl] || 0) + 1; });
     const colorMap = { Terkendali: "#1a9e6e", Waspada: "#2f9e9e", Monitoring: "#b07212", "Perlu Perhatian": "#a32020" };
-    const total = branches.length;
+    const total = scopeBranches.length;
 
-    const tableRows = branches.map((b, i) => {
+    const tableRows = scopeBranches.map((b, i) => {
       const row = rows.find((r) => r.branch.id === b.id);
       if (!row.rec) return { cells: [String(i + 1), b.name, null, null, null, null, null], badge: null };
       if (row.tidakVisit) return { cells: [String(i + 1), b.name, "Tidak Visit", "\u2014", "\u2014", "\u2014", "\u2014"], badge: { label: "Tidak Visit", color: "#888" } };
@@ -205,7 +216,7 @@ export default function StokLaporan() {
 
     const html = buildSummaryReportHtml({
       reportTitle: "LAPORAN KESEHATAN STOK",
-      scopeLabel: "SEMUA CABANG",
+      scopeLabel,
       periodLabel: periodeLabel(kesehatanPeriod),
       printedAtLabel,
       summaryCards: [
@@ -287,6 +298,9 @@ export default function StokLaporan() {
               {servicePeriodOptions.map((p) => <option key={p} value={p}>{periodeLabel(p)}</option>)}
             </select>
           </Row>
+          <Row label="Cabang">
+            <BranchMultiSelect branches={branches} selectedIds={serviceBranchIds} onChange={setServiceBranchIds} />
+          </Row>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn" onClick={exportServicePDF}>Cetak PDF Ringkasan</button>
             <button className="btn-ghost" disabled={busy} onClick={exportServiceExcel}>{busy ? "Memproses\u2026" : "Download Excel"}</button>
@@ -298,6 +312,9 @@ export default function StokLaporan() {
             <select className="input" value={kesehatanPeriod} onChange={(e) => setKesehatanPeriod(e.target.value)}>
               {kesehatanPeriodOptions.map((p) => <option key={p} value={p}>{periodeLabel(p)}</option>)}
             </select>
+          </Row>
+          <Row label="Cabang">
+            <BranchMultiSelect branches={branches} selectedIds={kesehatanBranchIds} onChange={setKesehatanBranchIds} />
           </Row>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn" onClick={exportKesehatanPDF}>Cetak PDF Ringkasan</button>

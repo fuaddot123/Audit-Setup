@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { buildSummaryReportHtml, openPrintWindow } from "../lib/pdfReportTemplate";
+import BranchMultiSelect from "./BranchMultiSelect";
 
 const INDO_MONTHS = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
 function monthLabel(period) {
@@ -108,6 +109,7 @@ export default function AuditKeuangan({ profile }) {
   const [viewPeriod, setViewPeriod] = useState(todayMonth());
   const [showExportAll, setShowExportAll] = useState(false);
   const [exportAllPeriod, setExportAllPeriod] = useState(null);
+  const [exportBranchIds, setExportBranchIds] = useState([]);
 
   const canEdit = profile.role === "auditor" || profile.role === "super_admin";
 
@@ -280,12 +282,15 @@ export default function AuditKeuangan({ profile }) {
   function exportAllReport() {
     const period = exportAllPeriod;
     if (!period) { alert("Pilih bulan dulu."); return; }
+    const exportBranches = (exportBranchIds.length === 0 || exportBranchIds.length === branches.length)
+      ? branches
+      : branches.filter((b) => exportBranchIds.includes(b.id));
 
     const colorMap = { good: "#1a9e6e", warn: "#b07212", bad: "#a32020", none: "#888" };
     let totalSb = 0, totalSm = 0, totalLim = 0, totalPk = 0, totalSisa = 0, countFilled = 0;
     const groupCount = { good: 0, warn: 0, bad: 0 };
 
-    const tableRows = branches.map((b, i) => {
+    const tableRows = exportBranches.map((b, i) => {
       const e = (entriesByBranch[b.id] || {})[period];
       if (!e) return { cells: [String(i + 1), b.name, null, null, null, null, null, null, null], badge: null };
       const c = computeStatus(e, settings);
@@ -306,7 +311,8 @@ export default function AuditKeuangan({ profile }) {
       };
     });
 
-    const total = branches.length;
+    const total = exportBranches.length;
+    const scopeLabel = exportBranches.length === branches.length ? "SEMUA CABANG" : exportBranches.map((b) => b.name).join(", ").toUpperCase();
     const donutSegments = [
       { label: "Terkendali / Efisien", count: groupCount.good, pct: countFilled ? Math.round((groupCount.good / countFilled) * 100) : 0, color: colorMap.good },
       { label: "Monitoring", count: groupCount.warn, pct: countFilled ? Math.round((groupCount.warn / countFilled) * 100) : 0, color: colorMap.warn },
@@ -315,7 +321,7 @@ export default function AuditKeuangan({ profile }) {
 
     const html = buildSummaryReportHtml({
       reportTitle: "LAPORAN AUDIT KAS KECIL",
-      scopeLabel: "SEMUA CABANG",
+      scopeLabel,
       periodLabel: monthLabel(period),
       printedAtLabel: new Date().toLocaleString("id-ID"),
       summaryCards: [
@@ -526,7 +532,7 @@ export default function AuditKeuangan({ profile }) {
           <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Audit Keuangan</div>
           <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Pemantauan penggunaan kas kecil per cabang, per bulan</div>
         </div>
-        <button className="btn" onClick={() => { setExportAllPeriod(allPeriods()[0] || null); setShowExportAll(true); }}>
+        <button className="btn" onClick={() => { setExportAllPeriod(allPeriods()[0] || null); setExportBranchIds(branches.map((b) => b.id)); setShowExportAll(true); }}>
           Export Semua Cabang (PDF)
         </button>
       </div>
@@ -598,9 +604,9 @@ export default function AuditKeuangan({ profile }) {
 
       {showExportAll && (
         <div style={{ position: "fixed", inset: 0, background: "var(--overlay)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setShowExportAll(false)}>
-          <div style={{ background: "var(--surface)", borderRadius: 14, padding: 24, width: 360, maxWidth: "90%" }} onClick={(e) => e.stopPropagation()}>
-            <div className="display" style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>Export laporan semua cabang</div>
-            <div style={{ marginBottom: 20 }}>
+          <div style={{ background: "var(--surface)", borderRadius: 14, padding: 24, width: 400, maxWidth: "92%" }} onClick={(e) => e.stopPropagation()}>
+            <div className="display" style={{ fontSize: 18, fontWeight: 600, marginBottom: 16 }}>Export laporan cabang</div>
+            <div style={{ marginBottom: 16 }}>
               <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Bulan</label>
               {allPeriods().length ? (
                 <select className="input" value={exportAllPeriod || ""} onChange={(e) => setExportAllPeriod(e.target.value)}>
@@ -609,6 +615,10 @@ export default function AuditKeuangan({ profile }) {
               ) : (
                 <div style={{ fontSize: 13, color: "var(--text-faint)" }}>Belum ada data tersimpan di cabang manapun.</div>
               )}
+            </div>
+            <div style={{ marginBottom: 20 }}>
+              <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Cabang</label>
+              <BranchMultiSelect branches={branches} selectedIds={exportBranchIds} onChange={setExportBranchIds} />
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
               <button className="btn-ghost" onClick={() => setShowExportAll(false)}>Batal</button>

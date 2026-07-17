@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import { supabase } from "../lib/supabaseClient";
 import Sidebar from "../components/Sidebar";
+import RadarLogo from "../components/RadarLogo";
 import AuditKeuangan from "../components/AuditKeuangan";
 import Timeline from "../components/Timeline";
 import AuditSOP from "../components/AuditSOP";
@@ -32,7 +33,12 @@ export default function Dashboard() {
   }, [router]);
 
   if (loading || !profile) {
-    return <div style={{ minHeight: "100vh", background: "var(--bg-page)", display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-secondary)" }}>Memuat\u2026</div>;
+    return (
+      <div style={{ minHeight: "100vh", background: "var(--bg-page)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, color: "var(--text-secondary)" }}>
+        <RadarLogo size={64} />
+        <div>Memuat\u2026</div>
+      </div>
+    );
   }
 
   return (

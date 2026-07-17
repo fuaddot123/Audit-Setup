@@ -5,6 +5,7 @@ import {
   scoreInfo, formatRupiah, nowPeriode, periodeLabel,
 } from "../../lib/sopConfig";
 import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
+import BranchMultiSelect from "../BranchMultiSelect";
 
 export default function SopLaporan() {
   const [branches, setBranches] = useState([]);
@@ -17,7 +18,7 @@ export default function SopLaporan() {
 
   const [excelPeriod, setExcelPeriod] = useState(nowPeriode());
   const [pdfPeriod, setPdfPeriod] = useState(nowPeriode());
-  const [pdfBranch, setPdfBranch] = useState("AUDITED_ONLY");
+  const [pdfBranchIds, setPdfBranchIds] = useState([]);
 
   useEffect(() => { loadAll(); }, []);
 
@@ -34,6 +35,7 @@ export default function SopLaporan() {
       if (brRes.error) throw brRes.error;
       if (sopRes.error) throw sopRes.error;
       setBranches(brRes.data || []);
+      setPdfBranchIds((brRes.data || []).map((b) => b.id));
       setSopRecords(sopRes.data || []);
       setRankingRows(rankRes.data || []);
       setTargetRows(tgtRes.data || []);
@@ -171,9 +173,7 @@ export default function SopLaporan() {
   // ── PDF: buka jendela cetak berisi ringkasan eksekutif + lampiran checklist ──
   function exportPDF() {
     setError(null);
-    const targets = pdfBranch === "AUDITED_ONLY"
-      ? branches.filter((b) => latestFor(b.id, pdfPeriod))
-      : branches.filter((b) => String(b.id) === pdfBranch);
+    const targets = branches.filter((b) => pdfBranchIds.includes(b.id) && latestFor(b.id, pdfPeriod));
 
     if (!targets.length) { setError("Tidak ada cabang dengan data audit pada periode ini."); return; }
 
@@ -223,8 +223,11 @@ export default function SopLaporan() {
     setError(null);
     const now = new Date();
     const printedAtLabel = now.toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }) + ", " + now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+    const scopeBranches = branches.filter((b) => pdfBranchIds.includes(b.id));
+    if (!scopeBranches.length) { setError("Pilih minimal 1 cabang dulu."); return; }
+    const scopeLabel = pdfBranchIds.length === branches.length ? "SEMUA CABANG" : scopeBranches.map((b) => b.name).join(", ").toUpperCase();
 
-    const rowsData = branches.map((b) => {
+    const rowsData = scopeBranches.map((b) => {
       const rec = latestFor(b.id, pdfPeriod);
       if (!rec) return { branch: b, rec: null };
       const w = calcWeightedFromRecord(rec.data);
@@ -235,7 +238,7 @@ export default function SopLaporan() {
     const audited = rowsData.filter((r) => r.rec);
     const grouped = { Sempurna: 0, Baik: 0, "Perlu Perbaikan": 0 };
     audited.forEach((r) => { grouped[r.info.lbl] = (grouped[r.info.lbl] || 0) + 1; });
-    const total = branches.length;
+    const total = scopeBranches.length;
     const avgScore = audited.length ? Math.round(audited.reduce((s, r) => s + r.score, 0) / audited.length) : 0;
     let top = null, low = null;
     audited.forEach((r) => {
@@ -245,7 +248,7 @@ export default function SopLaporan() {
 
     const colorMap = { Sempurna: "#1a9e6e", Baik: "#b07212", "Perlu Perbaikan": "#a32020" };
 
-    const tableRows = branches.map((b, i) => {
+    const tableRows = scopeBranches.map((b, i) => {
       const row = rowsData.find((r) => r.branch.id === b.id);
       if (!row.rec) {
         return { cells: [String(i + 1), b.name, null, null, null, null, null, null], badge: null };
@@ -270,7 +273,7 @@ export default function SopLaporan() {
 
     const html = buildSummaryReportHtml({
       reportTitle: "LAPORAN AUDIT SOP",
-      scopeLabel: "SEMUA CABANG",
+      scopeLabel,
       periodLabel: periodeLabel(pdfPeriod),
       printedAtLabel,
       summaryCards: [
@@ -334,10 +337,7 @@ export default function SopLaporan() {
             </select>
           </Row>
           <Row label="Cabang">
-            <select className="input" value={pdfBranch} onChange={(e) => setPdfBranch(e.target.value)}>
-              <option value="AUDITED_ONLY">Semua Cabang Yang Sudah Diaudit</option>
-              {branches.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
-            </select>
+            <BranchMultiSelect branches={branches} selectedIds={pdfBranchIds} onChange={setPdfBranchIds} />
           </Row>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn" onClick={exportPDF}>Cetak Detail per Cabang</button>
@@ -392,14 +392,16 @@ function buildBranchPageHtml(branch, rec, weightedScore, statusInfo, tiers) {
       const checks = rec.data?.checks || {};
       const isOk = Object.keys(checks).length ? !!checks[key] : true;
       const note = rec.data?.notes?.[key] || "";
+      const photo = rec.data?.photos?.[key] || "";
       return `<tr style="${isOk ? "" : "background:#fff7f7;"}">
         <td style="width:22px;text-align:center;font-weight:900;color:${isOk ? "#1a9e6e" : "#a32020"}">${isOk ? "&#10003;" : "&#10007;"}</td>
         <td style="${isOk ? "" : "color:#a32020;font-weight:700;"}">${esc(item)}</td>
-        <td style="width:30%;font-size:9px;color:#7a5800;font-style:italic;">${note ? esc(note) : "\u2014"}</td>
+        <td style="width:26%;font-size:9px;color:#7a5800;font-style:italic;">${note ? esc(note) : "\u2014"}</td>
+        <td style="width:60px;text-align:center;">${photo ? `<img src="${esc(photo)}" style="width:50px;height:50px;object-fit:cover;border-radius:4px;border:1px solid #ddd;" />` : "\u2014"}</td>
       </tr>`;
     }).join("");
     return `<div class="cat-head" style="background:${c.color}"><span>${esc(c.label)}</span><span>${bd.score}/${bd.total} \u2014 ${pct}%</span></div>
-      <table class="ptbl"><thead><tr><th style="width:22px;">Status</th><th>Checklist</th><th>Catatan</th></tr></thead><tbody>${rows}</tbody></table>`;
+      <table class="ptbl"><thead><tr><th style="width:22px;">Status</th><th>Checklist</th><th>Catatan</th><th>Foto</th></tr></thead><tbody>${rows}</tbody></table>`;
   }).join("");
 
   return `<div class="page">

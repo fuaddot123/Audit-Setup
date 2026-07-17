@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/router";
 import { supabase } from "../lib/supabaseClient";
+import RadarLogo from "../components/RadarLogo";
 
 export default function Login() {
   const router = useRouter();
@@ -48,17 +49,9 @@ export default function Login() {
     <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg-page)" }}>
       <div style={{ background: "var(--surface)", border: "1px solid rgba(139,110,255,0.2)", borderRadius: 14, padding: 32, width: 360 }}>
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
-          <svg width="48" height="48" viewBox="0 0 64 64">
-            <circle cx="32" cy="32" r="28.5" fill="#2A1F52" stroke="#F4B740" strokeWidth="5" />
-            <path d="M27 18 L32 7 L37 18 Z" fill="#FFFFFF" />
-            <rect x="26.5" y="18" width="11" height="24" rx="5.5" fill="#FFFFFF" />
-            <path d="M26.5 36 L18 46 L26.5 43 Z" fill="#FFFFFF" />
-            <path d="M37.5 36 L46 46 L37.5 43 Z" fill="#FFFFFF" />
-            <circle cx="32" cy="25" r="3.2" fill="#2A1F52" />
-            <path d="M28.5 41 L32 53 L35.5 41 Z" fill="#F4B740" />
-          </svg>
+          <RadarLogo size={56} />
         </div>
-        <div className="display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 4, textAlign: "center", color: "var(--text-primary)" }}>KLA Audit</div>
+        <div className="display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 4, textAlign: "center", color: "var(--text-primary)" }}>KLA Radar</div>
         <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 24, textAlign: "center" }}>
           {mode === "login" ? "Masuk ke akun kamu" : "Buat akun baru"}
         </div>
