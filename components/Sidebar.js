@@ -20,6 +20,7 @@ const MODULES = [
       { key: "laporan", label: "Laporan Audit Stok" },
     ],
   },
+  { key: "berita_acara", label: "Berita Acara", ready: true },
   {
     key: "pengajuan", label: "Form Pengajuan", ready: false, subs: [
       { key: "adjust", label: "Barang Adjust" },

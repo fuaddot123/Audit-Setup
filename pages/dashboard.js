@@ -8,6 +8,7 @@ import Timeline from "../components/Timeline";
 import AuditSOP from "../components/AuditSOP";
 import AuditStok from "../components/AuditStok";
 import AuditKPI from "../components/AuditKPI";
+import BeritaAcara from "../components/BeritaAcara";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -54,6 +55,8 @@ export default function Dashboard() {
         <AuditStok profile={profile} sub={activeSub || "service"} />
       ) : active === "kpi" ? (
         <AuditKPI profile={profile} />
+      ) : active === "berita_acara" ? (
+        <BeritaAcara profile={profile} />
       ) : (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-faint)", flexDirection: "column" }}>
           <div className="display" style={{ fontSize: 19, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>Modul ini belum dibuat</div>
