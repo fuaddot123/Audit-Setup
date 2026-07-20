@@ -23,6 +23,7 @@ export default function StokKesehatan({ profile }) {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
   const isSuperAdmin = profile?.role === "super_admin";
+  const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
 
   useEffect(() => { loadBranches(); }, []);
 
@@ -111,7 +112,26 @@ export default function StokKesehatan({ profile }) {
   const status = kesehatanStatusInfo(kesehatanPct);
   const period = periodFromDate(auditDate);
 
+  async function deleteRecord() {
+    if (!existingRow || profile?.role !== "super_admin") return;
+    if (!window.confirm(`Hapus data Kesehatan Stok ${selectedBranch.name} periode ${periodeLabel(period)}? Aksi ini tidak bisa dibatalkan.`)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const { error: err } = await supabase.from("audit_generic").delete().eq("id", existingRow.id);
+      if (err) throw err;
+      setExistingRow(null);
+      setForm(EMPTY_FORM);
+      setSaved(false);
+    } catch (err) {
+      setError("Gagal menghapus: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveRecord() {
+    if (!canEdit) { setError("Kamu tidak punya izin untuk menyimpan."); return; }
     if (!auditDate) { setError("Tanggal audit wajib diisi."); return; }
     setSaving(true);
     setError(null);
@@ -260,9 +280,14 @@ export default function StokKesehatan({ profile }) {
               <label style={{ display: "block", fontSize: 11, color: "var(--text-secondary)", marginBottom: 3 }}>Tanggal audit</label>
               <input className="input" type="date" value={auditDate} onChange={(e) => { setAuditDate(e.target.value); setSaved(false); }} />
             </div>
-            <button className="btn" disabled={saving} onClick={saveRecord} style={{ alignSelf: "flex-end" }}>
-              {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : "Simpan"}
+            <button className="btn" disabled={saving || !canEdit} onClick={saveRecord} style={{ alignSelf: "flex-end" }} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
+              {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan" : "Hanya Lihat"}
             </button>
+            {profile?.role === "super_admin" && existingRow && (
+              <button className="btn-ghost" disabled={saving} onClick={deleteRecord} style={{ alignSelf: "flex-end", color: "var(--danger-text)" }}>
+                Hapus Data
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -275,7 +300,7 @@ export default function StokKesehatan({ profile }) {
         ) : (
           <>
             <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, cursor: "pointer", fontSize: 13, color: "var(--text-secondary)" }}>
-              <input type="checkbox" checked={form.tidak_visit} onChange={(e) => { setForm((f) => ({ ...f, tidak_visit: e.target.checked })); setSaved(false); }} />
+              <input type="checkbox" checked={form.tidak_visit} onChange={(e) => { setForm((f) => ({ ...f, tidak_visit: e.target.checked })); setSaved(false); }} disabled={!canEdit} />
               Cabang ini tidak dikunjungi bulan ini (Tidak Visit)
             </label>
 
@@ -284,14 +309,14 @@ export default function StokKesehatan({ profile }) {
                 <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 4 }}>
                     <Field label="Total Barang Plus Minus / Tertukar" hint="jumlah kejadian, bukan qty">
-                      <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.temuan_count} onChange={(e) => setDigitField("temuan_count", e.target.value)} />
+                      <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.temuan_count} onChange={(e) => setDigitField("temuan_count", e.target.value)} disabled={!canEdit} />
                     </Field>
                     <Field label="Total Bonus Fisik Tidak Ada" hint="jumlah kejadian, bukan qty">
-                      <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.bonus_count} onChange={(e) => setDigitField("bonus_count", e.target.value)} />
+                      <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.bonus_count} onChange={(e) => setDigitField("bonus_count", e.target.value)} disabled={!canEdit} />
                     </Field>
                   </div>
                   <Field label="Untung / Rugi (Rp)" hint="isi minus (-) kalau rugi, misal -150000">
-                    <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.untung_rugi} onChange={(e) => setRugiField(e.target.value)} />
+                    <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.untung_rugi} onChange={(e) => setRugiField(e.target.value)} disabled={!canEdit} />
                   </Field>
                   <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10 }}>
                     Skor Temuan = jumlah 2 kejadian di atas. Skor Rugi 0&ndash;4 tergantung nominal kerugian. Skor Total = Skor Temuan + (Skor Rugi &times; 5).

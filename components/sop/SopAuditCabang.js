@@ -12,7 +12,20 @@ function emptyChecklist() {
   return state;
 }
 
+// Data lama simpan foto sebagai string tunggal per key; sekarang array {url,type}.
+function normalizePhotos(raw) {
+  if (!raw) return {};
+  const out = {};
+  Object.keys(raw).forEach((key) => {
+    const val = raw[key];
+    if (Array.isArray(val)) out[key] = val;
+    else if (typeof val === "string" && val) out[key] = [{ url: val, type: "image" }];
+  });
+  return out;
+}
+
 export default function SopAuditCabang({ profile }) {
+  const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
   const [allRecords, setAllRecords] = useState([]); // semua audit_generic module='sop', buat status kartu
@@ -58,7 +71,7 @@ export default function SopAuditCabang({ profile }) {
       setExistingRow(data);
       setChecklist({ ...emptyChecklist(), ...(data.data?.checks || {}) });
       setNotes(data.data?.notes || {});
-      setPhotos(data.data?.photos || {});
+      setPhotos(normalizePhotos(data.data?.photos));
       setAuditDate(data.data?.audit_date || (period === nowPeriode() ? todayInputValue() : period + "-01"));
     } else {
       setExistingRow(null);
@@ -77,6 +90,7 @@ export default function SopAuditCabang({ profile }) {
   }
 
   function toggleItem(catId, idx) {
+    if (!canEdit) return;
     const id = catId + "_" + idx;
     setChecklist((prev) => {
       const next = { ...prev, [id]: !prev[id] };
@@ -91,31 +105,43 @@ export default function SopAuditCabang({ profile }) {
     setSaved(false);
   }
 
-  async function uploadPhoto(key, file) {
-    if (!file || !selectedBranch) return;
-    if (!file.type.startsWith("image/")) { setError("File harus berupa gambar."); return; }
-    if (file.size > 5 * 1024 * 1024) { setError("Ukuran foto maksimal 5MB."); return; }
+  async function uploadPhoto(key, fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length || !selectedBranch) return;
     setUploadingKey(key);
     setError(null);
     try {
-      const ext = file.name.split(".").pop() || "jpg";
-      const path = `sop/${selectedBranch.id}/${viewPeriod}/${key}-${Date.now()}.${ext}`;
-      const { error: upErr } = await supabase.storage.from("findings").upload(path, file, { upsert: true });
-      if (upErr) throw upErr;
-      const { data: pub } = supabase.storage.from("findings").getPublicUrl(path);
-      setPhotos((prev) => ({ ...prev, [key]: pub.publicUrl }));
-      setSaved(false);
+      const uploaded = [];
+      for (const file of files) {
+        const isImage = file.type.startsWith("image/");
+        const isVideo = file.type.startsWith("video/");
+        if (!isImage && !isVideo) { setError("File harus berupa gambar atau video."); continue; }
+        const maxSize = isVideo ? 30 * 1024 * 1024 : 5 * 1024 * 1024;
+        if (file.size > maxSize) { setError(`Ukuran ${isVideo ? "video" : "foto"} maksimal ${isVideo ? "30MB" : "5MB"}.`); continue; }
+        const ext = file.name.split(".").pop() || (isVideo ? "mp4" : "jpg");
+        const path = `sop/${selectedBranch.id}/${viewPeriod}/${key}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
+        const { error: upErr } = await supabase.storage.from("findings").upload(path, file, { upsert: true });
+        if (upErr) throw upErr;
+        const { data: pub } = supabase.storage.from("findings").getPublicUrl(path);
+        uploaded.push({ url: pub.publicUrl, type: isVideo ? "video" : "image" });
+      }
+      if (uploaded.length) {
+        setPhotos((prev) => ({ ...prev, [key]: [...(prev[key] || []), ...uploaded] }));
+        setSaved(false);
+      }
     } catch (err) {
-      setError("Gagal upload foto: " + err.message);
+      setError("Gagal upload: " + err.message);
     } finally {
       setUploadingKey(null);
     }
   }
 
-  function removePhoto(key) {
+  function removePhoto(key, index) {
     setPhotos((prev) => {
-      const next = { ...prev };
-      delete next[key];
+      const list = [...(prev[key] || [])];
+      list.splice(index, 1);
+      const next = { ...prev, [key]: list };
+      if (!list.length) delete next[key];
       return next;
     });
     setSaved(false);
@@ -130,7 +156,29 @@ export default function SopAuditCabang({ profile }) {
   const weightedPct = useMemo(() => calcWeightedScore(checklist), [checklist]);
   const period = periodFromDate(auditDate);
 
+  async function deleteAudit() {
+    if (!existingRow || profile?.role !== "super_admin") return;
+    if (!window.confirm(`Hapus data audit SOP ${selectedBranch.name} periode ${periodeLabel(period)}? Aksi ini tidak bisa dibatalkan.`)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const { error: err } = await supabase.from("audit_generic").delete().eq("id", existingRow.id);
+      if (err) throw err;
+      setExistingRow(null);
+      setChecklist(emptyChecklist());
+      setNotes({});
+      setPhotos({});
+      setSaved(false);
+      setAllRecords((prev) => prev.filter((r) => r.id !== existingRow.id));
+    } catch (err) {
+      setError("Gagal menghapus: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveAudit() {
+    if (!canEdit) { setError("Kamu tidak punya izin untuk menyimpan audit."); return; }
     if (!auditDate) { setError("Tanggal audit wajib diisi."); return; }
     setSaving(true);
     setError(null);
@@ -323,9 +371,14 @@ export default function SopAuditCabang({ profile }) {
               <label style={{ display: "block", fontSize: 11, color: "var(--text-secondary)", marginBottom: 3 }}>Tanggal audit</label>
               <input className="input" type="date" value={auditDate} onChange={(e) => { setAuditDate(e.target.value); setSaved(false); }} />
             </div>
-            <button className="btn" disabled={saving} onClick={saveAudit} style={{ alignSelf: "flex-end" }}>
-              {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : "Simpan Hasil Audit"}
+            <button className="btn" disabled={saving || !canEdit} onClick={saveAudit} style={{ alignSelf: "flex-end" }} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
+              {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan Hasil Audit" : "Hanya Lihat"}
             </button>
+            {profile?.role === "super_admin" && existingRow && (
+              <button className="btn-ghost" disabled={saving} onClick={deleteAudit} style={{ alignSelf: "flex-end", color: "var(--danger-text)", borderColor: "var(--danger-border, rgba(239,68,68,0.35))" }}>
+                Hapus Data
+              </button>
+            )}
           </div>
         </div>
 
@@ -380,7 +433,7 @@ export default function SopAuditCabang({ profile }) {
                         const checked = !!checklist[id];
                         return (
                           <div key={id} style={{ padding: "10px 16px", borderBottom: i < c.items.length - 1 ? "1px solid var(--border)" : "none" }}>
-                            <div onClick={() => toggleItem(c.id, i)} style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: "pointer" }}>
+                            <div onClick={() => toggleItem(c.id, i)} style={{ display: "flex", alignItems: "flex-start", gap: 10, cursor: canEdit ? "pointer" : "default" }}>
                               <div style={{
                                 width: 18, height: 18, borderRadius: 5, flexShrink: 0, marginTop: 1,
                                 border: checked ? "none" : "1.5px solid var(--border)",
@@ -399,28 +452,39 @@ export default function SopAuditCabang({ profile }) {
                                   rows={2}
                                   value={notes[id] || ""}
                                   onChange={(e) => setNote(id, e.target.value)}
+                                  disabled={!canEdit}
                                   style={{ marginTop: 8, marginLeft: 28, width: "calc(100% - 28px)", fontSize: 12.5, resize: "vertical" }}
                                 />
-                                <div style={{ marginTop: 8, marginLeft: 28 }}>
-                                  {photos[id] ? (
-                                    <div style={{ position: "relative", display: "inline-block" }}>
-                                      <img src={photos[id]} alt="Bukti foto" style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)" }} />
-                                      <span
-                                        onClick={() => removePhoto(id)}
-                                        style={{ position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: "50%", background: "var(--danger-text)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, cursor: "pointer" }}
-                                      >&times;</span>
+                                <div style={{ marginTop: 8, marginLeft: 28, display: "flex", flexWrap: "wrap", gap: 8, alignItems: "center" }}>
+                                  {(photos[id] || []).map((m, idx) => (
+                                    <div key={idx} style={{ position: "relative", display: "inline-block" }}>
+                                      {m.type === "video" ? (
+                                        <video src={m.url} style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)" }} muted />
+                                      ) : (
+                                        <img src={m.url} alt="Bukti foto" style={{ width: 90, height: 90, objectFit: "cover", borderRadius: 8, border: "1px solid var(--border)" }} />
+                                      )}
+                                      {m.type === "video" && (
+                                        <span style={{ position: "absolute", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 20, color: "#fff", textShadow: "0 1px 4px rgba(0,0,0,0.6)", pointerEvents: "none" }}>&#9654;</span>
+                                      )}
+                                      {canEdit && (
+                                        <span
+                                          onClick={() => removePhoto(id, idx)}
+                                          style={{ position: "absolute", top: -6, right: -6, width: 20, height: 20, borderRadius: "50%", background: "var(--danger-text)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, cursor: "pointer" }}
+                                        >&times;</span>
+                                      )}
                                     </div>
-                                  ) : (
-                                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--text-faint)", border: "1px dashed var(--border)", borderRadius: 8, padding: "8px 12px", cursor: "pointer" }}>
+                                  ))}
+                                  {canEdit && (
+                                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--text-faint)", border: "1px dashed var(--border)", borderRadius: 8, padding: "8px 12px", cursor: "pointer", height: 90, boxSizing: "border-box" }}>
                                       {uploadingKey === id ? (
                                         "Mengunggah\u2026"
                                       ) : (
                                         <>
                                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" /></svg>
-                                          Tambah foto bukti
+                                          {(photos[id] || []).length ? "Tambah lagi" : "Tambah foto/video"}
                                         </>
                                       )}
-                                      <input type="file" accept="image/*" capture="environment" style={{ display: "none" }} disabled={uploadingKey === id} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadPhoto(id, f); e.target.value = ""; }} />
+                                      <input type="file" accept="image/*,video/*" multiple style={{ display: "none" }} disabled={uploadingKey === id} onChange={(e) => { if (e.target.files?.length) uploadPhoto(id, e.target.files); e.target.value = ""; }} />
                                     </label>
                                   )}
                                 </div>

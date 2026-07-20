@@ -67,7 +67,7 @@ export default function Sidebar({ active, activeSub, onSelect, profile }) {
     onSelect(m.key, s.key);
   }
 
-  const roleLabel = { super_admin: "Super Admin", auditor: "Auditor", ceo: "CEO" }[profile?.role] || "\u2026";
+  const roleLabel = { super_admin: "Super Admin", auditor: "Auditor", ceo: "CEO", viewer: "Viewer" }[profile?.role] || "\u2026";
 
   return (
     <div style={{ width: 240, flexShrink: 0, background: "var(--sidebar-bg)", height: "100vh", position: "sticky", top: 0, alignSelf: "flex-start", padding: "22px 14px", display: "flex", flexDirection: "column", borderRight: "1px solid var(--border)", overflowY: "auto" }}>

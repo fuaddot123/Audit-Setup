@@ -305,6 +305,25 @@ export default function AuditKPI({ profile }) {
   const { results, total } = calcKPI({ ...form, kepatuhan_sop: (parseFloat(form.kepatuhan_sop) || 0) / 100 });
   const totalInfo = totalKpiInfo(total);
 
+  async function deleteRecord() {
+    const existing = history.find((r) => r.period === period);
+    if (!existing || profile?.role !== "super_admin") return;
+    if (!window.confirm(`Hapus data KPI ${selectedAuditor.full_name} periode ${periodeLabel(period)}? Aksi ini tidak bisa dibatalkan.`)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const { error: err } = await supabase.from("audit_kpi").delete().eq("id", existing.id);
+      if (err) throw err;
+      setForm(EMPTY_FORM);
+      setSaved(false);
+      await loadAuditorData(selectedAuditor.id);
+    } catch (err) {
+      setError("Gagal menghapus: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveRecord() {
     setSaving(true);
     setError(null);
@@ -453,6 +472,9 @@ export default function AuditKPI({ profile }) {
             {canEdit && (
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 32 }}>
                 <button className="btn" disabled={saving} onClick={saveRecord}>{saving ? "Menyimpan\u2026" : "Simpan"}</button>
+                {profile?.role === "super_admin" && history.some((r) => r.period === period) && (
+                  <button className="btn-ghost" disabled={saving} onClick={deleteRecord} style={{ color: "var(--danger-text)" }}>Hapus Data</button>
+                )}
                 {saved && <span style={{ color: "var(--success-text)", fontSize: 13 }}>Tersimpan \u2713</span>}
               </div>
             )}

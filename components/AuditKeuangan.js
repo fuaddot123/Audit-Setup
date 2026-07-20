@@ -199,6 +199,29 @@ export default function AuditKeuangan({ profile }) {
     }
   }
 
+  async function deleteEntry() {
+    const existing = (entriesByBranch[selectedBranch.id] || {})[selectedPeriod];
+    if (!existing || profile?.role !== "super_admin") return;
+    if (!window.confirm(`Hapus data Audit Keuangan ${selectedBranch.name} periode ${monthLabel(selectedPeriod)}? Aksi ini tidak bisa dibatalkan.`)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const { error: err } = await supabase.from("audit_keuangan").delete().eq("id", existing.id);
+      if (err) throw err;
+      const grouped = { ...entriesByBranch };
+      const branchEntries = { ...(grouped[selectedBranch.id] || {}) };
+      delete branchEntries[selectedPeriod];
+      grouped[selectedBranch.id] = branchEntries;
+      setEntriesByBranch(grouped);
+      setForm({ saldo_sebelumnya: "", saldo_masuk: "", limit_kas: selectedBranch.limit_kas || "", pengeluaran: "", sisa_saldo: "" });
+      setSavedFlash(false);
+    } catch (err) {
+      setError("Gagal menghapus: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveEntry() {
     if (!selectedBranch || !selectedPeriod) return;
     setSaving(true);
@@ -395,6 +418,11 @@ export default function AuditKeuangan({ profile }) {
               {canEdit && (
                 <button className="btn" disabled={saving} onClick={saveEntry} style={{ alignSelf: "flex-end" }}>
                   {saving ? "Menyimpan\u2026" : savedFlash ? "\u2713 Tersimpan" : "Simpan"}
+                </button>
+              )}
+              {profile?.role === "super_admin" && currentEntry && (
+                <button className="btn-ghost" disabled={saving} onClick={deleteEntry} style={{ alignSelf: "flex-end", color: "var(--danger-text)" }}>
+                  Hapus Data
                 </button>
               )}
               <button className="btn-ghost" disabled={!currentEntry} onClick={exportReport} title="Export PDF" style={{ alignSelf: "flex-end", display: "flex", alignItems: "center", gap: 6 }}>

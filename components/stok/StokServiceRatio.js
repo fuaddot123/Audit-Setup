@@ -9,6 +9,7 @@ import {
 const EMPTY_FORM = { laptop: "", aksesoris: "", user: "", stok_service: "", total_unit_cabang: "" };
 
 export default function StokServiceRatio({ profile }) {
+  const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
   const [allRecords, setAllRecords] = useState([]);
@@ -80,7 +81,26 @@ export default function StokServiceRatio({ profile }) {
   const status = serviceStatusInfo(ratio);
   const period = periodFromDate(auditDate);
 
+  async function deleteRecord() {
+    if (!existingRow || profile?.role !== "super_admin") return;
+    if (!window.confirm(`Hapus data Service Ratio ${selectedBranch.name} periode ${periodeLabel(period)}? Aksi ini tidak bisa dibatalkan.`)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const { error: err } = await supabase.from("audit_generic").delete().eq("id", existingRow.id);
+      if (err) throw err;
+      setExistingRow(null);
+      setForm(EMPTY_FORM);
+      setSaved(false);
+    } catch (err) {
+      setError("Gagal menghapus: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
   async function saveRecord() {
+    if (!canEdit) { setError("Kamu tidak punya izin untuk menyimpan."); return; }
     if (!auditDate) { setError("Tanggal audit wajib diisi."); return; }
     setSaving(true);
     setError(null);
@@ -204,9 +224,14 @@ export default function StokServiceRatio({ profile }) {
               <label style={{ display: "block", fontSize: 11, color: "var(--text-secondary)", marginBottom: 3 }}>Tanggal audit</label>
               <input className="input" type="date" value={auditDate} onChange={(e) => { setAuditDate(e.target.value); setSaved(false); }} />
             </div>
-            <button className="btn" disabled={saving} onClick={saveRecord} style={{ alignSelf: "flex-end" }}>
-              {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : "Simpan"}
+            <button className="btn" disabled={saving || !canEdit} onClick={saveRecord} style={{ alignSelf: "flex-end" }} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
+              {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan" : "Hanya Lihat"}
             </button>
+            {profile?.role === "super_admin" && existingRow && (
+              <button className="btn-ghost" disabled={saving} onClick={deleteRecord} style={{ alignSelf: "flex-end", color: "var(--danger-text)" }}>
+                Hapus Data
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -221,19 +246,19 @@ export default function StokServiceRatio({ profile }) {
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 4 }}>
                 <Field label="Unit Laptop diservice">
-                  <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.laptop} onChange={(e) => setField("laptop", e.target.value)} />
+                  <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.laptop} onChange={(e) => setField("laptop", e.target.value)} disabled={!canEdit} />
                 </Field>
                 <Field label="Unit Aksesoris diservice">
-                  <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.aksesoris} onChange={(e) => setField("aksesoris", e.target.value)} />
+                  <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.aksesoris} onChange={(e) => setField("aksesoris", e.target.value)} disabled={!canEdit} />
                 </Field>
                 <Field label="User Service">
-                  <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.user} onChange={(e) => setField("user", e.target.value)} />
+                  <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.user} onChange={(e) => setField("user", e.target.value)} disabled={!canEdit} />
                 </Field>
                 <Field label="Stok Service">
-                  <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.stok_service} onChange={(e) => setField("stok_service", e.target.value)} />
+                  <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.stok_service} onChange={(e) => setField("stok_service", e.target.value)} disabled={!canEdit} />
                 </Field>
                 <Field label="Total Unit / Cabang">
-                  <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.total_unit_cabang} onChange={(e) => setField("total_unit_cabang", e.target.value)} />
+                  <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.total_unit_cabang} onChange={(e) => setField("total_unit_cabang", e.target.value)} disabled={!canEdit} />
                 </Field>
               </div>
               <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 6 }}>
