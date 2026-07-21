@@ -18,8 +18,27 @@ function addMonthsToPeriod(period, delta) {
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
-function newStockRow() { return { kategori: "", nama: "", status: "Lengkap", temuan: "", keterangan: "" }; }
-function newInventarisRow() { return { nama: "", status: "Sesuai", keterangan: "", photos: [] }; }
+function newStockRow() { return { nama: "", status: "Lengkap", keterangan: "" }; }
+
+const INVENTARIS_CATEGORIES = [
+  "Jaringan Internet", "Peralatan Kasir", "Peralatan Teknisi", "Audio Visual",
+  "Penerangan", "Listrik & Utilitas", "Peralatan Keamanan", "Furniture & Fixture",
+  "Kendaraan & Mesin", "Peralatan Kebersihan",
+];
+
+function freshInventaris() {
+  const obj = {};
+  INVENTARIS_CATEGORIES.forEach((cat) => { obj[cat] = { status: "Berfungsi", keterangan: "", photos: [] }; });
+  return obj;
+}
+function normalizeInventaris(raw) {
+  const fresh = freshInventaris();
+  if (!raw || Array.isArray(raw)) return fresh; // data lama format array -> reset ke checklist baru
+  INVENTARIS_CATEGORIES.forEach((cat) => {
+    if (raw[cat]) fresh[cat] = { status: raw[cat].status || "Berfungsi", keterangan: raw[cat].keterangan || "", photos: raw[cat].photos || [] };
+  });
+  return fresh;
+}
 
 export default function BeritaAcara({ profile }) {
   const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
@@ -34,8 +53,9 @@ export default function BeritaAcara({ profile }) {
   const [waktuAudit, setWaktuAudit] = useState("");
   const [kegiatan, setKegiatan] = useState("Audit Stock Opname, SOP, Inventaris, Kas Kecil, dan Report Penjualan");
   const [perlengkapan, setPerlengkapan] = useState("Laptop dan Scanner");
-  const [stockOpname, setStockOpname] = useState([]);
-  const [inventaris, setInventaris] = useState([]);
+  const [stockKat1, setStockKat1] = useState([]);
+  const [stockKat2, setStockKat2] = useState([]);
+  const [inventaris, setInventaris] = useState(freshInventaris());
   const [storeManagerName, setStoreManagerName] = useState("");
 
   const [saving, setSaving] = useState(false);
@@ -71,16 +91,18 @@ export default function BeritaAcara({ profile }) {
       setWaktuAudit(data.waktu_audit || "");
       setKegiatan(data.kegiatan || "Audit Stock Opname, SOP, Inventaris, Kas Kecil, dan Report Penjualan");
       setPerlengkapan(data.perlengkapan || "Laptop dan Scanner");
-      setStockOpname(Array.isArray(data.stock_opname) ? data.stock_opname : []);
-      setInventaris(Array.isArray(data.inventaris) ? data.inventaris : []);
+      setStockKat1(Array.isArray(data.stock_opname_kat1) ? data.stock_opname_kat1 : []);
+      setStockKat2(Array.isArray(data.stock_opname_kat2) ? data.stock_opname_kat2 : []);
+      setInventaris(normalizeInventaris(data.inventaris));
       setStoreManagerName(data.store_manager_name || "");
     } else {
       setExistingRow(null);
       setWaktuAudit("");
       setKegiatan("Audit Stock Opname, SOP, Inventaris, Kas Kecil, dan Report Penjualan");
       setPerlengkapan("Laptop dan Scanner");
-      setStockOpname([]);
-      setInventaris([]);
+      setStockKat1([]);
+      setStockKat2([]);
+      setInventaris(freshInventaris());
       setStoreManagerName("");
     }
     setLoadingRecord(false);
@@ -92,26 +114,24 @@ export default function BeritaAcara({ profile }) {
     loadBranches();
   }
 
-  // ── Stock Opname row helpers ──
-  function addStockRow() { setStockOpname((prev) => [...prev, newStockRow()]); setSaved(false); }
-  function updateStockRow(i, field, val) {
-    setStockOpname((prev) => prev.map((r, idx) => (idx === i ? { ...r, [field]: val } : r)));
+  // ── Stock Opname (Kategori 1 & 2) row helpers ──
+  function addRow(setter) { setter((prev) => [...prev, newStockRow()]); setSaved(false); }
+  function updateRow(setter, i, field, val) {
+    setter((prev) => prev.map((r, idx) => (idx === i ? { ...r, [field]: val } : r)));
     setSaved(false);
   }
-  function removeStockRow(i) { setStockOpname((prev) => prev.filter((_, idx) => idx !== i)); setSaved(false); }
+  function removeRow(setter, i) { setter((prev) => prev.filter((_, idx) => idx !== i)); setSaved(false); }
 
-  // ── Inventaris row helpers ──
-  function addInventarisRow() { setInventaris((prev) => [...prev, newInventarisRow()]); setSaved(false); }
-  function updateInventarisRow(i, field, val) {
-    setInventaris((prev) => prev.map((r, idx) => (idx === i ? { ...r, [field]: val } : r)));
+  // ── Inventaris (checklist tetap) helpers ──
+  function updateInventaris(cat, field, val) {
+    setInventaris((prev) => ({ ...prev, [cat]: { ...prev[cat], [field]: val } }));
     setSaved(false);
   }
-  function removeInventarisRow(i) { setInventaris((prev) => prev.filter((_, idx) => idx !== i)); setSaved(false); }
 
-  async function uploadInventarisMedia(rowIndex, fileList) {
+  async function uploadInventarisMedia(cat, fileList) {
     const files = Array.from(fileList || []);
     if (!files.length || !selectedBranch) return;
-    const key = `inv-${rowIndex}`;
+    const key = `inv-${cat}`;
     setUploadingKey(key);
     setError(null);
     try {
@@ -123,14 +143,15 @@ export default function BeritaAcara({ profile }) {
         const maxSize = isVideo ? 30 * 1024 * 1024 : 5 * 1024 * 1024;
         if (file.size > maxSize) { setError(`Ukuran ${isVideo ? "video" : "foto"} maksimal ${isVideo ? "30MB" : "5MB"}.`); continue; }
         const ext = file.name.split(".").pop() || (isVideo ? "mp4" : "jpg");
-        const path = `berita-acara/${selectedBranch.id}/${viewPeriod}/inv${rowIndex}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
+        const safeCat = cat.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
+        const path = `berita-acara/${selectedBranch.id}/${viewPeriod}/${safeCat}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
         const { error: upErr } = await supabase.storage.from("findings").upload(path, file, { upsert: true });
         if (upErr) throw upErr;
         const { data: pub } = supabase.storage.from("findings").getPublicUrl(path);
         uploaded.push({ url: pub.publicUrl, type: isVideo ? "video" : "image" });
       }
       if (uploaded.length) {
-        setInventaris((prev) => prev.map((r, idx) => (idx === rowIndex ? { ...r, photos: [...(r.photos || []), ...uploaded] } : r)));
+        setInventaris((prev) => ({ ...prev, [cat]: { ...prev[cat], photos: [...(prev[cat].photos || []), ...uploaded] } }));
         setSaved(false);
       }
     } catch (err) {
@@ -139,13 +160,12 @@ export default function BeritaAcara({ profile }) {
       setUploadingKey(null);
     }
   }
-  function removeInventarisMedia(rowIndex, mediaIdx) {
-    setInventaris((prev) => prev.map((r, idx) => {
-      if (idx !== rowIndex) return r;
-      const photos = [...(r.photos || [])];
+  function removeInventarisMedia(cat, mediaIdx) {
+    setInventaris((prev) => {
+      const photos = [...(prev[cat].photos || [])];
       photos.splice(mediaIdx, 1);
-      return { ...r, photos };
-    }));
+      return { ...prev, [cat]: { ...prev[cat], photos } };
+    });
     setSaved(false);
   }
 
@@ -161,7 +181,8 @@ export default function BeritaAcara({ profile }) {
         waktu_audit: waktuAudit,
         kegiatan,
         perlengkapan,
-        stock_opname: stockOpname,
+        stock_opname_kat1: stockKat1,
+        stock_opname_kat2: stockKat2,
         inventaris,
         store_manager_name: storeManagerName,
         submitted_by: user.id,
@@ -191,8 +212,9 @@ export default function BeritaAcara({ profile }) {
       const { error: err } = await supabase.from("berita_acara").delete().eq("id", existingRow.id);
       if (err) throw err;
       setExistingRow(null);
-      setStockOpname([]);
-      setInventaris([]);
+      setStockKat1([]);
+      setStockKat2([]);
+      setInventaris(freshInventaris());
       setSaved(false);
     } catch (err) {
       setError("Gagal menghapus: " + err.message);
@@ -205,73 +227,131 @@ export default function BeritaAcara({ profile }) {
     if (!selectedBranch) return;
     const printDate = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
 
-    const stockRows = stockOpname.map((r, i) => `<tr>
-      <td style="text-align:center;">${i + 1}</td>
-      <td>${esc(r.kategori)}</td>
-      <td>${esc(r.nama)}</td>
-      <td style="text-align:center;font-weight:700;color:${r.status === "Selisih" ? "#a32020" : "#1a9e6e"}">${esc(r.status)}</td>
-      <td style="text-align:center;">${esc(r.temuan)}</td>
-      <td style="font-size:9px;">${esc(r.keterangan)}</td>
-    </tr>`).join("") || `<tr><td colspan="6" style="text-align:center;color:#999;">Tidak ada baris</td></tr>`;
+    function pill(text, bad) {
+      return `<span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:${bad ? "#fdecea" : "#e7f7f0"};color:${bad ? "#a32020" : "#1a9e6e"};">${esc(text)}</span>`;
+    }
 
-    const invRows = inventaris.map((r, i) => {
-      const media = (r.photos || []).map((m) => m.type === "video"
-        ? `<div style="width:32px;height:32px;background:#eee;border-radius:3px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;">&#9654;</div>`
-        : `<img src="${esc(m.url)}" style="width:32px;height:32px;object-fit:cover;border-radius:3px;border:1px solid #ddd;" />`
-      ).join(" ") || "\u2014";
-      return `<tr>
-        <td style="text-align:center;">${i + 1}</td>
-        <td>${esc(r.nama)}</td>
-        <td style="text-align:center;font-weight:700;color:${r.status === "Tidak Sesuai" ? "#a32020" : "#1a9e6e"}">${esc(r.status)}</td>
-        <td style="font-size:9px;">${esc(r.keterangan)}</td>
-        <td style="text-align:center;">${media}</td>
+    function stockTable(rows) {
+      const body = rows.map((r, i) => `<tr style="${r.status === "Selisih" ? "background:#fff8f7;" : ""}">
+        <td style="text-align:center;color:#999;">${i + 1}</td>
+        <td style="font-weight:600;">${esc(r.nama) || "\u2014"}</td>
+        <td style="text-align:center;">${pill(r.status, r.status === "Selisih")}</td>
+        <td style="font-size:9px;color:#555;">${esc(r.keterangan) || "\u2014"}</td>
+      </tr>`).join("") || `<tr><td colspan="4" style="text-align:center;color:#999;padding:14px;">Tidak ada baris diisi</td></tr>`;
+      return `<table class="data"><thead><tr><th style="width:26px;">No</th><th>Nama Barang / Brand</th><th style="width:90px;text-align:center;">Status</th><th>Keterangan</th></tr></thead><tbody>${body}</tbody></table>`;
+    }
+
+    const stockSelisihCount = [...stockKat1, ...stockKat2].filter((r) => r.status === "Selisih").length;
+    const stockTotalCount = stockKat1.length + stockKat2.length;
+    const invRusakCount = INVENTARIS_CATEGORIES.filter((c) => (inventaris[c] || {}).status === "Rusak").length;
+
+    const invRows = INVENTARIS_CATEGORIES.map((cat, i) => {
+      const row = inventaris[cat] || {};
+      const isRusak = row.status === "Rusak";
+      const media = (row.photos || []).map((m) => m.type === "video"
+        ? `<div style="width:34px;height:34px;background:#f0edf7;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:#7c3aed;">&#9654;</div>`
+        : `<img src="${esc(m.url)}" style="width:34px;height:34px;object-fit:cover;border-radius:5px;border:1px solid #ddd;" />`
+      ).join(" ") || "";
+      return `<tr style="${isRusak ? "background:#fff8f7;" : ""}">
+        <td style="text-align:center;color:#999;">${i + 1}</td>
+        <td style="font-weight:600;">${esc(cat)}</td>
+        <td style="text-align:center;">${pill(row.status || "Berfungsi", isRusak)}</td>
+        <td style="font-size:9px;color:#555;">${esc(row.keterangan) || "\u2014"}</td>
+        <td style="text-align:center;">${media || "\u2014"}</td>
       </tr>`;
-    }).join("") || `<tr><td colspan="5" style="text-align:center;color:#999;">Tidak ada baris</td></tr>`;
+    }).join("");
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Berita Acara ${esc(selectedBranch.name)}</title>
     <style>
       * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-      @page { size: A4; margin: 12mm; }
-      body { font-family: Arial, Helvetica, sans-serif; color: #222; font-size: 11px; }
-      h1 { font-size: 15px; color: #2A1F52; margin: 0 0 2px; }
-      .sub { font-size: 10px; color: #666; margin-bottom: 14px; }
-      table.meta { width: 100%; margin-bottom: 14px; font-size: 11px; }
-      table.meta td { padding: 2px 6px; vertical-align: top; }
-      table.meta td.label { width: 130px; color: #555; }
-      .sect { background: #2A1F52; color: #fff; font-weight: 700; padding: 6px 10px; font-size: 11px; margin-top: 14px; border-radius: 4px 4px 0 0; }
-      table.data { width: 100%; border-collapse: collapse; font-size: 10px; }
-      table.data th { background: #f0edf7; text-align: left; padding: 5px 7px; border-bottom: 2px solid #2A1F52; }
-      table.data td { padding: 5px 7px; border-bottom: 1px solid #eee; }
-      .sign { display: flex; justify-content: space-between; margin-top: 40px; text-align: center; }
-      .sign div { width: 45%; }
-      .sign .line { margin-top: 50px; border-top: 1px solid #333; padding-top: 4px; font-weight: 700; }
+      @page { size: A4; margin: 0; }
+      body { font-family: Arial, Helvetica, sans-serif; color: #222; font-size: 11px; margin: 0; }
+      .page { padding: 16mm 14mm; }
+      .hdr { display: flex; justify-content: space-between; align-items: center; background: linear-gradient(120deg,#2A1F52,#3d2a72); margin: 0 0 16px; padding: 16px 14mm; border-bottom: 4px solid #F4B740; }
+      .hdr-left { display: flex; align-items: center; gap: 12px; }
+      .hdr-badge { width: 36px; height: 36px; border-radius: 9px; background: #F4B740; color: #2A1F52; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 13px; flex-shrink: 0; }
+      .hdr-title { color: #fff; font-weight: 800; font-size: 15px; }
+      .hdr-sub { color: #cfc7e6; font-size: 8.5px; }
+      .hdr-right { text-align: right; }
+      .hdr-tag { color: #F4B740; font-size: 8px; font-weight: 800; letter-spacing: 0.06em; }
+      .hdr-date { color: #cfc7e6; font-size: 8.5px; margin-top: 2px; }
+      .content { padding: 0 14mm 14mm; flex: 1; display: flex; flex-direction: column; }
+      h1 { font-size: 16px; color: #2A1F52; margin: 0 0 2px; }
+      .sub { font-size: 10px; color: #888; margin-bottom: 14px; }
+      .info-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+      .info-box { border: 1px solid #eadfc4; background: #fdfaf1; border-radius: 8px; padding: 8px 11px; }
+      .info-box .l { font-size: 7px; font-weight: 800; color: #b8860b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+      .info-box .v { font-size: 10.5px; font-weight: 700; color: #2A1F52; }
+      .info-wide { border: 1px solid #e0d8f0; background: #f5f3fa; border-radius: 8px; padding: 8px 11px; margin-bottom: 14px; font-size: 10px; color: #2A1F52; }
+      .info-wide b { color: #3c3489; }
+      .metric-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 14px 0; }
+      .metric-card { border-radius: 10px; padding: 10px 12px; border-left: 4px solid; background: #fafafd; }
+      .metric-card .l { font-size: 7px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: #888; margin-bottom: 3px; }
+      .metric-card .v { font-size: 18px; font-weight: 900; color: #2A1F52; }
+      .sect { background: #2A1F52; color: #fff; font-weight: 700; padding: 7px 11px; font-size: 11px; margin-top: 16px; border-radius: 6px 6px 0 0; display: flex; align-items: center; gap: 6px; }
+      .sect .dot { width: 6px; height: 6px; border-radius: 50%; background: #F4B740; }
+      .subsect { background: #f0edf7; color: #3c3489; font-weight: 700; padding: 5px 11px; font-size: 9.5px; letter-spacing: 0.02em; }
+      table.data { width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 4px; }
+      table.data th { background: #f7f6fb; text-align: left; padding: 6px 8px; border-bottom: 2px solid #2A1F52; font-size: 9px; color: #2A1F52; text-transform: uppercase; letter-spacing: 0.03em; }
+      table.data td { padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: middle; }
+      .sign { display: flex; justify-content: space-between; margin-top: 46px; text-align: center; page-break-inside: avoid; break-inside: avoid; }
+      .sign > div { width: 45%; font-size: 9.5px; font-weight: 800; color: #2A1F52; letter-spacing: 0.05em; }
+      .sign .line { margin-top: 54px; border-top: 1.5px solid #2A1F52; padding-top: 5px; font-weight: 700; font-size: 11px; color: #222; }
+      .footer { display: flex; justify-content: space-between; margin-top: 24px; padding-top: 8px; border-top: 1px solid #eee; font-size: 8px; color: #999; page-break-inside: avoid; break-inside: avoid; }
+      html, body { height: 100%; }
+      body { width: 210mm; margin: 0 auto; min-height: 297mm; display: flex; flex-direction: column; }
+      .sign { margin-top: auto; padding-top: 40px; }
     </style></head><body>
-      <h1>BERITA ACARA AUDIT STORE</h1>
-      <div class="sub">Divisi Audit KLA Computer &middot; Dicetak ${printDate}</div>
-      <table class="meta">
-        <tr><td class="label">Store Cabang</td><td>: ${esc(selectedBranch.name)}</td></tr>
-        <tr><td class="label">Periode</td><td>: ${esc(periodeLabel(viewPeriod))}</td></tr>
-        <tr><td class="label">Waktu</td><td>: ${esc(waktuAudit)}</td></tr>
-        <tr><td class="label">Staff Audit</td><td>: ${esc(profile?.full_name || "\u2014")}</td></tr>
-        <tr><td class="label">Kegiatan</td><td>: ${esc(kegiatan)}</td></tr>
-        <tr><td class="label">Perlengkapan</td><td>: ${esc(perlengkapan)}</td></tr>
-      </table>
+      <div class="hdr">
+        <div class="hdr-left">
+          <div class="hdr-badge">KLA</div>
+          <div><div class="hdr-title">Berita Acara Audit Store</div><div class="hdr-sub">Divisi Audit &middot; KLA Computer</div></div>
+        </div>
+        <div class="hdr-right">
+          <div class="hdr-tag">DOKUMEN RESMI</div>
+          <div class="hdr-date">Dicetak ${printDate}</div>
+        </div>
+      </div>
 
-      <div class="sect">1. AUDIT STOCK OPNAME</div>
-      <table class="data">
-        <thead><tr><th style="width:26px;">No</th><th>Kategori</th><th>Nama Barang/Brand</th><th style="width:70px;">Status</th><th style="width:50px;">Temuan</th><th>Keterangan</th></tr></thead>
-        <tbody>${stockRows}</tbody>
-      </table>
+      <div class="content">
+        <div class="info-row">
+          <div class="info-box"><div class="l">Store Cabang</div><div class="v">${esc(selectedBranch.name)}</div></div>
+          <div class="info-box"><div class="l">Periode</div><div class="v">${esc(periodeLabel(viewPeriod))}</div></div>
+          <div class="info-box"><div class="l">Waktu Audit</div><div class="v" style="font-size:9.5px;">${esc(waktuAudit) || "\u2014"}</div></div>
+        </div>
+        <div class="info-wide">
+          <b>Staff Audit:</b> ${esc(profile?.full_name || "\u2014")} &nbsp;&middot;&nbsp;
+          <b>Kegiatan:</b> ${esc(kegiatan)} &nbsp;&middot;&nbsp;
+          <b>Perlengkapan:</b> ${esc(perlengkapan)}
+        </div>
 
-      <div class="sect">2. AUDIT INVENTARIS</div>
-      <table class="data">
-        <thead><tr><th style="width:26px;">No</th><th>Nama Aset</th><th style="width:80px;">Status</th><th>Keterangan</th><th style="width:90px;">Foto/Video</th></tr></thead>
-        <tbody>${invRows}</tbody>
-      </table>
+        <div class="metric-row">
+          <div class="metric-card" style="border-color:#7c3aed;"><div class="l">Item Dicek (Stock Opname)</div><div class="v">${stockTotalCount}</div></div>
+          <div class="metric-card" style="border-color:#a32020;"><div class="l">Selisih Ditemukan</div><div class="v">${stockSelisihCount}</div></div>
+          <div class="metric-card" style="border-color:#b07212;"><div class="l">Aset Rusak (Inventaris)</div><div class="v">${invRusakCount} / ${INVENTARIS_CATEGORIES.length}</div></div>
+        </div>
 
-      <div class="sign">
-        <div>MENGETAHUI<div class="line">${esc(storeManagerName || "\u2014")}<br><span style="font-weight:400;font-size:9px;">Store Manager ${esc(selectedBranch.name)}</span></div></div>
-        <div>PELAKSANA<div class="line">${esc(profile?.full_name || "\u2014")}<br><span style="font-weight:400;font-size:9px;">Staff Audit</span></div></div>
+        <div class="sect"><span class="dot"></span>1. AUDIT STOCK OPNAME</div>
+        <div class="subsect">Kategori 1</div>
+        ${stockTable(stockKat1)}
+        <div class="subsect">Kategori 2</div>
+        ${stockTable(stockKat2)}
+
+        <div class="sect"><span class="dot"></span>2. AUDIT INVENTARIS</div>
+        <table class="data">
+          <thead><tr><th style="width:26px;">No</th><th>Nama Aset</th><th style="width:90px;text-align:center;">Status</th><th>Keterangan</th><th style="width:90px;text-align:center;">Foto/Video</th></tr></thead>
+          <tbody>${invRows}</tbody>
+        </table>
+
+        <div class="sign">
+          <div>MENGETAHUI<div class="line">${esc(storeManagerName || "\u2014")}<br><span style="font-weight:400;font-size:9px;color:#888;">Store Manager ${esc(selectedBranch.name)}</span></div></div>
+          <div>PELAKSANA<div class="line">${esc(profile?.full_name || "\u2014")}<br><span style="font-weight:400;font-size:9px;color:#888;">Staff Audit</span></div></div>
+        </div>
+
+        <div class="footer">
+          <span>PT. KLA Teknologi Indonesia &bull; Confidential</span>
+          <span>Berita Acara &bull; ${esc(selectedBranch.name)} &bull; ${esc(periodeLabel(viewPeriod))}</span>
+        </div>
       </div>
       <script>window.onload = () => setTimeout(() => window.print(), 300);<\/script>
     </body></html>`;
@@ -312,7 +392,7 @@ export default function BeritaAcara({ profile }) {
                     <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: row ? "#1a9e6e" : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
                     <div style={{ fontWeight: 600, fontSize: 14.5 }}>{b.name}</div>
                     <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>
-                      {row ? `Sudah dibuat \u00b7 ${(row.stock_opname || []).length + (row.inventaris || []).length} baris` : "Belum ada \u00b7 Mulai \u2192"}
+                      {row ? "Sudah dibuat \u00b7 Lihat/Edit \u2192" : "Belum ada \u00b7 Mulai \u2192"}
                     </div>
                   </div>
                 );
@@ -380,54 +460,41 @@ export default function BeritaAcara({ profile }) {
 
             {/* Section 1: Stock Opname */}
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>1. Audit Stock Opname</div>
-                {canEdit && <button className="btn-ghost" onClick={addStockRow} style={{ fontSize: 12 }}>+ Tambah Baris</button>}
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>1. Audit Stock Opname</div>
+
+              <StockSubSection title="Kategori 1" rows={stockKat1} canEdit={canEdit}
+                onAdd={() => addRow(setStockKat1)}
+                onUpdate={(i, f, v) => updateRow(setStockKat1, i, f, v)}
+                onRemove={(i) => removeRow(setStockKat1, i)} />
+
+              <div style={{ marginTop: 18 }}>
+                <StockSubSection title="Kategori 2" rows={stockKat2} canEdit={canEdit}
+                  onAdd={() => addRow(setStockKat2)}
+                  onUpdate={(i, f, v) => updateRow(setStockKat2, i, f, v)}
+                  onRemove={(i) => removeRow(setStockKat2, i)} />
               </div>
-              {stockOpname.length === 0 ? (
-                <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>Belum ada baris. {canEdit && 'Klik "+ Tambah Baris" buat mulai.'}</div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {stockOpname.map((row, i) => (
-                    <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 1.5fr 110px 80px 1.5fr auto", gap: 8, alignItems: "start", background: "var(--surface-alt)", padding: 10, borderRadius: 8 }}>
-                      <input className="input" placeholder="Kategori" value={row.kategori} disabled={!canEdit} onChange={(e) => updateStockRow(i, "kategori", e.target.value)} style={{ fontSize: 12.5 }} />
-                      <input className="input" placeholder="Nama Barang/Brand" value={row.nama} disabled={!canEdit} onChange={(e) => updateStockRow(i, "nama", e.target.value)} style={{ fontSize: 12.5 }} />
-                      <select className="input" value={row.status} disabled={!canEdit} onChange={(e) => updateStockRow(i, "status", e.target.value)} style={{ fontSize: 12.5 }}>
-                        <option>Lengkap</option>
-                        <option>Selisih</option>
-                      </select>
-                      <input className="input" placeholder="Qty" type="number" value={row.temuan} disabled={!canEdit} onChange={(e) => updateStockRow(i, "temuan", e.target.value)} style={{ fontSize: 12.5 }} />
-                      <input className="input" placeholder="Keterangan" value={row.keterangan} disabled={!canEdit} onChange={(e) => updateStockRow(i, "keterangan", e.target.value)} style={{ fontSize: 12.5 }} />
-                      {canEdit && <span onClick={() => removeStockRow(i)} style={{ cursor: "pointer", color: "var(--danger-text)", fontSize: 18, lineHeight: "38px" }}>&times;</span>}
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
 
-            {/* Section 2: Inventaris */}
+            {/* Section 2: Inventaris (checklist tetap) */}
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
-                <div style={{ fontWeight: 700, fontSize: 14 }}>2. Audit Inventaris</div>
-                {canEdit && <button className="btn-ghost" onClick={addInventarisRow} style={{ fontSize: 12 }}>+ Tambah Baris</button>}
-              </div>
-              {inventaris.length === 0 ? (
-                <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>Belum ada baris. {canEdit && 'Klik "+ Tambah Baris" buat mulai.'}</div>
-              ) : (
-                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                  {inventaris.map((row, i) => {
-                    const key = `inv-${i}`;
-                    return (
-                      <div key={i} style={{ background: "var(--surface-alt)", padding: 12, borderRadius: 8 }}>
-                        <div style={{ display: "grid", gridTemplateColumns: "1.5fr 130px 1.5fr auto", gap: 8, alignItems: "start", marginBottom: 8 }}>
-                          <input className="input" placeholder="Nama Aset" value={row.nama} disabled={!canEdit} onChange={(e) => updateInventarisRow(i, "nama", e.target.value)} style={{ fontSize: 12.5 }} />
-                          <select className="input" value={row.status} disabled={!canEdit} onChange={(e) => updateInventarisRow(i, "status", e.target.value)} style={{ fontSize: 12.5 }}>
-                            <option>Sesuai</option>
-                            <option>Tidak Sesuai</option>
-                          </select>
-                          <input className="input" placeholder="Keterangan" value={row.keterangan} disabled={!canEdit} onChange={(e) => updateInventarisRow(i, "keterangan", e.target.value)} style={{ fontSize: 12.5 }} />
-                          {canEdit && <span onClick={() => removeInventarisRow(i)} style={{ cursor: "pointer", color: "var(--danger-text)", fontSize: 18, lineHeight: "38px" }}>&times;</span>}
-                        </div>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>2. Audit Inventaris</div>
+              <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginBottom: 12 }}>10 kategori tetap &mdash; isi status dan keterangan tiap baris</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {INVENTARIS_CATEGORIES.map((cat) => {
+                  const row = inventaris[cat] || { status: "Berfungsi", keterangan: "", photos: [] };
+                  const key = `inv-${cat}`;
+                  const rusak = row.status === "Rusak";
+                  return (
+                    <div key={cat} style={{ background: "var(--surface-alt)", padding: 12, borderRadius: 8 }}>
+                      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 120px 1.6fr", gap: 8, alignItems: "start", marginBottom: rusak ? 8 : 0 }}>
+                        <div style={{ fontSize: 13, fontWeight: 600, paddingTop: 8 }}>{cat}</div>
+                        <select className="input" value={row.status} disabled={!canEdit} onChange={(e) => updateInventaris(cat, "status", e.target.value)} style={{ fontSize: 12.5 }}>
+                          <option>Berfungsi</option>
+                          <option>Rusak</option>
+                        </select>
+                        <input className="input" placeholder="Keterangan" value={row.keterangan} disabled={!canEdit} onChange={(e) => updateInventaris(cat, "keterangan", e.target.value)} style={{ fontSize: 12.5 }} />
+                      </div>
+                      {rusak && (
                         <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                           {(row.photos || []).map((m, mi) => (
                             <div key={mi} style={{ position: "relative" }}>
@@ -437,22 +504,22 @@ export default function BeritaAcara({ profile }) {
                                 <img src={m.url} alt="" style={{ width: 60, height: 60, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border)" }} />
                               )}
                               {canEdit && (
-                                <span onClick={() => removeInventarisMedia(i, mi)} style={{ position: "absolute", top: -5, right: -5, width: 16, height: 16, borderRadius: "50%", background: "var(--danger-text)", color: "#fff", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>&times;</span>
+                                <span onClick={() => removeInventarisMedia(cat, mi)} style={{ position: "absolute", top: -5, right: -5, width: 16, height: 16, borderRadius: "50%", background: "var(--danger-text)", color: "#fff", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>&times;</span>
                               )}
                             </div>
                           ))}
                           {canEdit && (
                             <label style={{ width: 60, height: 60, display: "flex", alignItems: "center", justifyContent: "center", border: "1px dashed var(--border)", borderRadius: 6, cursor: "pointer", fontSize: 9.5, color: "var(--text-faint)", textAlign: "center" }}>
                               {uploadingKey === key ? "..." : "+ Foto/Video"}
-                              <input type="file" accept="image/*,video/*" multiple style={{ display: "none" }} disabled={uploadingKey === key} onChange={(e) => { if (e.target.files?.length) uploadInventarisMedia(i, e.target.files); e.target.value = ""; }} />
+                              <input type="file" accept="image/*,video/*" multiple style={{ display: "none" }} disabled={uploadingKey === key} onChange={(e) => { if (e.target.files?.length) uploadInventarisMedia(cat, e.target.files); e.target.value = ""; }} />
                             </label>
                           )}
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             {/* Footer */}
@@ -468,6 +535,34 @@ export default function BeritaAcara({ profile }) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove }) {
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+        <div style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)" }}>{title}</div>
+        {canEdit && <button className="btn-ghost" onClick={onAdd} style={{ fontSize: 12 }}>+ Tambah Baris</button>}
+      </div>
+      {rows.length === 0 ? (
+        <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Belum ada baris.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {rows.map((row, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "1.8fr 120px 1.8fr auto", gap: 8, alignItems: "center", background: "var(--surface-alt)", padding: 10, borderRadius: 8 }}>
+              <input className="input" placeholder="Nama Barang/Brand" value={row.nama} disabled={!canEdit} onChange={(e) => onUpdate(i, "nama", e.target.value)} style={{ fontSize: 12.5 }} />
+              <select className="input" value={row.status} disabled={!canEdit} onChange={(e) => onUpdate(i, "status", e.target.value)} style={{ fontSize: 12.5 }}>
+                <option>Lengkap</option>
+                <option>Selisih</option>
+              </select>
+              <input className="input" placeholder="Keterangan" value={row.keterangan} disabled={!canEdit} onChange={(e) => onUpdate(i, "keterangan", e.target.value)} style={{ fontSize: 12.5 }} />
+              {canEdit && <span onClick={() => onRemove(i)} style={{ cursor: "pointer", color: "var(--danger-text)", fontSize: 18, textAlign: "center" }}>&times;</span>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
