@@ -33,6 +33,7 @@ export default function SopAuditCabang({ profile }) {
   const [selectedBranch, setSelectedBranch] = useState(null); // objek branch
   const [existingRow, setExistingRow] = useState(null); // record audit_generic kalau sudah ada utk periode ini
   const [checklist, setChecklist] = useState(emptyChecklist());
+  const [tidakVisit, setTidakVisit] = useState(false);
   const [notes, setNotes] = useState({});
   const [photos, setPhotos] = useState({}); // { catId_idx: url }
   const [uploadingKey, setUploadingKey] = useState(null);
@@ -72,12 +73,14 @@ export default function SopAuditCabang({ profile }) {
       setChecklist({ ...emptyChecklist(), ...(data.data?.checks || {}) });
       setNotes(data.data?.notes || {});
       setPhotos(normalizePhotos(data.data?.photos));
+      setTidakVisit(!!data.data?.tidak_visit);
       setAuditDate(data.data?.audit_date || (period === nowPeriode() ? todayInputValue() : period + "-01"));
     } else {
       setExistingRow(null);
       setChecklist(emptyChecklist());
       setNotes({});
       setPhotos({});
+      setTidakVisit(false);
       setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
     }
     setLoadingRecord(false);
@@ -168,6 +171,7 @@ export default function SopAuditCabang({ profile }) {
       setChecklist(emptyChecklist());
       setNotes({});
       setPhotos({});
+      setTidakVisit(false);
       setSaved(false);
       setAllRecords((prev) => prev.filter((r) => r.id !== existingRow.id));
     } catch (err) {
@@ -195,16 +199,19 @@ export default function SopAuditCabang({ profile }) {
         period,
         status: "submitted",
         submitted_by: user.id,
-        data: {
-          audit_date: auditDate,
-          cats,
-          checks: checklist,
-          notes: cleanNotes,
-          photos,
-          done: totalDone,
-          score: weightedPct,
-          auditor_name: profile?.full_name || null,
-        },
+        data: tidakVisit
+          ? { audit_date: auditDate, tidak_visit: true, auditor_name: profile?.full_name || null }
+          : {
+              audit_date: auditDate,
+              tidak_visit: false,
+              cats,
+              checks: checklist,
+              notes: cleanNotes,
+              photos,
+              done: totalDone,
+              score: weightedPct,
+              auditor_name: profile?.full_name || null,
+            },
       };
 
       const { data, error: err } = await supabase
@@ -251,18 +258,21 @@ export default function SopAuditCabang({ profile }) {
             });
 
             const total = branches.length;
+            const tidakVisitCount = branches.filter((b) => rowsByBranch[b.id]?.data?.tidak_visit).length;
             const curList = branches.map((b) => {
               const row = rowsByBranch[b.id];
-              return { branch: b, row, score: row ? calcWeightedFromRecord(row.data) : null };
-            }).filter((x) => x.row);
+              if (!row || row.data?.tidak_visit) return null;
+              return { branch: b, row, score: calcWeightedFromRecord(row.data) };
+            }).filter(Boolean);
             const prevList = branches.map((b) => {
               const row = prevRowsByBranch[b.id];
-              return { branch: b, row, score: row ? calcWeightedFromRecord(row.data) : null };
-            }).filter((x) => x.row);
+              if (!row || row.data?.tidak_visit) return null;
+              return { branch: b, row, score: calcWeightedFromRecord(row.data) };
+            }).filter(Boolean);
 
             const auditedCount = curList.length;
             const coverageTrend = total > 0 ? Math.round(((auditedCount - prevList.length) / total) * 100) : 0;
-            const belumCount = total - auditedCount;
+            const belumCount = total - auditedCount - tidakVisitCount;
 
             const avgScore = auditedCount ? Math.round(curList.reduce((s, x) => s + x.score, 0) / auditedCount) : null;
             const avgScorePrev = prevList.length ? Math.round(prevList.reduce((s, x) => s + x.score, 0) / prevList.length) : null;
@@ -291,7 +301,7 @@ export default function SopAuditCabang({ profile }) {
               <>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 14, marginBottom: 20 }}>
                   <KpiCard label="Cabang Diaudit" value={`${auditedCount} / ${total}`} trend={coverageTrend} trendGoodDirection="up" sub={periodeLabel(viewPeriod)} iconColor="#7c3aed" />
-                  <KpiCard label="Belum Diaudit" value={belumCount} trend={-coverageTrend} trendGoodDirection="down" sub="perlu follow up" iconColor="#b07212" />
+                  <KpiCard label="Belum Diaudit" value={belumCount} trend={-coverageTrend} trendGoodDirection="down" sub={tidakVisitCount > 0 ? `+${tidakVisitCount} tidak visit` : "perlu follow up"} iconColor="#b07212" />
                   <KpiCard label="Rata-rata SOP" value={avgScore !== null ? `${avgScore}%` : "\u2014"} trend={avgTrend} trendGoodDirection="up" sub="periode aktif" iconColor="#2563eb" />
                   <KpiCard label={`Di Bawah ${ALERT_THRESHOLD}%`} value={alertCount} trend={alertTrend} trendGoodDirection="down" sub={alertCount === 0 ? "aman" : "perlu perhatian"} iconColor="#a32020" flat={alertCount === 0} />
                 </div>
@@ -322,21 +332,24 @@ export default function SopAuditCabang({ profile }) {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 12 }}>
               {branches.map((b) => {
                 const row = rowsByBranch[b.id];
-                const score = row ? calcWeightedFromRecord(row.data) : null;
+                const isTidakVisit = row?.data?.tidak_visit;
+                const score = row && !isTidakVisit ? calcWeightedFromRecord(row.data) : null;
                 return (
                   <div
                     key={b.id}
                     onClick={() => pickBranch(b)}
                     style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", overflow: "hidden" }}
                   >
-                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: row ? scoreColor(score) : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
+                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: isTidakVisit ? "#888" : row ? scoreColor(score) : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
                       <div style={{ fontWeight: 600, fontSize: 14.5 }}>{b.name}</div>
                       {score !== null && score < ALERT_THRESHOLD && (
                         <span style={{ fontSize: 9.5, fontWeight: 700, color: "var(--danger-text)", background: "var(--danger-bg)", padding: "2px 7px", borderRadius: 20 }}>ALERT</span>
                       )}
                     </div>
-                    {row ? (
+                    {isTidakVisit ? (
+                      <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: "#88888822", color: "#888", fontSize: 11, fontWeight: 600 }}>Tidak Visit</span>
+                    ) : row ? (
                       <>
                         <div style={{ fontSize: 24, fontWeight: 800, color: scoreColor(score) }}>{score}%</div>
                         <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Skor SOP &middot; {periodeLabel(viewPeriod)}</div>
@@ -382,25 +395,37 @@ export default function SopAuditCabang({ profile }) {
           </div>
         </div>
 
+        {/* Toggle Tidak Visit */}
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>
+          <input type="checkbox" checked={tidakVisit} disabled={!canEdit} onChange={(e) => { setTidakVisit(e.target.checked); setSaved(false); }} />
+          Cabang ini tidak dikunjungi bulan ini (Tidak Visit)
+        </label>
+
         {/* Skor live */}
-        <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-          <div style={{ fontSize: 26, fontWeight: 800, color: scoreColor(weightedPct) }}>{weightedPct}%</div>
-          <div style={{ flex: 1 }}>
-            <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 4 }}>{totalDone} dari {TOTAL_ITEMS} poin terpenuhi (skor tertimbang)</div>
-            <div style={{ height: 6, background: "var(--bg-page)", borderRadius: 4, overflow: "hidden" }}>
-              <div style={{ height: "100%", width: `${weightedPct}%`, background: scoreColor(weightedPct), transition: "width .2s" }} />
+        {!tidakVisit && (
+          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
+            <div style={{ fontSize: 26, fontWeight: 800, color: scoreColor(weightedPct) }}>{weightedPct}%</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 4 }}>{totalDone} dari {TOTAL_ITEMS} poin terpenuhi (skor tertimbang)</div>
+              <div style={{ height: 6, background: "var(--bg-page)", borderRadius: 4, overflow: "hidden" }}>
+                <div style={{ height: "100%", width: `${weightedPct}%`, background: scoreColor(weightedPct), transition: "width .2s" }} />
+              </div>
             </div>
+            {weightedPct < ALERT_THRESHOLD && (
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--danger-text)", background: "var(--danger-bg)", padding: "4px 10px", borderRadius: 20 }}>DI BAWAH TARGET</span>
+            )}
           </div>
-          {weightedPct < ALERT_THRESHOLD && (
-            <span style={{ fontSize: 11, fontWeight: 700, color: "var(--danger-text)", background: "var(--danger-bg)", padding: "4px 10px", borderRadius: 20 }}>DI BAWAH TARGET</span>
-          )}
-        </div>
+        )}
       </div>
 
       {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
 
       <div style={{ padding: 24 }}>
-        {loadingRecord ? (
+        {tidakVisit ? (
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 24, textAlign: "center", color: "var(--text-faint)" }}>
+            Cabang ini ditandai <b>Tidak Visit</b> untuk periode {periodeLabel(period)}. Checklist disembunyikan. Uncheck kotak di atas kalau mau isi checklist.
+          </div>
+        ) : loadingRecord ? (
           <div style={{ color: "var(--text-secondary)" }}>Memuat data audit\u2026</div>
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>

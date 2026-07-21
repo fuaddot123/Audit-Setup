@@ -10,6 +10,7 @@ const MODULES = [
     key: "sop", label: "Audit SOP", ready: true, subs: [
       { key: "cabang", label: "Audit Cabang" },
       { key: "ranking", label: "Ranking Cabang" },
+      { key: "kepatuhan", label: "Kepatuhan SOP" },
       { key: "laporan", label: "Laporan Audit" },
     ],
   },
@@ -21,6 +22,7 @@ const MODULES = [
     ],
   },
   { key: "berita_acara", label: "Berita Acara", ready: true },
+  { key: "inventaris", label: "Inventaris", ready: true },
   {
     key: "pengajuan", label: "Form Pengajuan", ready: false, subs: [
       { key: "adjust", label: "Barang Adjust" },

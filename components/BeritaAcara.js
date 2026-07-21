@@ -20,26 +20,6 @@ function esc(s) {
 }
 function newStockRow() { return { nama: "", status: "Lengkap", keterangan: "" }; }
 
-const INVENTARIS_CATEGORIES = [
-  "Jaringan Internet", "Peralatan Kasir", "Peralatan Teknisi", "Audio Visual",
-  "Penerangan", "Listrik & Utilitas", "Peralatan Keamanan", "Furniture & Fixture",
-  "Kendaraan & Mesin", "Peralatan Kebersihan",
-];
-
-function freshInventaris() {
-  const obj = {};
-  INVENTARIS_CATEGORIES.forEach((cat) => { obj[cat] = { status: "Berfungsi", keterangan: "", photos: [] }; });
-  return obj;
-}
-function normalizeInventaris(raw) {
-  const fresh = freshInventaris();
-  if (!raw || Array.isArray(raw)) return fresh; // data lama format array -> reset ke checklist baru
-  INVENTARIS_CATEGORIES.forEach((cat) => {
-    if (raw[cat]) fresh[cat] = { status: raw[cat].status || "Berfungsi", keterangan: raw[cat].keterangan || "", photos: raw[cat].photos || [] };
-  });
-  return fresh;
-}
-
 export default function BeritaAcara({ profile }) {
   const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
 
@@ -55,14 +35,12 @@ export default function BeritaAcara({ profile }) {
   const [perlengkapan, setPerlengkapan] = useState("Laptop dan Scanner");
   const [stockKat1, setStockKat1] = useState([]);
   const [stockKat2, setStockKat2] = useState([]);
-  const [inventaris, setInventaris] = useState(freshInventaris());
   const [storeManagerName, setStoreManagerName] = useState("");
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(null);
   const [loadingRecord, setLoadingRecord] = useState(false);
-  const [uploadingKey, setUploadingKey] = useState(null);
 
   useEffect(() => { loadBranches(); }, []);
 
@@ -93,7 +71,6 @@ export default function BeritaAcara({ profile }) {
       setPerlengkapan(data.perlengkapan || "Laptop dan Scanner");
       setStockKat1(Array.isArray(data.stock_opname_kat1) ? data.stock_opname_kat1 : []);
       setStockKat2(Array.isArray(data.stock_opname_kat2) ? data.stock_opname_kat2 : []);
-      setInventaris(normalizeInventaris(data.inventaris));
       setStoreManagerName(data.store_manager_name || "");
     } else {
       setExistingRow(null);
@@ -102,7 +79,6 @@ export default function BeritaAcara({ profile }) {
       setPerlengkapan("Laptop dan Scanner");
       setStockKat1([]);
       setStockKat2([]);
-      setInventaris(freshInventaris());
       setStoreManagerName("");
     }
     setLoadingRecord(false);
@@ -122,53 +98,6 @@ export default function BeritaAcara({ profile }) {
   }
   function removeRow(setter, i) { setter((prev) => prev.filter((_, idx) => idx !== i)); setSaved(false); }
 
-  // ── Inventaris (checklist tetap) helpers ──
-  function updateInventaris(cat, field, val) {
-    setInventaris((prev) => ({ ...prev, [cat]: { ...prev[cat], [field]: val } }));
-    setSaved(false);
-  }
-
-  async function uploadInventarisMedia(cat, fileList) {
-    const files = Array.from(fileList || []);
-    if (!files.length || !selectedBranch) return;
-    const key = `inv-${cat}`;
-    setUploadingKey(key);
-    setError(null);
-    try {
-      const uploaded = [];
-      for (const file of files) {
-        const isImage = file.type.startsWith("image/");
-        const isVideo = file.type.startsWith("video/");
-        if (!isImage && !isVideo) continue;
-        const maxSize = isVideo ? 30 * 1024 * 1024 : 5 * 1024 * 1024;
-        if (file.size > maxSize) { setError(`Ukuran ${isVideo ? "video" : "foto"} maksimal ${isVideo ? "30MB" : "5MB"}.`); continue; }
-        const ext = file.name.split(".").pop() || (isVideo ? "mp4" : "jpg");
-        const safeCat = cat.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
-        const path = `berita-acara/${selectedBranch.id}/${viewPeriod}/${safeCat}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
-        const { error: upErr } = await supabase.storage.from("findings").upload(path, file, { upsert: true });
-        if (upErr) throw upErr;
-        const { data: pub } = supabase.storage.from("findings").getPublicUrl(path);
-        uploaded.push({ url: pub.publicUrl, type: isVideo ? "video" : "image" });
-      }
-      if (uploaded.length) {
-        setInventaris((prev) => ({ ...prev, [cat]: { ...prev[cat], photos: [...(prev[cat].photos || []), ...uploaded] } }));
-        setSaved(false);
-      }
-    } catch (err) {
-      setError("Gagal upload: " + err.message);
-    } finally {
-      setUploadingKey(null);
-    }
-  }
-  function removeInventarisMedia(cat, mediaIdx) {
-    setInventaris((prev) => {
-      const photos = [...(prev[cat].photos || [])];
-      photos.splice(mediaIdx, 1);
-      return { ...prev, [cat]: { ...prev[cat], photos } };
-    });
-    setSaved(false);
-  }
-
   async function saveRecord() {
     if (!canEdit) { setError("Kamu tidak punya izin untuk menyimpan."); return; }
     setSaving(true);
@@ -183,7 +112,6 @@ export default function BeritaAcara({ profile }) {
         perlengkapan,
         stock_opname_kat1: stockKat1,
         stock_opname_kat2: stockKat2,
-        inventaris,
         store_manager_name: storeManagerName,
         submitted_by: user.id,
         updated_at: new Date().toISOString(),
@@ -214,7 +142,6 @@ export default function BeritaAcara({ profile }) {
       setExistingRow(null);
       setStockKat1([]);
       setStockKat2([]);
-      setInventaris(freshInventaris());
       setSaved(false);
     } catch (err) {
       setError("Gagal menghapus: " + err.message);
@@ -243,30 +170,14 @@ export default function BeritaAcara({ profile }) {
 
     const stockSelisihCount = [...stockKat1, ...stockKat2].filter((r) => r.status === "Selisih").length;
     const stockTotalCount = stockKat1.length + stockKat2.length;
-    const invRusakCount = INVENTARIS_CATEGORIES.filter((c) => (inventaris[c] || {}).status === "Rusak").length;
-
-    const invRows = INVENTARIS_CATEGORIES.map((cat, i) => {
-      const row = inventaris[cat] || {};
-      const isRusak = row.status === "Rusak";
-      const media = (row.photos || []).map((m) => m.type === "video"
-        ? `<div style="width:34px;height:34px;background:#f0edf7;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:#7c3aed;">&#9654;</div>`
-        : `<img src="${esc(m.url)}" style="width:34px;height:34px;object-fit:cover;border-radius:5px;border:1px solid #ddd;" />`
-      ).join(" ") || "";
-      return `<tr style="${isRusak ? "background:#fff8f7;" : ""}">
-        <td style="text-align:center;color:#999;">${i + 1}</td>
-        <td style="font-weight:600;">${esc(cat)}</td>
-        <td style="text-align:center;">${pill(row.status || "Berfungsi", isRusak)}</td>
-        <td style="font-size:9px;color:#555;">${esc(row.keterangan) || "\u2014"}</td>
-        <td style="text-align:center;">${media || "\u2014"}</td>
-      </tr>`;
-    }).join("");
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Berita Acara ${esc(selectedBranch.name)}</title>
     <style>
       * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
       @page { size: A4; margin: 0; }
       body { font-family: Arial, Helvetica, sans-serif; color: #222; font-size: 11px; margin: 0; }
-      .page { padding: 16mm 14mm; }
+      html, body { height: 100%; }
+      body { width: 210mm; margin: 0 auto; min-height: 297mm; display: flex; flex-direction: column; }
       .hdr { display: flex; justify-content: space-between; align-items: center; background: linear-gradient(120deg,#2A1F52,#3d2a72); margin: 0 0 16px; padding: 16px 14mm; border-bottom: 4px solid #F4B740; }
       .hdr-left { display: flex; align-items: center; gap: 12px; }
       .hdr-badge { width: 36px; height: 36px; border-radius: 9px; background: #F4B740; color: #2A1F52; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 13px; flex-shrink: 0; }
@@ -284,7 +195,7 @@ export default function BeritaAcara({ profile }) {
       .info-box .v { font-size: 10.5px; font-weight: 700; color: #2A1F52; }
       .info-wide { border: 1px solid #e0d8f0; background: #f5f3fa; border-radius: 8px; padding: 8px 11px; margin-bottom: 14px; font-size: 10px; color: #2A1F52; }
       .info-wide b { color: #3c3489; }
-      .metric-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 14px 0; }
+      .metric-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 14px 0; }
       .metric-card { border-radius: 10px; padding: 10px 12px; border-left: 4px solid; background: #fafafd; }
       .metric-card .l { font-size: 7px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: #888; margin-bottom: 3px; }
       .metric-card .v { font-size: 18px; font-weight: 900; color: #2A1F52; }
@@ -294,13 +205,10 @@ export default function BeritaAcara({ profile }) {
       table.data { width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 4px; }
       table.data th { background: #f7f6fb; text-align: left; padding: 6px 8px; border-bottom: 2px solid #2A1F52; font-size: 9px; color: #2A1F52; text-transform: uppercase; letter-spacing: 0.03em; }
       table.data td { padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: middle; }
-      .sign { display: flex; justify-content: space-between; margin-top: 46px; text-align: center; page-break-inside: avoid; break-inside: avoid; }
+      .sign { display: flex; justify-content: space-between; text-align: center; page-break-inside: avoid; break-inside: avoid; margin-top: auto; padding-top: 40px; }
       .sign > div { width: 45%; font-size: 9.5px; font-weight: 800; color: #2A1F52; letter-spacing: 0.05em; }
       .sign .line { margin-top: 54px; border-top: 1.5px solid #2A1F52; padding-top: 5px; font-weight: 700; font-size: 11px; color: #222; }
       .footer { display: flex; justify-content: space-between; margin-top: 24px; padding-top: 8px; border-top: 1px solid #eee; font-size: 8px; color: #999; page-break-inside: avoid; break-inside: avoid; }
-      html, body { height: 100%; }
-      body { width: 210mm; margin: 0 auto; min-height: 297mm; display: flex; flex-direction: column; }
-      .sign { margin-top: auto; padding-top: 40px; }
     </style></head><body>
       <div class="hdr">
         <div class="hdr-left">
@@ -328,20 +236,13 @@ export default function BeritaAcara({ profile }) {
         <div class="metric-row">
           <div class="metric-card" style="border-color:#7c3aed;"><div class="l">Item Dicek (Stock Opname)</div><div class="v">${stockTotalCount}</div></div>
           <div class="metric-card" style="border-color:#a32020;"><div class="l">Selisih Ditemukan</div><div class="v">${stockSelisihCount}</div></div>
-          <div class="metric-card" style="border-color:#b07212;"><div class="l">Aset Rusak (Inventaris)</div><div class="v">${invRusakCount} / ${INVENTARIS_CATEGORIES.length}</div></div>
         </div>
 
-        <div class="sect"><span class="dot"></span>1. AUDIT STOCK OPNAME</div>
+        <div class="sect"><span class="dot"></span>AUDIT STOCK OPNAME</div>
         <div class="subsect">Kategori 1</div>
         ${stockTable(stockKat1)}
         <div class="subsect">Kategori 2</div>
         ${stockTable(stockKat2)}
-
-        <div class="sect"><span class="dot"></span>2. AUDIT INVENTARIS</div>
-        <table class="data">
-          <thead><tr><th style="width:26px;">No</th><th>Nama Aset</th><th style="width:90px;text-align:center;">Status</th><th>Keterangan</th><th style="width:90px;text-align:center;">Foto/Video</th></tr></thead>
-          <tbody>${invRows}</tbody>
-        </table>
 
         <div class="sign">
           <div>MENGETAHUI<div class="line">${esc(storeManagerName || "\u2014")}<br><span style="font-weight:400;font-size:9px;color:#888;">Store Manager ${esc(selectedBranch.name)}</span></div></div>
@@ -458,9 +359,9 @@ export default function BeritaAcara({ profile }) {
               </div>
             </div>
 
-            {/* Section 1: Stock Opname */}
+            {/* Section: Stock Opname */}
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>1. Audit Stock Opname</div>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>Audit Stock Opname</div>
 
               <StockSubSection title="Kategori 1" rows={stockKat1} canEdit={canEdit}
                 onAdd={() => addRow(setStockKat1)}
@@ -475,51 +376,8 @@ export default function BeritaAcara({ profile }) {
               </div>
             </div>
 
-            {/* Section 2: Inventaris (checklist tetap) */}
-            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 4 }}>2. Audit Inventaris</div>
-              <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginBottom: 12 }}>10 kategori tetap &mdash; isi status dan keterangan tiap baris</div>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {INVENTARIS_CATEGORIES.map((cat) => {
-                  const row = inventaris[cat] || { status: "Berfungsi", keterangan: "", photos: [] };
-                  const key = `inv-${cat}`;
-                  const rusak = row.status === "Rusak";
-                  return (
-                    <div key={cat} style={{ background: "var(--surface-alt)", padding: 12, borderRadius: 8 }}>
-                      <div style={{ display: "grid", gridTemplateColumns: "1.4fr 120px 1.6fr", gap: 8, alignItems: "start", marginBottom: rusak ? 8 : 0 }}>
-                        <div style={{ fontSize: 13, fontWeight: 600, paddingTop: 8 }}>{cat}</div>
-                        <select className="input" value={row.status} disabled={!canEdit} onChange={(e) => updateInventaris(cat, "status", e.target.value)} style={{ fontSize: 12.5 }}>
-                          <option>Berfungsi</option>
-                          <option>Rusak</option>
-                        </select>
-                        <input className="input" placeholder="Keterangan" value={row.keterangan} disabled={!canEdit} onChange={(e) => updateInventaris(cat, "keterangan", e.target.value)} style={{ fontSize: 12.5 }} />
-                      </div>
-                      {rusak && (
-                        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                          {(row.photos || []).map((m, mi) => (
-                            <div key={mi} style={{ position: "relative" }}>
-                              {m.type === "video" ? (
-                                <video src={m.url} style={{ width: 60, height: 60, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border)" }} muted />
-                              ) : (
-                                <img src={m.url} alt="" style={{ width: 60, height: 60, objectFit: "cover", borderRadius: 6, border: "1px solid var(--border)" }} />
-                              )}
-                              {canEdit && (
-                                <span onClick={() => removeInventarisMedia(cat, mi)} style={{ position: "absolute", top: -5, right: -5, width: 16, height: 16, borderRadius: "50%", background: "var(--danger-text)", color: "#fff", fontSize: 10, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer" }}>&times;</span>
-                              )}
-                            </div>
-                          ))}
-                          {canEdit && (
-                            <label style={{ width: 60, height: 60, display: "flex", alignItems: "center", justifyContent: "center", border: "1px dashed var(--border)", borderRadius: 6, cursor: "pointer", fontSize: 9.5, color: "var(--text-faint)", textAlign: "center" }}>
-                              {uploadingKey === key ? "..." : "+ Foto/Video"}
-                              <input type="file" accept="image/*,video/*" multiple style={{ display: "none" }} disabled={uploadingKey === key} onChange={(e) => { if (e.target.files?.length) uploadInventarisMedia(cat, e.target.files); e.target.value = ""; }} />
-                            </label>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
+            <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginBottom: 16 }}>
+              Cek kondisi aset (Jaringan Internet, Peralatan Kasir, dst) sekarang ada di modul terpisah: <b>Inventaris</b>.
             </div>
 
             {/* Footer */}

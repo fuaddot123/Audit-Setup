@@ -14,9 +14,7 @@ export default function SopLaporan() {
   const [targetRows, setTargetRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [busy, setBusy] = useState(false);
 
-  const [excelPeriod, setExcelPeriod] = useState(nowPeriode());
   const [pdfPeriod, setPdfPeriod] = useState(nowPeriode());
   const [pdfBranchIds, setPdfBranchIds] = useState([]);
 
@@ -57,123 +55,11 @@ export default function SopLaporan() {
   }
 
   // ── EXCEL: laporan 1 periode ──
-  async function exportExcel() {
-    setBusy(true);
-    setError(null);
-    try {
-      const XLSX = await import("xlsx");
-      const rows = [];
-      const noteRows = [];
-
-      branches.forEach((b) => {
-        const rec = latestFor(b.id, excelPeriod);
-        const rk = rankingRows.find((r) => r.branch_id === b.id && r.periode === excelPeriod);
-        const tg = targetRows.find((r) => r.branch_id === b.id && r.periode === excelPeriod);
-        const target = tg?.target_amount || 0;
-        const sales = rk?.sales_actual || 0;
-        const ach = sales && target ? Math.round((sales / target) * 100) : null;
-
-        const entry = {
-          Cabang: b.name,
-          Periode: periodeLabel(excelPeriod),
-          "Target Sales": target ? formatRupiah(target) : "\u2014",
-          "Sales Aktual": sales ? formatRupiah(sales) : "\u2014",
-          "Achievement %": ach !== null ? ach + "%" : "\u2014",
-          "CX Score": rk?.cx_score || "\u2014",
-          "Happiness Index": rk?.hi_score || "\u2014",
-        };
-
-        if (!rec) {
-          entry["Tanggal Audit"] = "\u2014";
-          entry["SOP %"] = "\u2014";
-          entry["Status"] = "Belum diaudit";
-        } else {
-          const w = calcWeightedFromRecord(rec.data);
-          const s = scoreInfo(w);
-          entry["Tanggal Audit"] = formatDate(rec.data?.audit_date);
-          entry["SOP %"] = w + "%";
-          entry["Auditor"] = rec.data?.auditor_name || "\u2014";
-          entry["Status"] = s.lbl;
-          if (rec.data?.cats) {
-            CATS.forEach((c) => {
-              const bd = rec.data.cats[c.id];
-              entry["SOP " + c.label] = bd ? `${bd.score}/${bd.total}` : "\u2014";
-            });
-          }
-          if (rec.data?.notes) {
-            Object.entries(rec.data.notes).forEach(([key, note]) => {
-              if (!note) return;
-              const idx = key.lastIndexOf("_");
-              const catId = key.slice(0, idx);
-              const itemIdx = parseInt(key.slice(idx + 1), 10);
-              const cat = CATS.find((c) => c.id === catId);
-              noteRows.push({
-                Cabang: b.name,
-                Periode: periodeLabel(excelPeriod),
-                "Tanggal Audit": formatDate(rec.data?.audit_date),
-                Kategori: cat?.label || "\u2014",
-                "Poin Checklist": cat?.items?.[itemIdx] || "\u2014",
-                Keterangan: note,
-                Auditor: rec.data?.auditor_name || "\u2014",
-              });
-            });
-          }
-        }
-        rows.push(entry);
-      });
-
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Laporan");
-      if (noteRows.length) {
-        XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(noteRows), "Keterangan Tidak Sesuai");
-      }
-      XLSX.writeFile(wb, `KLA_Audit_SOP_${periodeLabel(excelPeriod).replace(/\s+/g, "_")}.xlsx`);
-    } catch (err) {
-      setError("Gagal export Excel: " + err.message + (err.message?.includes("Cannot find module") ? " \u2014 jalankan `npm install xlsx` dulu di project kamu." : ""));
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  // ── EXCEL: seluruh riwayat semua periode ──
-  async function exportAllHistory() {
-    setBusy(true);
-    setError(null);
-    try {
-      const XLSX = await import("xlsx");
-      const rows = [];
-      sopRecords.forEach((rec) => {
-        const b = branches.find((x) => x.id === rec.branch_id);
-        if (!b) return;
-        const w = calcWeightedFromRecord(rec.data);
-        const s = scoreInfo(w);
-        rows.push({
-          Cabang: b.name,
-          "Periode Audit": periodeLabel(rec.period),
-          "Audit Period": rec.period,
-          "Tanggal Audit": formatDate(rec.data?.audit_date),
-          "SOP %": w + "%",
-          Poin: (rec.data?.done ?? "\u2014") + "/" + TOTAL_ITEMS,
-          Status: s.lbl,
-          Auditor: rec.data?.auditor_name || "\u2014",
-        });
-      });
-      if (!rows.length) { setError("Belum ada data audit sama sekali."); setBusy(false); return; }
-      rows.sort((a, b) => a.Cabang.localeCompare(b.Cabang, "id"));
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), "Seluruh Riwayat");
-      XLSX.writeFile(wb, "KLA_Audit_SOP_Semua_Riwayat.xlsx");
-    } catch (err) {
-      setError("Gagal export: " + err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
 
   // ── PDF: buka jendela cetak berisi ringkasan eksekutif + lampiran checklist ──
   function exportPDF() {
     setError(null);
-    const targets = branches.filter((b) => pdfBranchIds.includes(b.id) && latestFor(b.id, pdfPeriod));
+    const targets = branches.filter((b) => pdfBranchIds.includes(b.id) && latestFor(b.id, pdfPeriod) && !latestFor(b.id, pdfPeriod).data?.tidak_visit);
 
     if (!targets.length) { setError("Tidak ada cabang dengan data audit pada periode ini."); return; }
 
@@ -190,7 +76,8 @@ export default function SopLaporan() {
     if (!win) { setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF."); return; }
     win.document.write(`<!DOCTYPE html><html><head><title>Laporan Audit SOP</title><meta charset="utf-8">
       <style>
-        * { box-sizing: border-box; }
+        * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        @page { margin: 8mm; }
         body { font-family: Arial, Helvetica, sans-serif; color: #222; margin: 0; }
         .page { padding: 28px 34px; page-break-after: always; }
 
@@ -405,7 +292,7 @@ export default function SopLaporan() {
 
     const rowsData = scopeBranches.map((b) => {
       const rec = latestFor(b.id, pdfPeriod);
-      if (!rec) return { branch: b, rec: null };
+      if (!rec || rec.data?.tidak_visit) return { branch: b, rec: null, tidakVisit: !!rec?.data?.tidak_visit };
       const w = calcWeightedFromRecord(rec.data);
       const tiers = calcTierScores(rec.data);
       return { branch: b, rec, score: w, tiers, info: scoreInfo(w) };
@@ -491,21 +378,12 @@ export default function SopLaporan() {
     <div style={{ flex: 1 }}>
       <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)" }}>
         <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Laporan Audit</div>
-        <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Export hasil audit SOP ke Excel atau cetak PDF per cabang</div>
+        <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Cetak hasil audit SOP jadi PDF, per cabang atau ringkasan semua cabang</div>
       </div>
 
       {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
 
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16, maxWidth: 640 }}>
-        <ReportCard title="Export Excel Bulanan" desc="Berisi audit SOP, skor Sales/CX/HI, dan catatan poin yang tidak sesuai untuk 1 periode.">
-          <Row label="Periode">
-            <select className="input" value={excelPeriod} onChange={(e) => setExcelPeriod(e.target.value)}>
-              {periodOptions.map((p) => <option key={p} value={p}>{periodeLabel(p)}</option>)}
-            </select>
-          </Row>
-          <button className="btn" disabled={busy} onClick={exportExcel}>{busy ? "Memproses\u2026" : "Download Excel (.xlsx)"}</button>
-        </ReportCard>
-
         <ReportCard title="Export PDF Audit" desc="Ringkasan eksekutif + lampiran checklist lengkap, siap dicetak/disimpan sebagai PDF lewat dialog print browser.">
           <Row label="Periode">
             <select className="input" value={pdfPeriod} onChange={(e) => setPdfPeriod(e.target.value)}>
@@ -519,10 +397,6 @@ export default function SopLaporan() {
             <button className="btn" onClick={exportPDF}>Cetak Detail per Cabang</button>
             <button className="btn-ghost" onClick={exportSummaryPDF}>Cetak Ringkasan Semua Cabang</button>
           </div>
-        </ReportCard>
-
-        <ReportCard title="Export Semua Riwayat" desc="Seluruh riwayat audit SOP dari semua periode dan cabang, dalam satu file.">
-          <button className="btn-ghost" disabled={busy} onClick={exportAllHistory}>{busy ? "Memproses\u2026" : "Download Semua Riwayat"}</button>
         </ReportCard>
       </div>
     </div>

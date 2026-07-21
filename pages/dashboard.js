@@ -4,6 +4,7 @@ import { supabase } from "../lib/supabaseClient";
 import Sidebar from "../components/Sidebar";
 import RadarLogo from "../components/RadarLogo";
 import AuditKeuangan from "../components/AuditKeuangan";
+import AuditInventaris from "../components/AuditInventaris";
 import Timeline from "../components/Timeline";
 import AuditSOP from "../components/AuditSOP";
 import AuditStok from "../components/AuditStok";
@@ -47,6 +48,8 @@ export default function Dashboard() {
       <Sidebar active={active} activeSub={activeSub} onSelect={handleSelect} profile={profile} />
       {active === "keuangan" ? (
         <AuditKeuangan profile={profile} />
+      ) : active === "inventaris" ? (
+        <AuditInventaris profile={profile} />
       ) : active === "timeline" ? (
         <Timeline />
       ) : active === "sop" ? (
