@@ -235,11 +235,11 @@ export default function AuditInventaris({ profile }) {
       <script>
         window.onload = () => {
           const zoomEl = document.getElementById("pdfZoom");
-          const targetHeight = 1123 - 38 * 2;
+          const targetHeight = (1123 - 38 * 2) * 0.96; // 4% buffer aman biar nggak numpuk ke halaman 2
           const actualHeight = zoomEl.scrollHeight;
-          if (actualHeight > targetHeight) {
-            zoomEl.style.zoom = targetHeight / actualHeight;
-          }
+          let zoom = targetHeight / actualHeight;
+          zoom = Math.min(zoom, 1.6);
+          zoomEl.style.zoom = zoom;
           setTimeout(() => window.print(), 350);
         };
       <\/script>

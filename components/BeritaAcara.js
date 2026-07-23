@@ -155,16 +155,19 @@ export default function BeritaAcara({ profile }) {
     const printDate = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
 
     function pill(text, bad) {
-      return `<span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:${bad ? "#fdecea" : "#e7f7f0"};color:${bad ? "#a32020" : "#1a9e6e"};">${esc(text)}</span>`;
+      return `<span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:${bad ? "#f7c1c1" : "#c0dd97"};color:${bad ? "#501313" : "#173404"};">${esc(text)}</span>`;
     }
 
     function stockTable(title, rows) {
-      const body = rows.map((r, i) => `<tr style="${r.status === "Selisih" ? "background:#fff8f7;" : ""}">
+      const body = rows.map((r, i) => {
+        const isBad = r.status === "Selisih";
+        return `<tr style="background:${isBad ? "#fcebeb" : "#fff"};border-left:3px solid ${isBad ? "#e24b4a" : "#97c459"};">
         <td style="text-align:center;color:#999;">${i + 1}</td>
-        <td style="font-weight:600;">${esc(r.nama) || "\u2014"}</td>
-        <td style="text-align:center;">${pill(r.status, r.status === "Selisih")}</td>
+        <td style="font-weight:600;">${isBad ? "&#10007; " : "&#10003; "}${esc(r.nama) || "\u2014"}</td>
+        <td style="text-align:center;">${pill(r.status, isBad)}</td>
         <td style="font-size:9px;color:#555;">${esc(r.keterangan) || "\u2014"}</td>
-      </tr>`).join("") || `<tr><td colspan="4" style="text-align:center;color:#999;padding:14px;">Tidak ada baris diisi</td></tr>`;
+      </tr>`;
+      }).join("") || `<tr><td colspan="4" style="text-align:center;color:#999;padding:14px;">Tidak ada baris diisi</td></tr>`;
       return `<table class="data"><thead>
         <tr><th colspan="4" class="subsect-th"><span>${esc(title)}</span><span class="subsect-brand">KLA Computer &middot; Berita Acara &middot; ${esc(selectedBranch.name)}</span></th></tr>
         <tr><th style="width:26px;">No</th><th>Nama Barang / Brand</th><th style="width:90px;text-align:center;">Status</th><th>Keterangan</th></tr>
@@ -173,6 +176,7 @@ export default function BeritaAcara({ profile }) {
 
     const stockSelisihCount = [...stockKat1, ...stockKat2].filter((r) => r.status === "Selisih").length;
     const stockTotalCount = stockKat1.length + stockKat2.length;
+    const problemItems = [...stockKat1, ...stockKat2].filter((r) => r.status === "Selisih");
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Berita Acara ${esc(selectedBranch.name)}</title>
     <style>
@@ -198,10 +202,14 @@ export default function BeritaAcara({ profile }) {
       .info-box .v { font-size: 10.5px; font-weight: 700; color: #2A1F52; }
       .info-wide { border: 1px solid #e0d8f0; background: #f5f3fa; border-radius: 8px; padding: 8px 11px; margin-bottom: 14px; font-size: 10px; color: #2A1F52; }
       .info-wide b { color: #3c3489; }
-      .metric-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin: 14px 0; }
-      .metric-card { border-radius: 10px; padding: 10px 12px; border-left: 4px solid; background: #fafafd; }
-      .metric-card .l { font-size: 7px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: #888; margin-bottom: 3px; }
-      .metric-card .v { font-size: 18px; font-weight: 900; color: #2A1F52; }
+      .metric-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0; }
+      .metric-card { border-radius: 10px; padding: 10px 12px; background: #fafafd; }
+      .metric-card .l { font-size: 6.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: #888; margin-bottom: 3px; }
+      .metric-card .v { font-size: 17px; font-weight: 900; color: #2A1F52; }
+      .problem-box { background: #faece7; border-radius: 8px; padding: 10px 13px; margin-bottom: 14px; }
+      .problem-box .t { font-size: 10px; font-weight: 800; color: #712b13; margin-bottom: 6px; }
+      .problem-box ul { margin: 0; padding-left: 16px; font-size: 9.5px; color: #4a1b0c; }
+      .problem-box li { margin-bottom: 2px; }
       .sect { background: #2A1F52; color: #fff; font-weight: 700; padding: 7px 11px; font-size: 11px; margin-top: 16px; border-radius: 6px 6px 0 0; display: flex; align-items: center; gap: 6px; }
       .sect .dot { width: 6px; height: 6px; border-radius: 50%; background: #F4B740; }
       table.data th.subsect-th { background: #f0edf7; color: #3c3489; font-weight: 700; padding: 8px 11px; font-size: 9.5px; letter-spacing: 0.02em; text-align: left; text-transform: none; border-bottom: none; }
@@ -209,9 +217,9 @@ export default function BeritaAcara({ profile }) {
       table.data { width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 4px; }
       table.data th { background: #f7f6fb; text-align: left; padding: 6px 8px; border-bottom: 2px solid #2A1F52; font-size: 9px; color: #2A1F52; text-transform: uppercase; letter-spacing: 0.03em; }
       table.data td { padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: middle; }
-      .sign { display: flex; justify-content: space-between; text-align: center; page-break-inside: avoid; break-inside: avoid; margin-top: 50px; padding-top: 0; }
-      .sign > div { width: 45%; font-size: 9.5px; font-weight: 800; color: #2A1F52; letter-spacing: 0.05em; }
-      .sign .line { margin-top: 54px; border-top: 1.5px solid #2A1F52; padding-top: 5px; font-weight: 700; font-size: 11px; color: #222; }
+      .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; text-align: center; page-break-inside: avoid; break-inside: avoid; margin-top: 24px; }
+      .sign > div { border: 1px solid #ddd; border-radius: 8px; padding: 10px; font-size: 9.5px; font-weight: 800; color: #2A1F52; letter-spacing: 0.05em; }
+      .sign .line { margin-top: 30px; border-top: 1.5px solid #2A1F52; padding-top: 5px; font-weight: 700; font-size: 11px; color: #222; }
       .footer { display: flex; justify-content: space-between; margin-top: 24px; padding-top: 8px; border-top: 1px solid #eee; font-size: 8px; color: #999; page-break-inside: avoid; break-inside: avoid; }
     </style></head><body><div id="pdfZoom">
       <div class="hdr">
@@ -237,9 +245,16 @@ export default function BeritaAcara({ profile }) {
         </div>
 
         <div class="metric-row">
-          <div class="metric-card" style="border-color:#7c3aed;"><div class="l">Item Dicek (Stock Opname)</div><div class="v">${stockTotalCount}</div></div>
-          <div class="metric-card" style="border-color:#a32020;"><div class="l">Selisih Ditemukan</div><div class="v">${stockSelisihCount}</div></div>
+          <div class="metric-card"><div class="l">Item Dicek</div><div class="v">${stockTotalCount}</div></div>
+          <div class="metric-card" style="background:#fcebeb;"><div class="l" style="color:#a32020;">Selisih</div><div class="v" style="color:#a32020;">${stockSelisihCount}</div></div>
+          <div class="metric-card" style="background:#eaf3de;"><div class="l" style="color:#27500a;">% Lengkap</div><div class="v" style="color:#27500a;">${stockTotalCount ? Math.round(((stockTotalCount - stockSelisihCount) / stockTotalCount) * 100) : 0}%</div></div>
+          <div class="metric-card"><div class="l">Auditor</div><div class="v" style="font-size:12px;">${esc(profile?.full_name || "\u2014")}</div></div>
         </div>
+
+        ${problemItems.length ? `<div class="problem-box">
+          <div class="t">&#9888; ITEM BERMASALAH &mdash; PERLU TINDAK LANJUT</div>
+          <ul>${problemItems.map((p) => `<li>${esc(p.nama) || "(tanpa nama)"} ${p.keterangan ? "&mdash; " + esc(p.keterangan) : ""}</li>`).join("")}</ul>
+        </div>` : ""}
 
         <div class="sect"><span class="dot"></span>AUDIT STOCK OPNAME</div>
         ${stockTable("Kategori 1", stockKat1)}
@@ -261,11 +276,11 @@ export default function BeritaAcara({ profile }) {
         window.onload = () => {
           const zoomEl = document.getElementById("pdfZoom");
           // A4 = ~1123px @96dpi. Margin "Default" Chrome \u2248 10mm (~38px) atas+bawah.
-          const targetHeight = 1123 - 38 * 2;
+          const targetHeight = (1123 - 38 * 2) * 0.96; // 4% buffer aman biar nggak numpuk ke halaman 2
           const actualHeight = zoomEl.scrollHeight;
-          if (actualHeight > targetHeight) {
-            zoomEl.style.zoom = targetHeight / actualHeight;
-          }
+          let zoom = targetHeight / actualHeight;
+          zoom = Math.min(zoom, 1.6);
+          zoomEl.style.zoom = zoom;
           setTimeout(() => window.print(), 350);
         };
       <\/script>
@@ -302,13 +317,27 @@ export default function BeritaAcara({ profile }) {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 12 }}>
               {branches.map((b) => {
                 const row = rowsByBranch[b.id];
+                const kat1 = row?.stock_opname_kat1 || [];
+                const kat2 = row?.stock_opname_kat2 || [];
+                const totalItem = kat1.length + kat2.length;
+                const selisihCount = [...kat1, ...kat2].filter((r) => r.status === "Selisih").length;
                 return (
                   <div key={b.id} onClick={() => pickBranch(b)} style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", overflow: "hidden" }}>
-                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: row ? "#1a9e6e" : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
-                    <div style={{ fontWeight: 600, fontSize: 14.5 }}>{b.name}</div>
-                    <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>
-                      {row ? "Sudah dibuat \u00b7 Lihat/Edit \u2192" : "Belum ada \u00b7 Mulai \u2192"}
-                    </div>
+                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: row ? (selisihCount > 0 ? "#a32020" : "#1a9e6e") : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
+                    <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: row ? 8 : 4 }}>{b.name}</div>
+                    {row ? (
+                      <>
+                        <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                          <span style={{ fontSize: 22, fontWeight: 800, color: selisihCount > 0 ? "#a32020" : "#1a9e6e" }}>{selisihCount}</span>
+                          <span style={{ fontSize: 11, color: "var(--text-faint)" }}>selisih dari {totalItem} item</span>
+                        </div>
+                        <span style={{ display: "inline-block", marginTop: 6, padding: "2px 9px", borderRadius: 20, background: selisihCount > 0 ? "#a3202022" : "#1a9e6e22", color: selisihCount > 0 ? "#a32020" : "#1a9e6e", fontSize: 10.5, fontWeight: 600 }}>
+                          {selisihCount > 0 ? "Ada temuan" : "Semua lengkap"}
+                        </span>
+                      </>
+                    ) : (
+                      <div style={{ fontSize: 11.5, fontWeight: 400, color: "var(--text-faint)" }}>Belum ada &middot; Mulai &rarr;</div>
+                    )}
                   </div>
                 );
               })}
@@ -352,9 +381,18 @@ export default function BeritaAcara({ profile }) {
           <div style={{ color: "var(--text-secondary)" }}>Memuat data\u2026</div>
         ) : (
           <>
+            {/* Progress steps */}
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 20 }}>
+              <StepPill icon="📋" label="Informasi" done />
+              <StepLine />
+              <StepPill icon="📦" label="Stock Opname" done={stockKat1.length + stockKat2.length > 0} />
+              <StepLine />
+              <StepPill icon="✍️" label="Tanda Tangan" done={!!storeManagerName} />
+            </div>
+
             {/* Header info */}
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Informasi Audit</div>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>📋 Informasi Audit</div>
               <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 12 }}>
                 <Field label="Waktu Audit">
                   <input className="input" placeholder="mis. 13 - 14 Juli 2026" value={waktuAudit} disabled={!canEdit} onChange={(e) => { setWaktuAudit(e.target.value); setSaved(false); }} />
@@ -373,9 +411,23 @@ export default function BeritaAcara({ profile }) {
               </div>
             </div>
 
+            {/* Ringkasan live */}
+            {(() => {
+              const allRows = [...stockKat1, ...stockKat2];
+              const selisihCount = allRows.filter((r) => r.status === "Selisih").length;
+              return (
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: selisihCount > 0 ? "var(--danger-bg)" : "var(--success-bg)", border: `1px solid ${selisihCount > 0 ? "rgba(239,68,68,0.35)" : "rgba(26,158,110,0.35)"}`, borderRadius: 10, padding: "10px 16px", marginBottom: 16 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: selisihCount > 0 ? "var(--danger-text)" : "var(--success-text)" }}>
+                    {allRows.length} item dicek &middot; {selisihCount === 0 ? "semua lengkap" : `${selisihCount} selisih ditemukan`}
+                  </span>
+                  <span style={{ fontSize: 20, fontWeight: 800, color: selisihCount > 0 ? "var(--danger-text)" : "var(--success-text)" }}>{selisihCount}</span>
+                </div>
+              );
+            })()}
+
             {/* Section: Stock Opname */}
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>Audit Stock Opname</div>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>📦 Audit Stock Opname</div>
 
               <StockSubSection title="Kategori 1" rows={stockKat1} canEdit={canEdit}
                 onAdd={() => addRow(setStockKat1)}
@@ -396,7 +448,7 @@ export default function BeritaAcara({ profile }) {
 
             {/* Footer */}
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>Tanda Tangan</div>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 12 }}>✍️ Tanda Tangan</div>
               <div style={{ maxWidth: 320 }}>
                 <Field label="Nama Store Manager">
                   <input className="input" placeholder="Nama lengkap" value={storeManagerName} disabled={!canEdit} onChange={(e) => { setStoreManagerName(e.target.value); setSaved(false); }} />
@@ -422,21 +474,38 @@ function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove }) {
         <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Belum ada baris.</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {rows.map((row, i) => (
-            <div key={i} style={{ display: "grid", gridTemplateColumns: "1.8fr 120px 1.8fr auto", gap: 8, alignItems: "center", background: "var(--surface-alt)", padding: 10, borderRadius: 8 }}>
-              <input className="input" placeholder="Nama Barang/Brand" value={row.nama} disabled={!canEdit} onChange={(e) => onUpdate(i, "nama", e.target.value)} style={{ fontSize: 12.5 }} />
-              <select className="input" value={row.status} disabled={!canEdit} onChange={(e) => onUpdate(i, "status", e.target.value)} style={{ fontSize: 12.5 }}>
-                <option>Lengkap</option>
-                <option>Selisih</option>
-              </select>
-              <input className="input" placeholder="Keterangan" value={row.keterangan} disabled={!canEdit} onChange={(e) => onUpdate(i, "keterangan", e.target.value)} style={{ fontSize: 12.5 }} />
-              {canEdit && <span onClick={() => onRemove(i)} style={{ cursor: "pointer", color: "var(--danger-text)", fontSize: 18, textAlign: "center" }}>&times;</span>}
-            </div>
-          ))}
+          {rows.map((row, i) => {
+            const isSelisih = row.status === "Selisih";
+            return (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "1.8fr 120px 1.8fr auto", gap: 8, alignItems: "center", background: "var(--surface-alt)", padding: "10px 10px 10px 12px", borderRadius: 8, borderLeft: `3px solid ${isSelisih ? "#a32020" : "#1a9e6e55"}` }}>
+                <input className="input" placeholder="Nama Barang/Brand" value={row.nama} disabled={!canEdit} onChange={(e) => onUpdate(i, "nama", e.target.value)} style={{ fontSize: 12.5 }} />
+                <select className="input" value={row.status} disabled={!canEdit} onChange={(e) => onUpdate(i, "status", e.target.value)} style={{ fontSize: 12.5, fontWeight: isSelisih ? 700 : 400, color: isSelisih ? "var(--danger-text)" : undefined }}>
+                  <option>Lengkap</option>
+                  <option>Selisih</option>
+                </select>
+                <input className="input" placeholder="Keterangan" value={row.keterangan} disabled={!canEdit} onChange={(e) => onUpdate(i, "keterangan", e.target.value)} style={{ fontSize: 12.5 }} />
+                {canEdit && <span onClick={() => onRemove(i)} style={{ cursor: "pointer", color: "var(--danger-text)", fontSize: 18, textAlign: "center" }}>&times;</span>}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
   );
+}
+
+function StepPill({ icon, label, done }) {
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 20, background: done ? "#1a9e6e18" : "var(--surface-alt)", border: `1px solid ${done ? "rgba(26,158,110,0.4)" : "var(--border)"}` }}>
+      <span style={{ fontSize: 13 }}>{icon}</span>
+      <span style={{ fontSize: 12, fontWeight: 600, color: done ? "#1a9e6e" : "var(--text-secondary)" }}>{label}</span>
+      {done && <span style={{ fontSize: 11, color: "#1a9e6e" }}>&#10003;</span>}
+    </div>
+  );
+}
+
+function StepLine() {
+  return <div style={{ width: 20, height: 1, background: "var(--border)" }} />;
 }
 
 function Field({ label, children }) {
