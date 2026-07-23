@@ -177,11 +177,10 @@ export default function BeritaAcara({ profile }) {
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Berita Acara ${esc(selectedBranch.name)}</title>
     <style>
       * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-      @page { size: A4; margin: 12mm 0; }
+      @page { size: A4; }
       body { font-family: Arial, Helvetica, sans-serif; color: #222; font-size: 11px; margin: 0; }
       html, body { height: 100%; }
       body { width: 210mm; margin: 0 auto; }
-      #pdfZoom { }
       .hdr { display: flex; justify-content: space-between; align-items: center; background: linear-gradient(120deg,#2A1F52,#3d2a72); margin: 0 0 16px; padding: 16px 14mm; border-bottom: 4px solid #F4B740; }
       .hdr-left { display: flex; align-items: center; gap: 12px; }
       .hdr-badge { width: 36px; height: 36px; border-radius: 9px; background: #F4B740; color: #2A1F52; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 13px; flex-shrink: 0; }
@@ -193,7 +192,7 @@ export default function BeritaAcara({ profile }) {
       .content { padding: 16px 14mm 14mm; flex: 1; display: flex; flex-direction: column; }
       h1 { font-size: 16px; color: #2A1F52; margin: 0 0 2px; }
       .sub { font-size: 10px; color: #888; margin-bottom: 14px; }
-      .info-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
+      .info-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 8px; }
       .info-box { border: 1px solid #eadfc4; background: #fdfaf1; border-radius: 8px; padding: 8px 11px; }
       .info-box .l { font-size: 7px; font-weight: 800; color: #b8860b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
       .info-box .v { font-size: 10.5px; font-weight: 700; color: #2A1F52; }
@@ -205,7 +204,7 @@ export default function BeritaAcara({ profile }) {
       .metric-card .v { font-size: 18px; font-weight: 900; color: #2A1F52; }
       .sect { background: #2A1F52; color: #fff; font-weight: 700; padding: 7px 11px; font-size: 11px; margin-top: 16px; border-radius: 6px 6px 0 0; display: flex; align-items: center; gap: 6px; }
       .sect .dot { width: 6px; height: 6px; border-radius: 50%; background: #F4B740; }
-      table.data th.subsect-th { background: #f0edf7; color: #3c3489; font-weight: 700; padding: 40px 11px 10px; font-size: 9.5px; letter-spacing: 0.02em; text-align: left; text-transform: none; border-bottom: none; }
+      table.data th.subsect-th { background: #f0edf7; color: #3c3489; font-weight: 700; padding: 8px 11px; font-size: 9.5px; letter-spacing: 0.02em; text-align: left; text-transform: none; border-bottom: none; }
       .subsect-brand { float: right; color: #8b7fb0; font-weight: 500; font-size: 8px; }
       table.data { width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 4px; }
       table.data th { background: #f7f6fb; text-align: left; padding: 6px 8px; border-bottom: 2px solid #2A1F52; font-size: 9px; color: #2A1F52; text-transform: uppercase; letter-spacing: 0.03em; }
@@ -229,7 +228,6 @@ export default function BeritaAcara({ profile }) {
       <div class="content">
         <div class="info-row">
           <div class="info-box"><div class="l">Store Cabang</div><div class="v">${esc(selectedBranch.name)}</div></div>
-          <div class="info-box"><div class="l">Periode</div><div class="v">${esc(periodeLabel(viewPeriod))}</div></div>
           <div class="info-box"><div class="l">Waktu Audit</div><div class="v" style="font-size:9.5px;">${esc(waktuAudit) || "\u2014"}</div></div>
         </div>
         <div class="info-wide">
@@ -262,13 +260,11 @@ export default function BeritaAcara({ profile }) {
       <script>
         window.onload = () => {
           const zoomEl = document.getElementById("pdfZoom");
-          const PAGE_HEIGHT_PX = 1160; // ~297mm @ 96dpi, sedikit dilonggarin biar font nggak kekecilan
-          const MARGIN_PX = 20; // margin cetak minimal
-          const targetHeight = PAGE_HEIGHT_PX - MARGIN_PX * 2;
+          // A4 = ~1123px @96dpi. Margin "Default" Chrome \u2248 10mm (~38px) atas+bawah.
+          const targetHeight = 1123 - 38 * 2;
           const actualHeight = zoomEl.scrollHeight;
           if (actualHeight > targetHeight) {
-            const zoom = targetHeight / actualHeight;
-            zoomEl.style.zoom = zoom;
+            zoomEl.style.zoom = targetHeight / actualHeight;
           }
           setTimeout(() => window.print(), 350);
         };
