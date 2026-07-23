@@ -158,14 +158,17 @@ export default function BeritaAcara({ profile }) {
       return `<span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:${bad ? "#fdecea" : "#e7f7f0"};color:${bad ? "#a32020" : "#1a9e6e"};">${esc(text)}</span>`;
     }
 
-    function stockTable(rows) {
+    function stockTable(title, rows) {
       const body = rows.map((r, i) => `<tr style="${r.status === "Selisih" ? "background:#fff8f7;" : ""}">
         <td style="text-align:center;color:#999;">${i + 1}</td>
         <td style="font-weight:600;">${esc(r.nama) || "\u2014"}</td>
         <td style="text-align:center;">${pill(r.status, r.status === "Selisih")}</td>
         <td style="font-size:9px;color:#555;">${esc(r.keterangan) || "\u2014"}</td>
       </tr>`).join("") || `<tr><td colspan="4" style="text-align:center;color:#999;padding:14px;">Tidak ada baris diisi</td></tr>`;
-      return `<table class="data"><thead><tr><th style="width:26px;">No</th><th>Nama Barang / Brand</th><th style="width:90px;text-align:center;">Status</th><th>Keterangan</th></tr></thead><tbody>${body}</tbody></table>`;
+      return `<table class="data"><thead>
+        <tr><th colspan="4" class="subsect-th"><span>${esc(title)}</span><span class="subsect-brand">KLA Computer &middot; Berita Acara &middot; ${esc(selectedBranch.name)}</span></th></tr>
+        <tr><th style="width:26px;">No</th><th>Nama Barang / Brand</th><th style="width:90px;text-align:center;">Status</th><th>Keterangan</th></tr>
+      </thead><tbody>${body}</tbody></table>`;
     }
 
     const stockSelisihCount = [...stockKat1, ...stockKat2].filter((r) => r.status === "Selisih").length;
@@ -174,10 +177,11 @@ export default function BeritaAcara({ profile }) {
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Berita Acara ${esc(selectedBranch.name)}</title>
     <style>
       * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-      @page { size: A4; margin: 0; }
+      @page { size: A4; margin: 12mm 0; }
       body { font-family: Arial, Helvetica, sans-serif; color: #222; font-size: 11px; margin: 0; }
       html, body { height: 100%; }
-      body { width: 210mm; margin: 0 auto; min-height: 297mm; display: flex; flex-direction: column; }
+      body { width: 210mm; margin: 0 auto; }
+      #pdfZoom { }
       .hdr { display: flex; justify-content: space-between; align-items: center; background: linear-gradient(120deg,#2A1F52,#3d2a72); margin: 0 0 16px; padding: 16px 14mm; border-bottom: 4px solid #F4B740; }
       .hdr-left { display: flex; align-items: center; gap: 12px; }
       .hdr-badge { width: 36px; height: 36px; border-radius: 9px; background: #F4B740; color: #2A1F52; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 13px; flex-shrink: 0; }
@@ -186,7 +190,7 @@ export default function BeritaAcara({ profile }) {
       .hdr-right { text-align: right; }
       .hdr-tag { color: #F4B740; font-size: 8px; font-weight: 800; letter-spacing: 0.06em; }
       .hdr-date { color: #cfc7e6; font-size: 8.5px; margin-top: 2px; }
-      .content { padding: 0 14mm 14mm; flex: 1; display: flex; flex-direction: column; }
+      .content { padding: 16px 14mm 14mm; flex: 1; display: flex; flex-direction: column; }
       h1 { font-size: 16px; color: #2A1F52; margin: 0 0 2px; }
       .sub { font-size: 10px; color: #888; margin-bottom: 14px; }
       .info-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 8px; }
@@ -201,15 +205,16 @@ export default function BeritaAcara({ profile }) {
       .metric-card .v { font-size: 18px; font-weight: 900; color: #2A1F52; }
       .sect { background: #2A1F52; color: #fff; font-weight: 700; padding: 7px 11px; font-size: 11px; margin-top: 16px; border-radius: 6px 6px 0 0; display: flex; align-items: center; gap: 6px; }
       .sect .dot { width: 6px; height: 6px; border-radius: 50%; background: #F4B740; }
-      .subsect { background: #f0edf7; color: #3c3489; font-weight: 700; padding: 5px 11px; font-size: 9.5px; letter-spacing: 0.02em; }
+      table.data th.subsect-th { background: #f0edf7; color: #3c3489; font-weight: 700; padding: 40px 11px 10px; font-size: 9.5px; letter-spacing: 0.02em; text-align: left; text-transform: none; border-bottom: none; }
+      .subsect-brand { float: right; color: #8b7fb0; font-weight: 500; font-size: 8px; }
       table.data { width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 4px; }
       table.data th { background: #f7f6fb; text-align: left; padding: 6px 8px; border-bottom: 2px solid #2A1F52; font-size: 9px; color: #2A1F52; text-transform: uppercase; letter-spacing: 0.03em; }
       table.data td { padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: middle; }
-      .sign { display: flex; justify-content: space-between; text-align: center; page-break-inside: avoid; break-inside: avoid; margin-top: auto; padding-top: 40px; }
+      .sign { display: flex; justify-content: space-between; text-align: center; page-break-inside: avoid; break-inside: avoid; margin-top: 50px; padding-top: 0; }
       .sign > div { width: 45%; font-size: 9.5px; font-weight: 800; color: #2A1F52; letter-spacing: 0.05em; }
       .sign .line { margin-top: 54px; border-top: 1.5px solid #2A1F52; padding-top: 5px; font-weight: 700; font-size: 11px; color: #222; }
       .footer { display: flex; justify-content: space-between; margin-top: 24px; padding-top: 8px; border-top: 1px solid #eee; font-size: 8px; color: #999; page-break-inside: avoid; break-inside: avoid; }
-    </style></head><body>
+    </style></head><body><div id="pdfZoom">
       <div class="hdr">
         <div class="hdr-left">
           <div class="hdr-badge">KLA</div>
@@ -239,10 +244,9 @@ export default function BeritaAcara({ profile }) {
         </div>
 
         <div class="sect"><span class="dot"></span>AUDIT STOCK OPNAME</div>
-        <div class="subsect">Kategori 1</div>
-        ${stockTable(stockKat1)}
-        <div class="subsect">Kategori 2</div>
-        ${stockTable(stockKat2)}
+        ${stockTable("Kategori 1", stockKat1)}
+        <div style="height:14px;"></div>
+        ${stockTable("Kategori 2", stockKat2)}
 
         <div class="sign">
           <div>MENGETAHUI<div class="line">${esc(storeManagerName || "\u2014")}<br><span style="font-weight:400;font-size:9px;color:#888;">Store Manager ${esc(selectedBranch.name)}</span></div></div>
@@ -254,7 +258,21 @@ export default function BeritaAcara({ profile }) {
           <span>Berita Acara &bull; ${esc(selectedBranch.name)} &bull; ${esc(periodeLabel(viewPeriod))}</span>
         </div>
       </div>
-      <script>window.onload = () => setTimeout(() => window.print(), 300);<\/script>
+      </div>
+      <script>
+        window.onload = () => {
+          const zoomEl = document.getElementById("pdfZoom");
+          const PAGE_HEIGHT_PX = 1160; // ~297mm @ 96dpi, sedikit dilonggarin biar font nggak kekecilan
+          const MARGIN_PX = 20; // margin cetak minimal
+          const targetHeight = PAGE_HEIGHT_PX - MARGIN_PX * 2;
+          const actualHeight = zoomEl.scrollHeight;
+          if (actualHeight > targetHeight) {
+            const zoom = targetHeight / actualHeight;
+            zoomEl.style.zoom = zoom;
+          }
+          setTimeout(() => window.print(), 350);
+        };
+      <\/script>
     </body></html>`;
 
     const win = window.open("", "_blank");
