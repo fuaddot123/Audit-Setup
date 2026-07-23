@@ -149,6 +149,108 @@ export default function AuditInventaris({ profile }) {
     setSaved(false);
   }
 
+  function esc(s) {
+    return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  function exportPDF() {
+    if (!selectedBranch) return;
+    const printDate = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
+    const rusakCount = countRusak(inventaris);
+
+    const rows = INVENTARIS_CATEGORIES.map((cat, i) => {
+      const row = inventaris[cat] || { status: "Berfungsi", keterangan: "" };
+      const isRusak = row.status === "Rusak";
+      const media = (row.photos || []).map((m) => m.type === "video"
+        ? `<div style="width:34px;height:34px;background:#f0edf7;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;font-size:12px;color:#7c3aed;">&#9654;</div>`
+        : `<img src="${esc(m.url)}" style="width:34px;height:34px;object-fit:cover;border-radius:5px;border:1px solid #ddd;" />`
+      ).join(" ") || "\u2014";
+      const pill = `<span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:${isRusak ? "#fdecea" : "#e7f7f0"};color:${isRusak ? "#a32020" : "#1a9e6e"};">${esc(row.status || "Berfungsi")}</span>`;
+      return `<tr style="${isRusak ? "background:#fff8f7;" : ""}">
+        <td style="text-align:center;color:#999;">${i + 1}</td>
+        <td style="font-weight:600;">${esc(cat)}</td>
+        <td style="text-align:center;">${pill}</td>
+        <td style="font-size:9px;color:#555;">${esc(row.keterangan) || "\u2014"}</td>
+        <td style="text-align:center;">${media}</td>
+      </tr>`;
+    }).join("");
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Inventaris ${esc(selectedBranch.name)}</title>
+    <style>
+      * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+      @page { size: A4; }
+      body { font-family: Arial, Helvetica, sans-serif; color: #222; font-size: 11px; margin: 0; }
+      body { width: 210mm; margin: 0 auto; }
+      .hdr { display: flex; justify-content: space-between; align-items: center; background: linear-gradient(120deg,#2A1F52,#3d2a72); margin: 0 0 16px; padding: 16px 14mm; border-bottom: 4px solid #F4B740; }
+      .hdr-left { display: flex; align-items: center; gap: 12px; }
+      .hdr-badge { width: 36px; height: 36px; border-radius: 9px; background: #F4B740; color: #2A1F52; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 13px; flex-shrink: 0; }
+      .hdr-title { color: #fff; font-weight: 800; font-size: 15px; }
+      .hdr-sub { color: #cfc7e6; font-size: 8.5px; }
+      .hdr-right { text-align: right; }
+      .hdr-tag { color: #F4B740; font-size: 8px; font-weight: 800; letter-spacing: 0.06em; }
+      .hdr-date { color: #cfc7e6; font-size: 8.5px; margin-top: 2px; }
+      .content { padding: 0 14mm 14mm; }
+      .info-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 14px; }
+      .info-box { border: 1px solid #eadfc4; background: #fdfaf1; border-radius: 8px; padding: 8px 11px; }
+      .info-box .l { font-size: 7px; font-weight: 800; color: #b8860b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
+      .info-box .v { font-size: 10.5px; font-weight: 700; color: #2A1F52; }
+      .metric-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 14px; }
+      .metric-card { border-radius: 10px; padding: 10px 12px; border-left: 4px solid; background: #fafafd; }
+      .metric-card .l { font-size: 7px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: #888; margin-bottom: 3px; }
+      .metric-card .v { font-size: 18px; font-weight: 900; color: #2A1F52; }
+      table.data { width: 100%; border-collapse: collapse; font-size: 10px; }
+      table.data th { background: #f7f6fb; text-align: left; padding: 6px 8px; border-bottom: 2px solid #2A1F52; font-size: 9px; color: #2A1F52; text-transform: uppercase; letter-spacing: 0.03em; }
+      table.data td { padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: middle; }
+      .footer { display: flex; justify-content: space-between; margin-top: 20px; padding-top: 8px; border-top: 1px solid #eee; font-size: 8px; color: #999; }
+    </style></head><body><div id="pdfZoom">
+      <div class="hdr">
+        <div class="hdr-left">
+          <div class="hdr-badge">KLA</div>
+          <div><div class="hdr-title">Laporan Inventaris</div><div class="hdr-sub">Divisi Audit &middot; KLA Computer</div></div>
+        </div>
+        <div class="hdr-right">
+          <div class="hdr-tag">DOKUMEN RESMI</div>
+          <div class="hdr-date">Dicetak ${printDate}</div>
+        </div>
+      </div>
+      <div class="content">
+        <div class="info-row">
+          <div class="info-box"><div class="l">Store Cabang</div><div class="v">${esc(selectedBranch.name)}</div></div>
+          <div class="info-box"><div class="l">Periode</div><div class="v">${esc(periodeLabel(viewPeriod))}</div></div>
+        </div>
+        <div class="metric-row">
+          <div class="metric-card" style="border-color:#a32020;"><div class="l">Aset Rusak</div><div class="v">${rusakCount} / ${INVENTARIS_CATEGORIES.length}</div></div>
+          <div class="metric-card" style="border-color:#7c3aed;"><div class="l">Auditor</div><div class="v" style="font-size:12px;">${esc(profile?.full_name || "\u2014")}</div></div>
+        </div>
+        <table class="data">
+          <thead><tr><th style="width:26px;">No</th><th>Nama Aset</th><th style="width:90px;text-align:center;">Status</th><th>Keterangan</th><th style="width:90px;text-align:center;">Foto/Video</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+        <div class="footer">
+          <span>PT. KLA Teknologi Indonesia &bull; Confidential</span>
+          <span>Inventaris &bull; ${esc(selectedBranch.name)} &bull; ${esc(periodeLabel(viewPeriod))}</span>
+        </div>
+      </div>
+      </div>
+      <script>
+        window.onload = () => {
+          const zoomEl = document.getElementById("pdfZoom");
+          const targetHeight = 1123 - 38 * 2;
+          const actualHeight = zoomEl.scrollHeight;
+          if (actualHeight > targetHeight) {
+            zoomEl.style.zoom = targetHeight / actualHeight;
+          }
+          setTimeout(() => window.print(), 350);
+        };
+      <\/script>
+    </body></html>`;
+
+    const win = window.open("", "_blank");
+    if (!win) { setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF."); return; }
+    win.document.write(html);
+    win.document.close();
+  }
+
   async function saveRecord() {
     if (!canEdit) { setError("Kamu tidak punya izin untuk menyimpan."); return; }
     setSaving(true);
@@ -265,6 +367,7 @@ export default function AuditInventaris({ profile }) {
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <button className="btn-ghost" onClick={exportPDF}>Cetak PDF</button>
             {canEdit && (
               <button className="btn" disabled={saving} onClick={saveRecord}>
                 {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : "Simpan"}
