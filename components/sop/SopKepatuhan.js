@@ -75,14 +75,6 @@ export default function SopKepatuhan() {
     }
   }
 
-  const periodOptions = useMemo(() => {
-    const set = new Set([nowPeriode(), period]);
-    sopRecords.forEach((r) => set.add(r.period));
-    stokRecords.forEach((r) => set.add(r.period));
-    keuanganEntries.forEach((r) => set.add(r.period));
-    return [...set].filter(Boolean).sort().reverse();
-  }, [sopRecords, stokRecords, keuanganEntries, period]);
-
   function computeForPeriod(p) {
     const rows = branches.map((b) => {
       const sopRec = sopRecords.find((r) => r.branch_id === b.id && r.period === p) || null;
@@ -120,6 +112,8 @@ export default function SopKepatuhan() {
   const totalTemuanNow = current.visitedRows.reduce((s, r) => s + r.totalTemuan, 0);
   const totalTemuanPrev = prev.visitedRows.reduce((s, r) => s + r.totalTemuan, 0);
 
+  const temuanBerulang = current.visitedRows.reduce((s, r) => s + r.sopTemuan, 0);
+
   if (loading) return <div style={{ padding: 40, color: "var(--text-secondary)" }}>Memuat\u2026</div>;
 
   const companyInfo = current.avgPct !== null ? kategoriInfo(current.avgPct) : null;
@@ -131,9 +125,11 @@ export default function SopKepatuhan() {
           <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Skor Kepatuhan SOP</div>
           <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Gabungan: SOP Operasional + Persediaan Stok + Keuangan + Aset</div>
         </div>
-        <select className="input" style={{ width: 180 }} value={period} onChange={(e) => setPeriod(e.target.value)}>
-          {periodOptions.map((p) => <option key={p} value={p}>{periodeLabel(p)}</option>)}
-        </select>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px" }}>
+          <button className="btn-ghost" onClick={() => setPeriod(addMonthsToPeriod(period, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
+          <div className="mono" style={{ fontWeight: 600, minWidth: 130, textAlign: "center", fontSize: 13.5 }}>{periodeLabel(period)}</div>
+          <button className="btn-ghost" onClick={() => setPeriod(addMonthsToPeriod(period, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
+        </div>
       </div>
 
       {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
@@ -151,6 +147,12 @@ export default function SopKepatuhan() {
             <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", marginBottom: 8 }}>Total Temuan</div>
             <div style={{ fontSize: 30, fontWeight: 800 }}>{totalTemuanNow}</div>
             <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>Bulan lalu: {totalTemuanPrev}</div>
+          </div>
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", position: "relative", overflow: "hidden" }}>
+            <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: temuanBerulang > 0 ? "#a32020" : "#1a9e6e" }} />
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", marginBottom: 8 }}>Temuan Berulang</div>
+            <div style={{ fontSize: 30, fontWeight: 800, color: temuanBerulang > 0 ? "var(--danger-text)" : "var(--text-primary)" }}>{temuanBerulang}</div>
+            <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>Total SOP Operasional bulan ini</div>
           </div>
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px" }}>
             <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", marginBottom: 8 }}>Cabang Diaudit</div>

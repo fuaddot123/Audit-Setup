@@ -30,12 +30,6 @@ export default function SopRanking() {
     }
   }
 
-  const periodOptions = useMemo(() => {
-    const set = new Set([nowPeriode(), period]);
-    records.forEach((r) => set.add(r.period));
-    return [...set].filter(Boolean).sort().reverse();
-  }, [records, period]);
-
   const rows = useMemo(() => {
     const list = branches.map((b) => {
       const rec = records.find((r) => r.branch_id === b.id && r.period === period);
@@ -59,9 +53,11 @@ export default function SopRanking() {
           <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Ranking Cabang</div>
           <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Diurutkan dari skor Audit SOP tertinggi</div>
         </div>
-        <select className="input" style={{ width: 180 }} value={period} onChange={(e) => setPeriod(e.target.value)}>
-          {periodOptions.map((p) => <option key={p} value={p}>{periodeLabel(p)}</option>)}
-        </select>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px" }}>
+          <button className="btn-ghost" onClick={() => setPeriod(addMonthsToPeriod(period, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
+          <div className="mono" style={{ fontWeight: 600, minWidth: 130, textAlign: "center", fontSize: 13.5 }}>{periodeLabel(period)}</div>
+          <button className="btn-ghost" onClick={() => setPeriod(addMonthsToPeriod(period, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
+        </div>
       </div>
 
       {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
