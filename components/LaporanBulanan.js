@@ -1,0 +1,509 @@
+import { useState, useEffect } from "react";
+import { supabase } from "../lib/supabaseClient";
+import { calcWeightedFromRecord, CATS, nowPeriode, periodeLabel, addMonthsToPeriod } from "../lib/sopConfig";
+import { countRusak } from "./AuditInventaris";
+
+// ── Warna & style ──
+const PURPLE = "2A1F52";
+const GOLD = "F4B740";
+const GREEN = "1A9E6E";
+const AMBER = "B07212";
+const RED = "A32020";
+const GREY = "888888";
+const WHITE = "FFFFFF";
+
+function kondisiSOP(score) {
+  if (score >= 85) return { lbl: "Baik", color: GREEN };
+  if (score >= 70) return { lbl: "Perlu Perhatian", color: AMBER };
+  return { lbl: "Berisiko Tinggi", color: RED };
+}
+
+// ── Kalkulasi Kepatuhan SOP gabungan (4 sumber) — sama persis formula di SopKepatuhan.js ──
+const BASELINE = 150;
+function countSopTemuan(sopRecord) {
+  if (!sopRecord) return 0;
+  const checks = sopRecord.data?.checks || {};
+  let count = 0;
+  CATS.forEach((c) => c.items.forEach((_, i) => { if (!checks[c.id + "_" + i]) count++; }));
+  return count;
+}
+function countStokTemuan(stokRecord) {
+  if (!stokRecord || stokRecord.data?.tidak_visit) return 0;
+  return Number(stokRecord.data?.temuan_count) || 0;
+}
+function keuanganSisa(entry) {
+  if (!entry) return null;
+  if (entry.sisa_saldo !== null && entry.sisa_saldo !== undefined && entry.sisa_saldo !== "") {
+    return parseFloat(entry.sisa_saldo) || 0;
+  }
+  return (parseFloat(entry.saldo_sebelumnya) || 0) + (parseFloat(entry.saldo_masuk) || 0) - (parseFloat(entry.pengeluaran) || 0);
+}
+
+// Load pptxgenjs langsung dari CDN (bukan lewat npm/webpack) — biar nggak
+// kesandung masalah bundling "node:fs" yang sering muncul di Next.js.
+function loadPptxGenJS() {
+  return new Promise((resolve, reject) => {
+    if (window.PptxGenJS) { resolve(window.PptxGenJS); return; }
+    const existing = document.querySelector('script[data-lib="pptxgenjs"]');
+    if (existing) {
+      existing.addEventListener("load", () => resolve(window.PptxGenJS));
+      existing.addEventListener("error", () => reject(new Error("Gagal memuat pustaka pptxgenjs dari CDN.")));
+      return;
+    }
+    const script = document.createElement("script");
+    script.src = "https://cdn.jsdelivr.net/npm/pptxgenjs@4.0.1/dist/pptxgen.bundle.js";
+    script.async = true;
+    script.dataset.lib = "pptxgenjs";
+    script.onload = () => {
+      if (window.PptxGenJS) resolve(window.PptxGenJS);
+      else reject(new Error("pptxgenjs dimuat tapi tidak ditemukan di window."));
+    };
+    script.onerror = () => reject(new Error("Gagal memuat pustaka pptxgenjs dari CDN. Cek koneksi internet."));
+    document.head.appendChild(script);
+  });
+}
+
+export default function LaporanBulanan({ profile }) {
+  const [period, setPeriod] = useState(nowPeriode());
+  const [generating, setGenerating] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [error, setError] = useState(null);
+  const [done, setDone] = useState(false);
+
+  function addMonths(p, d) { return addMonthsToPeriod(p, d); }
+
+  async function generate() {
+    setGenerating(true);
+    setDone(false);
+    setError(null);
+    try {
+      const prevPeriod = addMonths(period, -1);
+      setProgress("Mengambil data\u2026");
+
+      const [
+        brRes, sopCurRes, sopPrevRes, svcCurRes, svcPrevRes,
+        kesCurRes, kesPrevRes, keuCurRes, keuPrevRes, invCurRes, kpiRes, profRes,
+      ] = await Promise.all([
+        supabase.from("branches").select("*").order("name"),
+        supabase.from("audit_generic").select("*").eq("module", "sop").eq("period", period),
+        supabase.from("audit_generic").select("*").eq("module", "sop").eq("period", prevPeriod),
+        supabase.from("audit_generic").select("*").eq("module", "stok_service").eq("period", period),
+        supabase.from("audit_generic").select("*").eq("module", "stok_service").eq("period", prevPeriod),
+        supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("period", period),
+        supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("period", prevPeriod),
+        supabase.from("audit_keuangan").select("*").eq("period", period),
+        supabase.from("audit_keuangan").select("*").eq("period", prevPeriod),
+        supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("period", period),
+        supabase.from("audit_kpi").select("*").eq("period", period),
+        supabase.from("profiles").select("*"),
+      ]);
+
+      const branches = brRes.data || [];
+      if (!branches.length) throw new Error("Belum ada data cabang.");
+
+      const find = (arr, bid) => (arr || []).find((r) => r.branch_id === bid) || null;
+
+      // ── Hitung per cabang ──
+      const rows = branches.map((b) => {
+        const sopCur = find(sopCurRes.data, b.id);
+        const sopPrev = find(sopPrevRes.data, b.id);
+        const svcCur = find(svcCurRes.data, b.id);
+        const svcPrev = find(svcPrevRes.data, b.id);
+        const kesCur = find(kesCurRes.data, b.id);
+        const kesPrev = find(kesPrevRes.data, b.id);
+        const keuCur = find(keuCurRes.data, b.id);
+        const keuPrev = find(keuPrevRes.data, b.id);
+        const invCur = find(invCurRes.data, b.id);
+
+        const tidakVisitSOP = sopCur?.data?.tidak_visit;
+        const sopScore = sopCur && !tidakVisitSOP ? calcWeightedFromRecord(sopCur.data) : null;
+        const sopScorePrev = sopPrev && !sopPrev.data?.tidak_visit ? calcWeightedFromRecord(sopPrev.data) : null;
+
+        const svcRatio = svcCur ? Number(svcCur.data?.ratio) || 0 : null;
+        const svcRatioPrev = svcPrev ? Number(svcPrev.data?.ratio) || 0 : null;
+
+        const kesPct = kesCur && !kesCur.data?.tidak_visit ? Number(kesCur.data?.kesehatan_pct) || 0 : null;
+        const kesPctPrev = kesPrev && !kesPrev.data?.tidak_visit ? Number(kesPrev.data?.kesehatan_pct) || 0 : null;
+
+        const sisa = keuanganSisa(keuCur);
+        const sisaPrev = keuanganSisa(keuPrev);
+
+        // Kepatuhan gabungan
+        let kepatuhan = null;
+        if (sopCur && !tidakVisitSOP) {
+          const sopTemuan = countSopTemuan(sopCur);
+          const stokTemuan = countStokTemuan(kesCur);
+          const keuanganTemuan = sisa !== null && sisa < 0 ? 1 : 0;
+          const asetTemuan = invCur && !invCur.data?.tidak_visit ? countRusak(invCur.data?.categories) : 0;
+          const totalTemuan = sopTemuan + stokTemuan + keuanganTemuan + asetTemuan;
+          kepatuhan = Math.max(0, 1 - totalTemuan / BASELINE);
+        }
+
+        // Temuan (foto+catatan) buat slide per-cabang
+        const findings = [];
+        if (sopCur && !tidakVisitSOP) {
+          const checks = sopCur.data?.checks || {};
+          const notes = sopCur.data?.notes || {};
+          const photos = sopCur.data?.photos || {};
+          CATS.forEach((c) => c.items.forEach((text, i) => {
+            const key = c.id + "_" + i;
+            if (!checks[key]) {
+              findings.push({ text, note: notes[key] || "", media: photos[key] || [], cat: c.label });
+            }
+          }));
+        }
+
+        return {
+          branch: b, sopCur, sopScore, sopScorePrev, tidakVisitSOP,
+          svcRatio, svcRatioPrev, kesPct, kesPctPrev, sisa, sisaPrev,
+          kepatuhan, findings,
+        };
+      });
+
+      // ── Ringkasan company-wide ──
+      const auditedRows = rows.filter((r) => r.sopScore !== null);
+      const kondisiBaik = auditedRows.filter((r) => kondisiSOP(r.sopScore).lbl === "Baik").length;
+      const kondisiPerhatian = auditedRows.filter((r) => kondisiSOP(r.sopScore).lbl === "Perlu Perhatian").length;
+      const kondisiBerisiko = auditedRows.filter((r) => kondisiSOP(r.sopScore).lbl === "Berisiko Tinggi").length;
+
+      // Temuan domain: kategori dengan gagal terbanyak company-wide
+      const catFailCount = {};
+      auditedRows.forEach((r) => {
+        const cats = r.sopCur?.data?.cats || {};
+        Object.keys(cats).forEach((catId) => {
+          const bd = cats[catId];
+          const fail = (bd.total || 0) - (bd.score || 0);
+          catFailCount[catId] = (catFailCount[catId] || 0) + fail;
+        });
+      });
+      const catLabelMap = {};
+      CATS.forEach((c) => { catLabelMap[c.id] = c.label; });
+      const topDomain = Object.entries(catFailCount).sort((a, b) => b[1] - a[1]).slice(0, 2)
+        .map(([id, n]) => `${catLabelMap[id] || id} (${n} temuan)`);
+
+      const avgSvc = (list) => { const v = list.filter((x) => x !== null); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
+      const svcNow = avgSvc(rows.map((r) => r.svcRatio));
+      const svcPrevAvg = avgSvc(rows.map((r) => r.svcRatioPrev));
+      const kesNow = avgSvc(rows.map((r) => r.kesPct));
+      const kesPrevAvg = avgSvc(rows.map((r) => r.kesPctPrev));
+
+      const negBalanceNow = rows.filter((r) => r.sisa !== null && r.sisa < 0).length;
+      const negBalancePrev = rows.filter((r) => r.sisaPrev !== null && r.sisaPrev < 0).length;
+      const totalKasKeluar = keuCurRes.data?.reduce((s, e) => s + (parseFloat(e.pengeluaran) || 0), 0) || 0;
+
+      const kepatuhanRows = rows.filter((r) => r.kepatuhan !== null);
+      const kepatuhanAvg = kepatuhanRows.length ? kepatuhanRows.reduce((s, r) => s + r.kepatuhan, 0) / kepatuhanRows.length : null;
+      const totalTemuanKepatuhan = kepatuhanRows.reduce((s, r) => s + Math.round((1 - r.kepatuhan) * BASELINE), 0);
+
+      const rankedSOP = [...auditedRows].sort((a, b) => b.sopScore - a.sopScore);
+
+      setProgress("Menyusun slide\u2026");
+
+      // ══════════════ BUILD PPTX ══════════════
+      const PptxGenJS = await loadPptxGenJS();
+      const pptx = new PptxGenJS();
+      pptx.layout = "LAYOUT_WIDE";
+      pptx.author = "KLA Radar";
+      pptx.title = `Laporan Audit Internal ${periodeLabel(period)}`;
+
+      function addHeader(slide, tag) {
+        slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.33, h: 0.55, fill: { color: PURPLE } });
+        slide.addShape(pptx.ShapeType.rect, { x: 0, y: 0.55, w: 13.33, h: 0.04, fill: { color: GOLD } });
+        slide.addText(tag, { x: 0.4, y: 0, w: 8, h: 0.55, fontSize: 13, bold: true, color: WHITE, valign: "middle", margin: 0 });
+        slide.addText(periodeLabel(period), { x: 9.5, y: 0, w: 3.4, h: 0.55, fontSize: 11, color: GOLD, align: "right", valign: "middle", margin: 0 });
+      }
+
+      // ── 1. Cover ──
+      {
+        const s = pptx.addSlide();
+        s.background = { color: PURPLE };
+        s.addShape(pptx.ShapeType.rect, { x: 0, y: 3.5, w: 13.33, h: 0.06, fill: { color: GOLD } });
+        s.addText("KLA COMPUTER", { x: 0, y: 2.0, w: 13.33, h: 0.6, align: "center", fontSize: 20, color: GOLD, bold: true, charSpacing: 4, margin: 0 });
+        s.addText("REPORT MONTHLY", { x: 0, y: 2.6, w: 13.33, h: 0.9, align: "center", fontSize: 40, color: WHITE, bold: true, margin: 0 });
+        s.addText(periodeLabel(period), { x: 0, y: 3.75, w: 13.33, h: 0.6, align: "center", fontSize: 22, color: "CFC7E6", margin: 0 });
+        s.addText("Divisi Audit Internal \u2014 PT. KLA Teknologi Indonesia", { x: 0, y: 5.0, w: 13.33, h: 0.4, align: "center", fontSize: 12, color: "8b7fb0", margin: 0 });
+      }
+
+      // ── 2. Tujuan & Ruang Lingkup ──
+      {
+        const s = pptx.addSlide();
+        addHeader(s, "Tujuan dan Ruang Lingkup");
+        s.addText("Tujuan", { x: 0.6, y: 0.9, w: 5.8, h: 0.4, fontSize: 16, bold: true, color: PURPLE, margin: 0 });
+        const tujuan = [
+          "Menilai pengelolaan stok barang di seluruh cabang",
+          "Menilai Kesehatan Stok dan potensi risiko selisih",
+          "Memastikan aset & Inventaris tercatat dan terjaga",
+          "Menilai kepatuhan SOP Operasional",
+          "Menilai pengelolaan keuangan & kas kecil",
+          "Mengidentifikasi temuan & area perbaikan cabang",
+        ];
+        s.addText(tujuan.map((t, i) => ({ text: t, options: { bullet: true, breakLine: i < tujuan.length - 1, paraSpaceAfter: 8 } })), { x: 0.6, y: 1.35, w: 5.8, h: 3.5, fontSize: 13, color: "333333" });
+
+        s.addText("Ruang Lingkup", { x: 6.9, y: 0.9, w: 5.8, h: 0.4, fontSize: 16, bold: true, color: PURPLE, margin: 0 });
+        const ruang = [
+          "Audit stok barang & display",
+          "Audit Inventaris",
+          "Audit kas kecil",
+          "Audit kepatuhan SOP",
+          `Audit dilakukan pada ${branches.length} Cabang`,
+        ];
+        s.addText(ruang.map((t, i) => ({ text: t, options: { bullet: true, breakLine: i < ruang.length - 1, paraSpaceAfter: 8 } })), { x: 6.9, y: 1.35, w: 5.8, h: 3.5, fontSize: 13, color: "333333" });
+      }
+
+      // ── 3. Ringkasan Hasil Audit ──
+      {
+        const s = pptx.addSlide();
+        addHeader(s, "Ringkasan Hasil Audit");
+        s.addText("Summary Audit", { x: 0.6, y: 0.9, w: 5.8, h: 0.4, fontSize: 15, bold: true, color: PURPLE, margin: 0 });
+        const summaryRows = [
+          [`Total Cabang di Audit`, `${auditedRows.length} Cabang`],
+          [`Cabang Kondisi Baik`, `${kondisiBaik} Cabang`],
+          [`Cabang Perlu Perhatian`, `${kondisiPerhatian} Cabang`],
+          [`Cabang Berisiko Tinggi`, `${kondisiBerisiko} Cabang`],
+        ];
+        s.addTable(summaryRows.map(([a, b], i) => ([
+          { text: a, options: { fontSize: 12, color: "333333", fill: { color: i % 2 ? "F7F6FB" : WHITE } } },
+          { text: b, options: { fontSize: 12, bold: true, color: PURPLE, align: "right", fill: { color: i % 2 ? "F7F6FB" : WHITE } } },
+        ])), { x: 0.6, y: 1.4, w: 5.8, colW: [3.8, 2], border: { type: "solid", color: "E5E5E5", pt: 0.5 } });
+
+        s.addText("Temuan Domain Terbesar", { x: 6.9, y: 0.9, w: 5.8, h: 0.4, fontSize: 15, bold: true, color: PURPLE, margin: 0 });
+        s.addText((topDomain.length ? topDomain : ["Tidak ada temuan signifikan"]).map((t, i) => ({ text: t, options: { bullet: true, breakLine: i < topDomain.length - 1, paraSpaceAfter: 8 } })), { x: 6.9, y: 1.4, w: 5.8, h: 2, fontSize: 13, color: RED, bold: true });
+      }
+
+      // ── 4. Kesehatan Stok ──
+      {
+        const s = pptx.addSlide();
+        addHeader(s, "Kesehatan Stok Cabang");
+        const trendUp = kesPrevAvg !== null && kesNow !== null && kesNow >= kesPrevAvg;
+        s.addText(`${kesNow !== null ? Math.round(kesNow * 100) : "\u2014"}%`, { x: 0.6, y: 1.1, w: 4, h: 1.3, fontSize: 60, bold: true, color: PURPLE, margin: 0 });
+        s.addText("Rata-rata Kesehatan Stok bulan ini", { x: 0.6, y: 2.3, w: 4, h: 0.4, fontSize: 12, color: GREY, margin: 0 });
+        s.addText(kesPrevAvg !== null ? `${trendUp ? "\u25B2" : "\u25BC"} dari ${Math.round(kesPrevAvg * 100)}% bulan lalu` : "Belum ada data bulan lalu", { x: 0.6, y: 2.75, w: 4, h: 0.4, fontSize: 12, bold: true, color: trendUp ? GREEN : RED, margin: 0 });
+
+        const kesRows = rows.filter((r) => r.kesPct !== null).sort((a, b) => a.kesPct - b.kesPct).slice(0, 8);
+        s.addTable(
+          [[{ text: "Cabang", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11 } }, { text: "% Kesehatan", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11, align: "center" } }]]
+            .concat(kesRows.map((r) => ([{ text: r.branch.name, options: { fontSize: 11 } }, { text: `${Math.round(r.kesPct * 100)}%`, options: { fontSize: 11, align: "center", bold: true, color: r.kesPct < 0.7 ? RED : "333333" } }]))),
+          { x: 5.4, y: 1.1, w: 7.3, colW: [4.5, 2.8], border: { type: "solid", color: "E5E5E5", pt: 0.5 }, autoPage: false }
+        );
+      }
+
+      // ── 5. Service Ratio ──
+      {
+        const s = pptx.addSlide();
+        addHeader(s, "Service Ratio Cabang");
+        const trendGood = svcPrevAvg !== null && svcNow !== null && svcNow <= svcPrevAvg;
+        s.addText(`${svcNow !== null ? (svcNow * 100).toFixed(2) : "\u2014"}%`, { x: 0.6, y: 1.1, w: 4, h: 1.3, fontSize: 60, bold: true, color: PURPLE, margin: 0 });
+        s.addText("Rata-rata Service Ratio bulan ini", { x: 0.6, y: 2.3, w: 4, h: 0.4, fontSize: 12, color: GREY, margin: 0 });
+        s.addText(svcPrevAvg !== null ? `${trendGood ? "\u25BC (membaik)" : "\u25B2 (naik)"} dari ${(svcPrevAvg * 100).toFixed(2)}% bulan lalu` : "Belum ada data bulan lalu", { x: 0.6, y: 2.75, w: 4, h: 0.4, fontSize: 12, bold: true, color: trendGood ? GREEN : RED, margin: 0 });
+
+        const svcRows = rows.filter((r) => r.svcRatio !== null).sort((a, b) => b.svcRatio - a.svcRatio).slice(0, 8);
+        s.addTable(
+          [[{ text: "Cabang", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11 } }, { text: "Ratio", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11, align: "center" } }]]
+            .concat(svcRows.map((r) => ([{ text: r.branch.name, options: { fontSize: 11 } }, { text: `${(r.svcRatio * 100).toFixed(2)}%`, options: { fontSize: 11, align: "center", bold: true, color: r.svcRatio >= 0.0033 ? RED : "333333" } }]))),
+          { x: 5.4, y: 1.1, w: 7.3, colW: [4.5, 2.8], border: { type: "solid", color: "E5E5E5", pt: 0.5 }, autoPage: false }
+        );
+      }
+
+      // ── 6. Penggunaan Kas Kecil ──
+      {
+        const s = pptx.addSlide();
+        addHeader(s, "Penggunaan Kas Kecil");
+        s.addText(`Rp${totalKasKeluar.toLocaleString("id-ID")}`, { x: 0.6, y: 1.1, w: 6, h: 1, fontSize: 36, bold: true, color: PURPLE, margin: 0 });
+        s.addText("Total pengeluaran kas kecil seluruh cabang bulan ini", { x: 0.6, y: 2.0, w: 6, h: 0.4, fontSize: 12, color: GREY, margin: 0 });
+
+        s.addText(`${negBalanceNow}`, { x: 0.6, y: 2.7, w: 2, h: 1, fontSize: 40, bold: true, color: negBalanceNow > 0 ? RED : GREEN, margin: 0 });
+        s.addText("Cabang saldo minus", { x: 0.6, y: 3.6, w: 3, h: 0.4, fontSize: 11, color: GREY, margin: 0 });
+        s.addText(negBalancePrev !== null ? `Bulan lalu: ${negBalancePrev} cabang` : "", { x: 0.6, y: 3.95, w: 3, h: 0.4, fontSize: 10, color: GREY, margin: 0 });
+
+        const negRows = rows.filter((r) => r.sisa !== null && r.sisa < 0);
+        if (negRows.length) {
+          s.addText("Cabang saldo minus bulan ini:", { x: 5.4, y: 1.1, w: 7.3, h: 0.35, fontSize: 13, bold: true, color: RED, margin: 0 });
+          s.addText(negRows.map((r, i) => ({ text: `${r.branch.name} (Rp${r.sisa.toLocaleString("id-ID")})`, options: { bullet: true, breakLine: i < negRows.length - 1, paraSpaceAfter: 6 } })), { x: 5.4, y: 1.55, w: 7.3, h: 3, fontSize: 12, color: "333333" });
+        } else {
+          s.addText("Tidak ada cabang dengan saldo minus bulan ini.", { x: 5.4, y: 1.1, w: 7.3, h: 0.6, fontSize: 13, color: GREEN, bold: true, margin: 0 });
+        }
+      }
+
+      // ── 7. Kepatuhan SOP (gabungan) ──
+      {
+        const s = pptx.addSlide();
+        addHeader(s, "Kepatuhan SOP");
+        s.addText(kepatuhanAvg !== null ? `${Math.round(kepatuhanAvg * 100)}%` : "\u2014", { x: 0.6, y: 1.1, w: 4, h: 1.3, fontSize: 60, bold: true, color: PURPLE, margin: 0 });
+        s.addText("% Skor Kepatuhan (gabungan Operasional, Stok, Keuangan, Aset)", { x: 0.6, y: 2.35, w: 4.3, h: 0.6, fontSize: 11, color: GREY, margin: 0 });
+        s.addText(`${totalTemuanKepatuhan}`, { x: 0.6, y: 3.1, w: 2, h: 0.8, fontSize: 30, bold: true, color: RED, margin: 0 });
+        s.addText("Total temuan bulan ini", { x: 0.6, y: 3.75, w: 3, h: 0.4, fontSize: 11, color: GREY, margin: 0 });
+
+        const kepRows = [...kepatuhanRows].sort((a, b) => a.kepatuhan - b.kepatuhan).slice(0, 8);
+        s.addTable(
+          [[{ text: "Cabang", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11 } }, { text: "% Skor", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11, align: "center" } }]]
+            .concat(kepRows.map((r) => ([{ text: r.branch.name, options: { fontSize: 11 } }, { text: `${Math.round(r.kepatuhan * 100)}%`, options: { fontSize: 11, align: "center", bold: true, color: r.kepatuhan * 100 < 70 ? RED : "333333" } }]))),
+          { x: 5.4, y: 1.1, w: 7.3, colW: [4.5, 2.8], border: { type: "solid", color: "E5E5E5", pt: 0.5 }, autoPage: false }
+        );
+      }
+
+      // ── 8..N. Temuan per cabang (cuma yang ada temuan) ──
+      const branchesWithFindings = rows.filter((r) => r.findings.length > 0);
+      branchesWithFindings.forEach((r) => {
+        const withMedia = r.findings.filter((f) => f.media && f.media.length);
+        const chunks = [];
+        if (withMedia.length === 0) {
+          chunks.push([]);
+        } else {
+          for (let i = 0; i < withMedia.length; i += 3) chunks.push(withMedia.slice(i, i + 3));
+        }
+        chunks.forEach((chunk, pageIdx) => {
+          const s = pptx.addSlide();
+          addHeader(s, `${r.branch.name.toUpperCase()} \u2014 Temuan`);
+          if (chunk.length === 0) {
+            const textList = r.findings.slice(0, 10).map((f) => f.note ? `${f.text}: ${f.note}` : f.text);
+            s.addText(textList.map((t, i) => ({ text: t, options: { bullet: true, breakLine: i < textList.length - 1, paraSpaceAfter: 8 } })), { x: 0.6, y: 1.0, w: 12, h: 4, fontSize: 13, color: "333333" });
+          } else {
+            const colW = 12 / chunk.length;
+            chunk.forEach((f, ci) => {
+              const x = 0.6 + ci * colW;
+              const media = f.media[0];
+              if (media.type === "video") {
+                s.addShape(pptx.ShapeType.rect, { x: x + 0.15, y: 1.0, w: colW - 0.3, h: 3, fill: { color: "F0EDF7" } });
+                s.addText("\u25B6 Video", { x: x + 0.15, y: 2.3, w: colW - 0.3, h: 0.4, align: "center", fontSize: 14, color: PURPLE });
+              } else {
+                try { s.addImage({ path: media.url, x: x + 0.15, y: 1.0, w: colW - 0.3, h: 3, sizing: { type: "cover", w: colW - 0.3, h: 3 } }); } catch (e) { /* skip broken image */ }
+              }
+              s.addText(f.text, { x: x + 0.15, y: 4.1, w: colW - 0.3, h: 0.4, fontSize: 10.5, bold: true, color: PURPLE, margin: 0 });
+              if (f.note) s.addText(f.note, { x: x + 0.15, y: 4.5, w: colW - 0.3, h: 0.7, fontSize: 9.5, color: "555555", margin: 0 });
+            });
+          }
+          if (chunks.length > 1) s.addText(`Halaman ${pageIdx + 1} / ${chunks.length}`, { x: 11.5, y: 6.9, w: 1.5, h: 0.3, fontSize: 8, color: GREY, align: "right", margin: 0 });
+        });
+      });
+
+      // ── Ranking Cabang SOP ──
+      {
+        const s = pptx.addSlide();
+        addHeader(s, "Ranking Cabang SOP");
+        const top5 = rankedSOP.slice(0, 5);
+        const medals = ["\uD83D\uDC51", "\uD83E\uDD48", "\uD83E\uDD49", "\uD83C\uDFC5", "\uD83C\uDFC5"];
+        top5.forEach((r, i) => {
+          const y = 1.0 + i * 1.05;
+          s.addShape(pptx.ShapeType.roundRect, { x: 0.6, y, w: 12.1, h: 0.9, fill: { color: i === 0 ? "FBF3E0" : "FAFAFD" }, line: { color: i === 0 ? GOLD : "E5E5E5", width: 1 }, rectRadius: 0.08 });
+          s.addText(medals[i] || "", { x: 0.8, y, w: 0.7, h: 0.9, fontSize: 26, valign: "middle", align: "center", margin: 0 });
+          s.addText(r.branch.name, { x: 1.6, y, w: 8, h: 0.9, fontSize: 16, bold: true, color: PURPLE, valign: "middle", margin: 0 });
+          s.addText(`${r.sopScore}%`, { x: 10.5, y, w: 2, h: 0.9, fontSize: 22, bold: true, color: kondisiSOP(r.sopScore).color, valign: "middle", align: "right", margin: 0 });
+        });
+        if (!top5.length) s.addText("Belum ada cabang yang diaudit periode ini.", { x: 0.6, y: 1.5, w: 12, h: 0.6, fontSize: 14, color: GREY });
+      }
+
+      // ── KPI Audit Internal ──
+      {
+        const s = pptx.addSlide();
+        addHeader(s, "KPI Audit Internal");
+        const kpiData = (kpiRes.data || []).map((k) => {
+          const prof = (profRes.data || []).find((p) => p.id === k.auditor_id);
+          return { name: prof?.full_name || "\u2014", ...k };
+        });
+        const kpiRows = [[
+          { text: "Auditor", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11 } },
+          { text: "Coverage", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11, align: "center" } },
+          { text: "Kepatuhan SOP", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11, align: "center" } },
+          { text: "Temuan Berulang", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11, align: "center" } },
+          { text: "Jml Temuan", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11, align: "center" } },
+          { text: "Ketepatan Laporan", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11, align: "center" } },
+        ]].concat(
+          kpiData.length ? kpiData.map((k) => ([
+            { text: k.name, options: { fontSize: 11 } },
+            { text: String(k.realisasi_coverage ?? "\u2014"), options: { fontSize: 11, align: "center" } },
+            { text: k.realisasi_kepatuhan_sop != null ? `${Math.round(k.realisasi_kepatuhan_sop * 100)}%` : "\u2014", options: { fontSize: 11, align: "center" } },
+            { text: String(k.realisasi_temuan_berulang ?? "\u2014"), options: { fontSize: 11, align: "center" } },
+            { text: String(k.realisasi_temuan_audit ?? "\u2014"), options: { fontSize: 11, align: "center" } },
+            { text: String(k.realisasi_ketepatan_laporan ?? "\u2014"), options: { fontSize: 11, align: "center" } },
+          ])) : [[{ text: "Belum ada data KPI periode ini.", options: { colspan: 6, fontSize: 12, color: GREY, align: "center" } }]]
+        );
+        s.addTable(kpiRows, { x: 0.6, y: 1.1, w: 12.1, border: { type: "solid", color: "E5E5E5", pt: 0.5 }, autoPage: false });
+      }
+
+      // ── Kesimpulan ──
+      {
+        const s = pptx.addSlide();
+        addHeader(s, "Kesimpulan");
+        const poin = [];
+        poin.push(`Secara umum, ${kondisiBaik} dari ${auditedRows.length} cabang berada dalam kondisi Baik pada periode ${periodeLabel(period)}.`);
+        if (kesPrevAvg !== null && kesNow !== null) poin.push(`Kesehatan Stok ${kesNow >= kesPrevAvg ? "membaik" : "menurun"} dari ${Math.round(kesPrevAvg * 100)}% menjadi ${Math.round(kesNow * 100)}%.`);
+        if (svcPrevAvg !== null && svcNow !== null) poin.push(`Service Ratio ${svcNow <= svcPrevAvg ? "membaik" : "meningkat"} dari ${(svcPrevAvg * 100).toFixed(2)}% menjadi ${(svcNow * 100).toFixed(2)}%.`);
+        poin.push(`Kepatuhan SOP gabungan tercatat ${kepatuhanAvg !== null ? Math.round(kepatuhanAvg * 100) + "%" : "belum ada data"} dengan total ${totalTemuanKepatuhan} temuan.`);
+        if (kondisiBerisiko > 0) poin.push(`Terdapat ${kondisiBerisiko} cabang berisiko tinggi yang memerlukan tindak lanjut segera.`);
+        s.addText(poin.map((t, i) => ({ text: t, options: { bullet: true, breakLine: i < poin.length - 1, paraSpaceAfter: 12 } })), { x: 0.6, y: 1.1, w: 12.1, h: 4.5, fontSize: 14, color: "333333" });
+      }
+
+      // ── Rekomendasi ──
+      {
+        const s = pptx.addSlide();
+        addHeader(s, "Rekomendasi");
+        const stokBermasalah = rows.filter((r) => r.kesPct !== null && r.kesPct < 0.7).map((r) => r.branch.name);
+        const keuBermasalah = rows.filter((r) => r.sisa !== null && r.sisa < 0).map((r) => r.branch.name);
+        const svcBermasalah = rows.filter((r) => r.svcRatio !== null && r.svcRatio >= 0.0033).map((r) => r.branch.name);
+        const best = rankedSOP[0];
+        const worst = rankedSOP[rankedSOP.length - 1];
+
+        const blocks = [
+          { t: "1. Penguatan Pengendalian Stok", d: stokBermasalah.length ? `Cabang ${stokBermasalah.join(", ")} menunjukkan skor Kesehatan Stok di bawah ambang batas \u2014 perlu stock opname & review mendesak.` : "Semua cabang berada di atas ambang Kesehatan Stok yang aman." },
+          { t: "2. Peningkatan Kepatuhan SOP", d: topDomain.length ? `Kategori ${topDomain[0]} menjadi temuan terbanyak bulan ini \u2014 perlu briefing & refresh SOP terkait.` : "Tidak ada kategori temuan yang menonjol bulan ini." },
+          { t: "3. Perbaikan Pengelolaan Kas Kecil", d: keuBermasalah.length ? `Cabang ${keuBermasalah.join(", ")} mencatat saldo kas kecil minus \u2014 perlu review pengeluaran.` : "Tidak ada cabang dengan saldo kas kecil minus bulan ini." },
+          { t: "4. Peningkatan Kualitas Operasional", d: svcBermasalah.length ? `Service Ratio cabang ${svcBermasalah.join(", ")} berada di kategori Perlu Perhatian \u2014 perlu analisis akar penyebab.` : "Service Ratio seluruh cabang dalam kategori terkendali." },
+          { t: "5. Reward & Corrective Action", d: best && worst ? `Apresiasi untuk cabang ${best.branch.name} (skor SOP ${best.sopScore}%). Perhatian khusus untuk cabang ${worst.branch.name} (skor SOP ${worst.sopScore}%).` : "Belum cukup data untuk penilaian reward/corrective action." },
+        ];
+        blocks.forEach((b, i) => {
+          const y = 0.9 + i * 0.85;
+          s.addText(b.t, { x: 0.6, y, w: 12.1, h: 0.32, fontSize: 13, bold: true, color: PURPLE, margin: 0 });
+          s.addText(b.d, { x: 0.6, y: y + 0.32, w: 12.1, h: 0.5, fontSize: 11, color: "444444", margin: 0 });
+        });
+      }
+
+      // ── Terima kasih ──
+      {
+        const s = pptx.addSlide();
+        s.background = { color: PURPLE };
+        s.addShape(pptx.ShapeType.rect, { x: 0, y: 3.5, w: 13.33, h: 0.06, fill: { color: GOLD } });
+        s.addText("TERIMA KASIH", { x: 0, y: 3.0, w: 13.33, h: 0.8, align: "center", fontSize: 34, color: WHITE, bold: true, margin: 0 });
+        s.addText("Divisi Audit Internal \u2014 PT. KLA Teknologi Indonesia", { x: 0, y: 3.8, w: 13.33, h: 0.4, align: "center", fontSize: 12, color: "8b7fb0", margin: 0 });
+      }
+
+      setProgress("Menyimpan file\u2026");
+      await pptx.writeFile({ fileName: `Laporan_Audit_${periodeLabel(period).replace(/\s+/g, "_")}.pptx` });
+      setDone(true);
+    } catch (err) {
+      setError("Gagal membuat laporan: " + err.message);
+    } finally {
+      setGenerating(false);
+      setProgress("");
+    }
+  }
+
+  return (
+    <div style={{ flex: 1 }}>
+      <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)" }}>
+        <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Laporan Bulanan</div>
+        <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Generate presentasi PPT gabungan semua modul, otomatis dari data audit</div>
+      </div>
+
+      <div style={{ padding: 24, maxWidth: 560 }}>
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 24 }}>
+          <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>Periode Laporan</label>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px", width: "fit-content", marginBottom: 20 }}>
+            <button className="btn-ghost" onClick={() => setPeriod(addMonths(period, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
+            <div className="mono" style={{ fontWeight: 600, minWidth: 150, textAlign: "center", fontSize: 14 }}>{periodeLabel(period)}</div>
+            <button className="btn-ghost" onClick={() => setPeriod(addMonths(period, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
+          </div>
+
+          {error && <div style={{ background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 16 }}>{error}</div>}
+          {done && !generating && <div style={{ background: "var(--success-bg)", border: "1px solid rgba(26,158,110,0.35)", color: "var(--success-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 16 }}>\u2713 Laporan berhasil dibuat & didownload.</div>}
+
+          <button className="btn" disabled={generating} onClick={generate} style={{ width: "100%" }}>
+            {generating ? (progress || "Memproses\u2026") : "Generate Laporan PPT"}
+          </button>
+          <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>
+            Proses ini bisa makan waktu beberapa detik sampai 1-2 menit tergantung jumlah cabang & foto temuan. Jangan tutup halaman selagi proses berjalan.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

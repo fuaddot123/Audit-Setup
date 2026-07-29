@@ -22,7 +22,6 @@ const MODULES = [
     ],
   },
   { key: "berita_acara", label: "Berita Acara", ready: true },
-  { key: "inventaris", label: "Inventaris", ready: true },
   {
     key: "pengajuan", label: "Form Pengajuan", ready: false, subs: [
       { key: "adjust", label: "Barang Adjust" },
@@ -31,7 +30,7 @@ const MODULES = [
     ],
   },
   { key: "kpi", label: "KPI", ready: true },
-  { key: "laporan_bulanan", label: "Laporan Bulanan", ready: false },
+  { key: "laporan_bulanan", label: "Laporan Bulanan", ready: true },
   { key: "laporan_tahunan", label: "Laporan Tahunan", ready: false },
   { key: "timeline", label: "Timeline", ready: true },
 ];

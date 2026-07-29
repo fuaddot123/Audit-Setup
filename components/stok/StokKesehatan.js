@@ -294,7 +294,7 @@ export default function StokKesehatan({ profile }) {
 
       {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
 
-      <div style={{ padding: 24, maxWidth: 560 }}>
+      <div style={{ padding: 24 }}>
         {loadingRecord ? (
           <div style={{ color: "var(--text-secondary)" }}>Memuat data\u2026</div>
         ) : (
@@ -306,43 +306,66 @@ export default function StokKesehatan({ profile }) {
 
             {!form.tidak_visit && (
               <>
-                <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 4 }}>
-                    <Field label="Total Barang Plus Minus / Tertukar" hint="jumlah kejadian, bukan qty">
-                      <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.temuan_count} onChange={(e) => setDigitField("temuan_count", e.target.value)} disabled={!canEdit} />
+                <div style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gap: 16, marginBottom: 16, alignItems: "start" }}>
+
+                  {/* Card 1: Input data */}
+                  <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14.5, color: "#7c3aed", marginBottom: 2 }}>1. INPUT DATA</div>
+                    <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 16 }}>Masukkan data temuan &amp; kerugian pada periode audit ini</div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 4 }}>
+                      <Field label="Total Barang Plus Minus / Tertukar" hint="jumlah kejadian, bukan qty">
+                        <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.temuan_count} onChange={(e) => setDigitField("temuan_count", e.target.value)} disabled={!canEdit} />
+                      </Field>
+                      <Field label="Total Bonus Fisik Tidak Ada" hint="jumlah kejadian, bukan qty">
+                        <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.bonus_count} onChange={(e) => setDigitField("bonus_count", e.target.value)} disabled={!canEdit} />
+                      </Field>
+                    </div>
+                    <Field label="Untung / Rugi (Rp)" hint="isi minus (-) kalau rugi, misal -150000">
+                      <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.untung_rugi} onChange={(e) => setRugiField(e.target.value)} disabled={!canEdit} />
                     </Field>
-                    <Field label="Total Bonus Fisik Tidak Ada" hint="jumlah kejadian, bukan qty">
-                      <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.bonus_count} onChange={(e) => setDigitField("bonus_count", e.target.value)} disabled={!canEdit} />
-                    </Field>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 16 }}>
+                      <MiniStat label="Skor Temuan" value={skorTemuan} />
+                      <MiniStat label="Skor Rugi" value={sRugi} />
+                      <MiniStat label="Skor Total" value={skorTotal} />
+                    </div>
+                    <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>
+                      Skor Temuan = jumlah 2 kejadian di atas. Skor Rugi 0&ndash;4 tergantung nominal kerugian. Skor Total = Skor Temuan + (Skor Rugi &times; 5).
+                    </div>
                   </div>
-                  <Field label="Untung / Rugi (Rp)" hint="isi minus (-) kalau rugi, misal -150000">
-                    <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.untung_rugi} onChange={(e) => setRugiField(e.target.value)} disabled={!canEdit} />
-                  </Field>
-                  <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 10 }}>
-                    Skor Temuan = jumlah 2 kejadian di atas. Skor Rugi 0&ndash;4 tergantung nominal kerugian. Skor Total = Skor Temuan + (Skor Rugi &times; 5).
+
+                  {/* Card 2: Hasil perhitungan */}
+                  <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20 }}>
+                    <div style={{ fontWeight: 700, fontSize: 14.5, color: "#7c3aed", marginBottom: 2 }}>2. HASIL PERHITUNGAN</div>
+                    <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 16 }}>Dihitung otomatis dari data di samping</div>
+
+                    <div style={{ marginBottom: 16 }}>
+                      <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 4 }}>% Kesehatan Barang</div>
+                      <div style={{ fontSize: 30, fontWeight: 900, color: status.color }}>{formatKesehatanPct(kesehatanPct)}</div>
+                    </div>
+                    <div style={{ height: 6, background: "var(--border)", borderRadius: 4, overflow: "hidden", marginBottom: 16 }}>
+                      <div style={{ height: "100%", width: `${kesehatanPct * 100}%`, background: status.color, transition: "width .2s" }} />
+                    </div>
+
+                    <div style={{ background: `${status.color}18`, border: `1px solid ${status.color}55`, borderRadius: 8, padding: "9px 12px", marginBottom: 16 }}>
+                      <div style={{ fontWeight: 700, color: status.color, marginBottom: 2 }}>{status.lbl}</div>
+                      <div style={{ fontSize: 12, color: status.color }}>{status.desc}</div>
+                    </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+                      <ThresholdLegend color="#1a9e6e" label="Terkendali" range="\u226585%" />
+                      <ThresholdLegend color="#2f9e9e" label="Waspada" range="70\u201384%" />
+                      <ThresholdLegend color="#b07212" label="Monitoring" range="50\u201369%" />
+                      <ThresholdLegend color="#a32020" label="Perlu Perhatian" range="<50%" />
+                    </div>
                   </div>
                 </div>
 
-                <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px" }}>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10, marginBottom: 12, fontSize: 11.5 }}>
-                    <MiniStat label="Skor Temuan" value={skorTemuan} />
-                    <MiniStat label="Skor Rugi" value={sRugi} />
-                    <MiniStat label="Skor Total" value={skorTotal} />
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                    <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>% Kesehatan Barang</span>
-                    <span style={{ fontSize: 24, fontWeight: 800, color: status.color }}>{formatKesehatanPct(kesehatanPct)}</span>
-                  </div>
-                  <div style={{ height: 6, background: "var(--border)", borderRadius: 4, overflow: "hidden", marginBottom: 12 }}>
-                    <div style={{ height: "100%", width: `${kesehatanPct * 100}%`, background: status.color, transition: "width .2s" }} />
-                  </div>
-                  <div style={{ background: `${status.color}22`, borderRadius: 8, padding: "9px 12px" }}>
-                    <div style={{ fontWeight: 700, color: status.color, marginBottom: 2 }}>{status.lbl}</div>
-                    <div style={{ fontSize: 12, color: status.color }}>{status.desc}</div>
-                  </div>
-                  <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 10 }}>
-                    Ambang: \u226585% Terkendali &middot; 70&ndash;84% Waspada &middot; 50&ndash;69% Monitoring &middot; &lt;50% Perlu Perhatian
-                  </div>
+                {/* Card 3: Riwayat */}
+                <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20 }}>
+                  <div style={{ fontWeight: 700, fontSize: 14.5, color: "#7c3aed", marginBottom: 14 }}>3. RIWAYAT KESEHATAN STOK SEMUA BULAN</div>
+                  <KesehatanHistoryChart allRecords={allRecords} branchId={selectedBranch.id} currentPeriod={period} currentPct={kesehatanPct} />
                 </div>
               </>
             )}
@@ -368,6 +391,78 @@ function MiniStat({ label, value }) {
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 10px", textAlign: "center" }}>
       <div style={{ color: "var(--text-faint)", marginBottom: 2 }}>{label}</div>
       <div className="mono" style={{ fontWeight: 700, fontSize: 14 }}>{value}</div>
+    </div>
+  );
+}
+
+function ThresholdLegend({ color, label, range }) {
+  return (
+    <div style={{ textAlign: "center", background: "var(--surface-alt)", borderRadius: 8, padding: "8px 6px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 5, marginBottom: 3 }}>
+        <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, flexShrink: 0 }} />
+        <span style={{ fontSize: 11, fontWeight: 700 }}>{label}</span>
+      </div>
+      <div style={{ fontSize: 10, color: "var(--text-faint)" }}>{range}</div>
+    </div>
+  );
+}
+
+function KesehatanHistoryChart({ allRecords, branchId, currentPeriod, currentPct }) {
+  const points = allRecords
+    .filter((r) => r.branch_id === branchId && !r.data?.tidak_visit && r.period <= currentPeriod)
+    .sort((a, b) => (a.period < b.period ? -1 : 1))
+    .map((r) => ({ period: r.period, kesehatanPct: r.data.kesehatan_pct || 0 }));
+  if (!points.length || points[points.length - 1]?.period !== currentPeriod) {
+    points.push({ period: currentPeriod, kesehatanPct: currentPct });
+  }
+  const shown = points;
+
+  if (shown.length < 2) {
+    return <div style={{ fontSize: 12.5, color: "var(--text-faint)", padding: "40px 0", textAlign: "center" }}>Belum cukup riwayat buat ditampilkan sebagai grafik.</div>;
+  }
+
+  const H = 220, padL = 46, padR = 16, padT = 20, padB = 30;
+  const colWidth = 70;
+  const W = Math.max(640, padL + padR + (shown.length - 1) * colWidth);
+  const maxVal = 1;
+  const xStep = (W - padL - padR) / (shown.length - 1);
+  const xAt = (i) => padL + i * xStep;
+  const yAt = (v) => padT + (1 - v / maxVal) * (H - padT - padB);
+
+  const linePoints = shown.map((p, i) => `${xAt(i)},${yAt(p.kesehatanPct)}`).join(" ");
+  const areaPoints = `${padL},${yAt(0)} ${linePoints} ${xAt(shown.length - 1)},${yAt(0)}`;
+  const yTicks = [0, 0.25, 0.5, 0.75, 1];
+  const labelEvery = Math.ceil(shown.length / 9);
+
+  return (
+    <div style={{ width: "100%", overflowX: "auto" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: W, height: "auto", minWidth: "100%" }}>
+        <defs>
+          <linearGradient id="kesehatanFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#7c3aed" stopOpacity="0.35" />
+            <stop offset="100%" stopColor="#7c3aed" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {yTicks.map((t, i) => (
+          <g key={i}>
+            <line x1={padL} x2={W - padR} y1={yAt(t)} y2={yAt(t)} stroke="var(--border)" strokeWidth="1" />
+            <text x={padL - 8} y={yAt(t) + 3} textAnchor="end" fontSize="9" fill="var(--text-faint)">{(t * 100).toFixed(0)}%</text>
+          </g>
+        ))}
+        <polygon points={areaPoints} fill="url(#kesehatanFill)" />
+        <polyline points={linePoints} fill="none" stroke="#7c3aed" strokeWidth="2" />
+        {shown.map((p, i) => {
+          const isLast = i === shown.length - 1;
+          const showLabel = i % labelEvery === 0 || isLast;
+          return (
+            <g key={i}>
+              <circle cx={xAt(i)} cy={yAt(p.kesehatanPct)} r={isLast ? 4 : 3} fill={isLast ? "#F4B740" : "#7c3aed"} />
+              {showLabel && <text x={xAt(i)} y={yAt(p.kesehatanPct) - 10} textAnchor="middle" fontSize="10" fontWeight="700" fill={isLast ? "#F4B740" : "var(--text-secondary)"}>{(p.kesehatanPct * 100).toFixed(0)}%</text>}
+              {showLabel && <text x={xAt(i)} y={H - 10} textAnchor="middle" fontSize="9.5" fill="var(--text-faint)">{periodeLabel(p.period).slice(0, 8)}</text>}
+            </g>
+          );
+        })}
+      </svg>
     </div>
   );
 }

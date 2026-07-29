@@ -434,118 +434,150 @@ export default function AuditKeuangan({ profile }) {
 
         {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
 
-        <div style={{ padding: 24, maxWidth: 560 }}>
-          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
-            {isFirstEverEntry ? (
-              <div style={{ marginBottom: 16 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
-                  <Icon name="history" size={13} /> Saldo sebelumnya (audit pertama cabang ini)
-                </label>
-                <div style={{ position: "relative" }}>
-                  <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
-                  <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.saldo_sebelumnya)} onChange={(e) => setForm({ ...form, saldo_sebelumnya: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
-                </div>
-              </div>
-            ) : (
-              <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span style={{ fontSize: 11.5, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 5 }}>
-                  <Icon name="history" size={13} /> Saldo sebelumnya <span style={{ color: "var(--text-faint)" }}>(otomatis)</span>
-                </span>
-                <span className="mono" style={{ fontSize: 13.5, fontWeight: 600 }}>{rupiah(form.saldo_sebelumnya)}</span>
-              </div>
-            )}
+        <div style={{ padding: 24 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gap: 16, marginBottom: 16, alignItems: "start" }}>
 
-            {!selectedBranch.limit_kas && (
-              <div style={{ marginBottom: 16 }}>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
-                  <Icon name="wallet" size={13} /> Limit kas kecil cabang ini (baru, sekali diisi lalu terkunci)
-                </label>
-                <div style={{ position: "relative" }}>
-                  <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
-                  <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.limit_kas)} onChange={(e) => setForm({ ...form, limit_kas: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
-                </div>
-              </div>
-            )}
+            {/* Card 1: Input data */}
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20 }}>
+              <div style={{ fontWeight: 700, fontSize: 14.5, color: "#7c3aed", marginBottom: 2 }}>1. INPUT DATA</div>
+              <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 16 }}>Isi data kas kecil pada periode audit ini</div>
 
-            {selectedBranch.limit_kas > 0 && profile?.role === "super_admin" && (
-              editingLimit ? (
+              {isFirstEverEntry ? (
                 <div style={{ marginBottom: 16 }}>
                   <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
-                    <Icon name="wallet" size={13} /> Ubah limit kas kecil <span style={{ color: "var(--text-faint)" }}>(khusus Super Admin)</span>
+                    <Icon name="history" size={13} /> Saldo sebelumnya (audit pertama cabang ini)
                   </label>
-                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-                    <div style={{ position: "relative", flex: 1 }}>
-                      <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
-                      <input className="input" type="text" inputMode="numeric" placeholder="0" value={formatThousands(limitDraft)} onChange={(e) => setLimitDraft(parseThousands(e.target.value))} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} autoFocus />
-                    </div>
-                    <button className="btn" disabled={savingLimit} onClick={saveLimitOnly}>{savingLimit ? "..." : "Simpan"}</button>
-                    <button className="btn-ghost" onClick={() => setEditingLimit(false)}>Batal</button>
+                  <div style={{ position: "relative" }}>
+                    <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
+                    <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.saldo_sebelumnya)} onChange={(e) => setForm({ ...form, saldo_sebelumnya: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
                   </div>
                 </div>
               ) : (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, fontSize: 11.5, color: "var(--text-faint)" }}>
-                  <span>Limit kas kecil: <span className="mono" style={{ color: "var(--text-secondary)", fontWeight: 600 }}>{rupiah(selectedBranch.limit_kas)}</span></span>
-                  <span onClick={() => { setLimitDraft(String(selectedBranch.limit_kas)); setEditingLimit(true); }} style={{ cursor: "pointer", color: "#F4B740", textDecoration: "underline" }}>Ubah</span>
-                </div>
-              )
-            )}
-
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
-              <div>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
-                  <Icon name="arrowDown" size={13} /> Saldo masuk
-                </label>
-                <div style={{ position: "relative" }}>
-                  <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
-                  <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.saldo_masuk)} onChange={(e) => setForm({ ...form, saldo_masuk: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
-                </div>
-              </div>
-              <div>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
-                  <Icon name="arrowUp" size={13} /> Pengeluaran
-                </label>
-                <div style={{ position: "relative" }}>
-                  <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
-                  <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.pengeluaran)} onChange={(e) => setForm({ ...form, pengeluaran: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
-                </div>
-              </div>
-            </div>
-
-            <div>
-              <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
-                <Icon name="wallet" size={13} /> Sisa saldo (hitung fisik uang kas)
-              </label>
-              <div style={{ position: "relative" }}>
-                <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
-                <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.sisa_saldo)} onChange={(e) => setForm({ ...form, sisa_saldo: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
-              </div>
-              {canEdit && (
-                <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 5 }}>
-                  Hasil hitungan rumus: {rupiah(sisaHitung)}{" "}
-                  <span onClick={() => setForm((f) => ({ ...f, sisa_saldo: String(Math.round(sisaHitung)) }))} style={{ cursor: "pointer", color: "#F4B740", textDecoration: "underline" }}>
-                    pakai ini
+                <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ fontSize: 11.5, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 5 }}>
+                    <Icon name="history" size={13} /> Saldo sebelumnya <span style={{ color: "var(--text-faint)" }}>(otomatis)</span>
                   </span>
+                  <span className="mono" style={{ fontSize: 13.5, fontWeight: 600 }}>{rupiah(form.saldo_sebelumnya)}</span>
                 </div>
               )}
+
+              {!selectedBranch.limit_kas && (
+                <div style={{ marginBottom: 16 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
+                    <Icon name="wallet" size={13} /> Limit kas kecil cabang ini (baru, sekali diisi lalu terkunci)
+                  </label>
+                  <div style={{ position: "relative" }}>
+                    <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
+                    <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.limit_kas)} onChange={(e) => setForm({ ...form, limit_kas: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
+                  </div>
+                </div>
+              )}
+
+              {selectedBranch.limit_kas > 0 && profile?.role === "super_admin" && (
+                editingLimit ? (
+                  <div style={{ marginBottom: 16 }}>
+                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
+                      <Icon name="wallet" size={13} /> Ubah limit kas kecil <span style={{ color: "var(--text-faint)" }}>(khusus Super Admin)</span>
+                    </label>
+                    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                      <div style={{ position: "relative", flex: 1 }}>
+                        <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
+                        <input className="input" type="text" inputMode="numeric" placeholder="0" value={formatThousands(limitDraft)} onChange={(e) => setLimitDraft(parseThousands(e.target.value))} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} autoFocus />
+                      </div>
+                      <button className="btn" disabled={savingLimit} onClick={saveLimitOnly}>{savingLimit ? "..." : "Simpan"}</button>
+                      <button className="btn-ghost" onClick={() => setEditingLimit(false)}>Batal</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16, fontSize: 11.5, color: "var(--text-faint)" }}>
+                    <span>Limit kas kecil: <span className="mono" style={{ color: "var(--text-secondary)", fontWeight: 600 }}>{rupiah(selectedBranch.limit_kas)}</span></span>
+                    <span onClick={() => { setLimitDraft(String(selectedBranch.limit_kas)); setEditingLimit(true); }} style={{ cursor: "pointer", color: "#F4B740", textDecoration: "underline" }}>Ubah</span>
+                  </div>
+                )
+              )}
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 }}>
+                <div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
+                    <Icon name="arrowDown" size={13} /> Saldo masuk
+                  </label>
+                  <div style={{ position: "relative" }}>
+                    <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
+                    <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.saldo_masuk)} onChange={(e) => setForm({ ...form, saldo_masuk: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
+                  </div>
+                </div>
+                <div>
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
+                    <Icon name="arrowUp" size={13} /> Pengeluaran
+                  </label>
+                  <div style={{ position: "relative" }}>
+                    <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
+                    <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.pengeluaran)} onChange={(e) => setForm({ ...form, pengeluaran: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
+                  <Icon name="wallet" size={13} /> Sisa saldo (hitung fisik uang kas)
+                </label>
+                <div style={{ position: "relative" }}>
+                  <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
+                  <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.sisa_saldo)} onChange={(e) => setForm({ ...form, sisa_saldo: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
+                </div>
+                {canEdit && (
+                  <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 5 }}>
+                    Hasil hitungan rumus: {rupiah(sisaHitung)}{" "}
+                    <span onClick={() => setForm((f) => ({ ...f, sisa_saldo: String(Math.round(sisaHitung)) }))} style={{ cursor: "pointer", color: "#F4B740", textDecoration: "underline" }}>
+                      pakai ini
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
+
+            {/* Card 2: Hasil perhitungan */}
+            {current && (
+              <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20 }}>
+                <div style={{ fontWeight: 700, fontSize: 14.5, color: "#7c3aed", marginBottom: 2 }}>2. HASIL PERHITUNGAN</div>
+                <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 16 }}>Dihitung otomatis dari data di samping</div>
+
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 16 }}>
+                  <div>
+                    <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 4 }}>Sisa Saldo</div>
+                    <div style={{ fontSize: 20, fontWeight: 800 }}>{rupiah(current.sisa)}</div>
+                  </div>
+                  <div>
+                    <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 4 }}>% Posisi Kas</div>
+                    <div style={{ fontSize: 26, fontWeight: 800, color: TONE[current.tone].dot }}>{pct(current.posisi)}</div>
+                  </div>
+                </div>
+                <div style={{ height: 6, background: "var(--border)", borderRadius: 4, overflow: "hidden", marginBottom: 16 }}>
+                  <div style={{ height: "100%", width: `${Math.min(current.posisi * 100, 100)}%`, background: TONE[current.tone].dot, transition: "width .2s" }} />
+                </div>
+
+                <div style={{ background: TONE[current.tone].bg, borderRadius: 8, padding: "9px 12px", marginBottom: 16 }}>
+                  <div style={{ fontWeight: 700, color: TONE[current.tone].text, marginBottom: 2 }}>{current.indikator}</div>
+                  <div style={{ fontSize: 12.5, color: TONE[current.tone].text }}>{current.keterangan}</div>
+                </div>
+
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
+                  <ThresholdLegend color={TONE.good.dot} label="Terkendali" range={`0 \u2013 ${settings.terkendali}%`} />
+                  <ThresholdLegend color={TONE.good.dot} label="Efisien" range={`${settings.terkendali} \u2013 ${settings.efisien}%`} />
+                  <ThresholdLegend color={TONE.warn.dot} label="Monitoring" range={`${settings.efisien} \u2013 ${settings.monitoring}%`} />
+                  <ThresholdLegend color={TONE.bad.dot} label="Tindak Lanjut" range={`> ${settings.monitoring}%`} />
+                </div>
+                <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 10 }}>Kas kecil minus otomatis jadi status "Pengecekan", terlepas dari ambang di atas.</div>
+              </div>
+            )}
           </div>
 
-          {/* Panel hasil — cuma % Posisi Kas + Indikator */}
-          {current && (
-            <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                <span style={{ fontSize: 11.5, color: "var(--text-secondary)" }}>% Posisi kas</span>
-                <span style={{ fontSize: 15, fontWeight: 700, color: TONE[current.tone].dot }}>{pct(current.posisi)}</span>
-              </div>
-              <div style={{ height: 6, background: "var(--border)", borderRadius: 4, overflow: "hidden", marginBottom: 12 }}>
-                <div style={{ height: "100%", width: `${Math.min(current.posisi * 100, 100)}%`, background: TONE[current.tone].dot, transition: "width .2s" }} />
-              </div>
-              <div style={{ background: TONE[current.tone].bg, borderRadius: 8, padding: "9px 12px" }}>
-                <div style={{ fontWeight: 700, color: TONE[current.tone].text, marginBottom: 2 }}>{current.indikator}</div>
-                <div style={{ fontSize: 12.5, color: TONE[current.tone].text }}>{current.keterangan}</div>
-              </div>
-            </div>
-          )}
+          {/* Card 3: Riwayat */}
+          <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20 }}>
+            <div style={{ fontWeight: 700, fontSize: 14.5, color: "#7c3aed", marginBottom: 14 }}>3. RIWAYAT POSISI KAS SEMUA BULAN</div>
+            <KeuanganHistoryChart entriesByBranch={entriesByBranch} branchId={selectedBranch.id} settings={settings} currentPeriod={selectedPeriod} currentPosisi={current?.posisi ?? 0} />
+          </div>
+
           {savedFlash && <div style={{ color: "var(--success-text)", fontSize: 13, marginTop: 10 }}>Tersimpan \u2713</div>}
         </div>
       </div>
@@ -655,6 +687,79 @@ export default function AuditKeuangan({ profile }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ThresholdLegend({ color, label, range }) {
+  return (
+    <div style={{ textAlign: "center", background: "var(--surface-alt)", borderRadius: 8, padding: "8px 6px" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 5, marginBottom: 3 }}>
+        <span style={{ width: 7, height: 7, borderRadius: "50%", background: color, flexShrink: 0 }} />
+        <span style={{ fontSize: 11, fontWeight: 700 }}>{label}</span>
+      </div>
+      <div style={{ fontSize: 10, color: "var(--text-faint)" }}>{range}</div>
+    </div>
+  );
+}
+
+function KeuanganHistoryChart({ entriesByBranch, branchId, settings, currentPeriod, currentPosisi }) {
+  const byPeriod = entriesByBranch[branchId] || {};
+  const points = Object.keys(byPeriod)
+    .filter((p) => p <= currentPeriod)
+    .sort()
+    .map((p) => ({ period: p, posisi: computeStatus(byPeriod[p], settings)?.posisi || 0 }));
+  if (!points.length || points[points.length - 1]?.period !== currentPeriod) {
+    points.push({ period: currentPeriod, posisi: currentPosisi });
+  }
+  const shown = points;
+
+  if (shown.length < 2) {
+    return <div style={{ fontSize: 12.5, color: "var(--text-faint)", padding: "40px 0", textAlign: "center" }}>Belum cukup riwayat buat ditampilkan sebagai grafik.</div>;
+  }
+
+  const H = 220, padL = 46, padR = 16, padT = 20, padB = 30;
+  const colWidth = 70;
+  const W = Math.max(640, padL + padR + (shown.length - 1) * colWidth);
+  const maxVal = Math.max(...shown.map((p) => p.posisi), settings.monitoring / 100) * 1.15;
+  const xStep = (W - padL - padR) / (shown.length - 1);
+  const xAt = (i) => padL + i * xStep;
+  const yAt = (v) => padT + (1 - v / maxVal) * (H - padT - padB);
+
+  const linePoints = shown.map((p, i) => `${xAt(i)},${yAt(p.posisi)}`).join(" ");
+  const areaPoints = `${padL},${yAt(0)} ${linePoints} ${xAt(shown.length - 1)},${yAt(0)}`;
+  const yTicks = [0, maxVal * 0.25, maxVal * 0.5, maxVal * 0.75, maxVal];
+  const labelEvery = Math.ceil(shown.length / 9);
+
+  return (
+    <div style={{ width: "100%", overflowX: "auto" }}>
+      <svg viewBox={`0 0 ${W} ${H}`} style={{ width: W, height: "auto", minWidth: "100%" }}>
+        <defs>
+          <linearGradient id="posisiFill" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor="#7c3aed" stopOpacity="0.35" />
+            <stop offset="100%" stopColor="#7c3aed" stopOpacity="0" />
+          </linearGradient>
+        </defs>
+        {yTicks.map((t, i) => (
+          <g key={i}>
+            <line x1={padL} x2={W - padR} y1={yAt(t)} y2={yAt(t)} stroke="var(--border)" strokeWidth="1" />
+            <text x={padL - 8} y={yAt(t) + 3} textAnchor="end" fontSize="9" fill="var(--text-faint)">{(t * 100).toFixed(0)}%</text>
+          </g>
+        ))}
+        <polygon points={areaPoints} fill="url(#posisiFill)" />
+        <polyline points={linePoints} fill="none" stroke="#7c3aed" strokeWidth="2" />
+        {shown.map((p, i) => {
+          const isLast = i === shown.length - 1;
+          const showLabel = i % labelEvery === 0 || isLast;
+          return (
+            <g key={i}>
+              <circle cx={xAt(i)} cy={yAt(p.posisi)} r={isLast ? 4 : 3} fill={isLast ? "#F4B740" : "#7c3aed"} />
+              {showLabel && <text x={xAt(i)} y={yAt(p.posisi) - 10} textAnchor="middle" fontSize="10" fontWeight="700" fill={isLast ? "#F4B740" : "var(--text-secondary)"}>{(p.posisi * 100).toFixed(0)}%</text>}
+              {showLabel && <text x={xAt(i)} y={H - 10} textAnchor="middle" fontSize="9.5" fill="var(--text-faint)">{monthLabel(p.period).slice(0, 8)}</text>}
+            </g>
+          );
+        })}
+      </svg>
     </div>
   );
 }

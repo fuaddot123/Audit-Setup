@@ -4,12 +4,12 @@ import { supabase } from "../lib/supabaseClient";
 import Sidebar from "../components/Sidebar";
 import RadarLogo from "../components/RadarLogo";
 import AuditKeuangan from "../components/AuditKeuangan";
-import AuditInventaris from "../components/AuditInventaris";
 import Timeline from "../components/Timeline";
 import AuditSOP from "../components/AuditSOP";
 import AuditStok from "../components/AuditStok";
 import AuditKPI from "../components/AuditKPI";
 import BeritaAcara from "../components/BeritaAcara";
+import LaporanBulanan from "../components/LaporanBulanan";
 
 export default function Dashboard() {
   const router = useRouter();
@@ -48,8 +48,6 @@ export default function Dashboard() {
       <Sidebar active={active} activeSub={activeSub} onSelect={handleSelect} profile={profile} />
       {active === "keuangan" ? (
         <AuditKeuangan profile={profile} />
-      ) : active === "inventaris" ? (
-        <AuditInventaris profile={profile} />
       ) : active === "timeline" ? (
         <Timeline />
       ) : active === "sop" ? (
@@ -60,6 +58,8 @@ export default function Dashboard() {
         <AuditKPI profile={profile} />
       ) : active === "berita_acara" ? (
         <BeritaAcara profile={profile} />
+      ) : active === "laporan_bulanan" ? (
+        <LaporanBulanan profile={profile} />
       ) : (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-faint)", flexDirection: "column" }}>
           <div className="display" style={{ fontSize: 19, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>Modul ini belum dibuat</div>

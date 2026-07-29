@@ -1,5 +1,9 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
+import {
+  INVENTARIS_CATEGORIES, freshInventaris, normalizeInventaris, countRusak,
+  uploadInventarisMedia, InventarisChecklist,
+} from "./AuditInventaris";
 
 function nowPeriode() {
   const n = new Date();
@@ -20,6 +24,15 @@ function esc(s) {
 }
 function newStockRow() { return { nama: "", status: "Lengkap", keterangan: "" }; }
 
+// Sama persis dengan pola threshold di components/sop/SopKepatuhan.js
+function kategoriInfo(pct) {
+  const v = pct * 100;
+  if (v >= 90) return { lbl: "Sangat Baik", color: "#1a9e6e" };
+  if (v >= 80) return { lbl: "Baik", color: "#2f9e46" };
+  if (v >= 70) return { lbl: "Cukup", color: "#b07212" };
+  return { lbl: "Perlu Perbaikan", color: "#a32020" };
+}
+
 export default function BeritaAcara({ profile }) {
   const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
 
@@ -29,18 +42,22 @@ export default function BeritaAcara({ profile }) {
   const [viewPeriod, setViewPeriod] = useState(nowPeriode());
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [existingRow, setExistingRow] = useState(null);
+  const [existingInventarisRow, setExistingInventarisRow] = useState(null);
 
   const [waktuAudit, setWaktuAudit] = useState("");
   const [kegiatan, setKegiatan] = useState("Audit Stock Opname, SOP, Inventaris, Kas Kecil, dan Report Penjualan");
   const [perlengkapan, setPerlengkapan] = useState("Laptop dan Scanner");
   const [stockKat1, setStockKat1] = useState([]);
   const [stockKat2, setStockKat2] = useState([]);
+  const [inventaris, setInventaris] = useState(freshInventaris());
   const [storeManagerName, setStoreManagerName] = useState("");
+  const [storeLeaderName, setStoreLeaderName] = useState("");
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(null);
   const [loadingRecord, setLoadingRecord] = useState(false);
+  const [uploadingKey, setUploadingKey] = useState(null);
 
   useEffect(() => { loadBranches(); }, []);
 
@@ -58,20 +75,19 @@ export default function BeritaAcara({ profile }) {
     setSaved(false);
     setError(null);
     setLoadingRecord(true);
-    const { data, error: err } = await supabase
-      .from("berita_acara")
-      .select("*")
-      .eq("branch_id", b.id)
-      .eq("period", viewPeriod)
-      .maybeSingle();
-    if (!err && data) {
-      setExistingRow(data);
-      setWaktuAudit(data.waktu_audit || "");
-      setKegiatan(data.kegiatan || "Audit Stock Opname, SOP, Inventaris, Kas Kecil, dan Report Penjualan");
-      setPerlengkapan(data.perlengkapan || "Laptop dan Scanner");
-      setStockKat1(Array.isArray(data.stock_opname_kat1) ? data.stock_opname_kat1 : []);
-      setStockKat2(Array.isArray(data.stock_opname_kat2) ? data.stock_opname_kat2 : []);
-      setStoreManagerName(data.store_manager_name || "");
+    const [beRes, invRes] = await Promise.all([
+      supabase.from("berita_acara").select("*").eq("branch_id", b.id).eq("period", viewPeriod).maybeSingle(),
+      supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", viewPeriod).maybeSingle(),
+    ]);
+    if (!beRes.error && beRes.data) {
+      setExistingRow(beRes.data);
+      setWaktuAudit(beRes.data.waktu_audit || "");
+      setKegiatan(beRes.data.kegiatan || "Audit Stock Opname, SOP, Inventaris, Kas Kecil, dan Report Penjualan");
+      setPerlengkapan(beRes.data.perlengkapan || "Laptop dan Scanner");
+      setStockKat1(Array.isArray(beRes.data.stock_opname_kat1) ? beRes.data.stock_opname_kat1 : []);
+      setStockKat2(Array.isArray(beRes.data.stock_opname_kat2) ? beRes.data.stock_opname_kat2 : []);
+      setStoreManagerName(beRes.data.store_manager_name || "");
+      setStoreLeaderName(beRes.data.store_leader_name || "");
     } else {
       setExistingRow(null);
       setWaktuAudit("");
@@ -80,6 +96,14 @@ export default function BeritaAcara({ profile }) {
       setStockKat1([]);
       setStockKat2([]);
       setStoreManagerName("");
+      setStoreLeaderName("");
+    }
+    if (!invRes.error && invRes.data) {
+      setExistingInventarisRow(invRes.data);
+      setInventaris(normalizeInventaris(invRes.data.data?.categories));
+    } else {
+      setExistingInventarisRow(null);
+      setInventaris(freshInventaris());
     }
     setLoadingRecord(false);
   }
@@ -87,6 +111,7 @@ export default function BeritaAcara({ profile }) {
   function backToList() {
     setSelectedBranch(null);
     setExistingRow(null);
+    setExistingInventarisRow(null);
     loadBranches();
   }
 
@@ -98,13 +123,45 @@ export default function BeritaAcara({ profile }) {
   }
   function removeRow(setter, i) { setter((prev) => prev.filter((_, idx) => idx !== i)); setSaved(false); }
 
+  // ── Inventaris helpers ──
+  function updateInventaris(cat, field, val) {
+    setInventaris((prev) => ({ ...prev, [cat]: { ...prev[cat], [field]: val } }));
+    setSaved(false);
+  }
+  async function handleUploadInventarisMedia(cat, fileList) {
+    if (!selectedBranch) return;
+    const key = `inv-${cat}`;
+    setUploadingKey(key);
+    setError(null);
+    try {
+      const uploaded = await uploadInventarisMedia({ branchId: selectedBranch.id, period: viewPeriod, cat, fileList });
+      if (uploaded.length) {
+        setInventaris((prev) => ({ ...prev, [cat]: { ...prev[cat], photos: [...(prev[cat].photos || []), ...uploaded] } }));
+        setSaved(false);
+      }
+    } catch (err) {
+      setError("Gagal upload: " + err.message);
+    } finally {
+      setUploadingKey(null);
+    }
+  }
+  function removeInventarisMedia(cat, mediaIdx) {
+    setInventaris((prev) => {
+      const photos = [...(prev[cat].photos || [])];
+      photos.splice(mediaIdx, 1);
+      return { ...prev, [cat]: { ...prev[cat], photos } };
+    });
+    setSaved(false);
+  }
+
   async function saveRecord() {
     if (!canEdit) { setError("Kamu tidak punya izin untuk menyimpan."); return; }
     setSaving(true);
     setError(null);
     try {
       const user = (await supabase.auth.getUser()).data.user;
-      const payload = {
+
+      const beritaPayload = {
         branch_id: selectedBranch.id,
         period: viewPeriod,
         waktu_audit: waktuAudit,
@@ -113,16 +170,26 @@ export default function BeritaAcara({ profile }) {
         stock_opname_kat1: stockKat1,
         stock_opname_kat2: stockKat2,
         store_manager_name: storeManagerName,
+        store_leader_name: storeLeaderName,
         submitted_by: user.id,
         updated_at: new Date().toISOString(),
       };
-      const { data, error: err } = await supabase
-        .from("berita_acara")
-        .upsert(payload, { onConflict: "branch_id,period" })
-        .select()
-        .single();
-      if (err) throw err;
-      setExistingRow(data);
+      const beRes = await supabase.from("berita_acara").upsert(beritaPayload, { onConflict: "branch_id,period" }).select().single();
+      if (beRes.error) throw beRes.error;
+
+      const invPayload = {
+        module: "inventaris",
+        branch_id: selectedBranch.id,
+        period: viewPeriod,
+        status: "submitted",
+        submitted_by: user.id,
+        data: { tidak_visit: false, categories: inventaris, auditor_name: profile?.full_name || null },
+      };
+      const invRes = await supabase.from("audit_generic").upsert(invPayload, { onConflict: "module,branch_id,period" }).select().single();
+      if (invRes.error) throw invRes.error;
+
+      setExistingRow(beRes.data);
+      setExistingInventarisRow(invRes.data);
       setSaved(true);
     } catch (err) {
       setError("Gagal menyimpan: " + err.message);
@@ -139,9 +206,14 @@ export default function BeritaAcara({ profile }) {
     try {
       const { error: err } = await supabase.from("berita_acara").delete().eq("id", existingRow.id);
       if (err) throw err;
+      if (existingInventarisRow) {
+        await supabase.from("audit_generic").delete().eq("id", existingInventarisRow.id);
+      }
       setExistingRow(null);
+      setExistingInventarisRow(null);
       setStockKat1([]);
       setStockKat2([]);
+      setInventaris(freshInventaris());
       setSaved(false);
     } catch (err) {
       setError("Gagal menghapus: " + err.message);
@@ -154,134 +226,270 @@ export default function BeritaAcara({ profile }) {
     if (!selectedBranch) return;
     const printDate = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
 
-    function pill(text, bad) {
-      return `<span style="display:inline-block;font-size:9px;font-weight:700;padding:2px 9px;border-radius:20px;background:${bad ? "#f7c1c1" : "#c0dd97"};color:${bad ? "#501313" : "#173404"};">${esc(text)}</span>`;
-    }
-
-    function stockTable(title, rows) {
-      const body = rows.map((r, i) => {
-        const isBad = r.status === "Selisih";
-        return `<tr style="background:${isBad ? "#fcebeb" : "#fff"};border-left:3px solid ${isBad ? "#e24b4a" : "#97c459"};">
-        <td style="text-align:center;color:#999;">${i + 1}</td>
-        <td style="font-weight:600;">${isBad ? "&#10007; " : "&#10003; "}${esc(r.nama) || "\u2014"}</td>
-        <td style="text-align:center;">${pill(r.status, isBad)}</td>
-        <td style="font-size:9px;color:#555;">${esc(r.keterangan) || "\u2014"}</td>
-      </tr>`;
-      }).join("") || `<tr><td colspan="4" style="text-align:center;color:#999;padding:14px;">Tidak ada baris diisi</td></tr>`;
-      return `<table class="data"><thead>
-        <tr><th colspan="4" class="subsect-th"><span>${esc(title)}</span><span class="subsect-brand">KLA Computer &middot; Berita Acara &middot; ${esc(selectedBranch.name)}</span></th></tr>
-        <tr><th style="width:26px;">No</th><th>Nama Barang / Brand</th><th style="width:90px;text-align:center;">Status</th><th>Keterangan</th></tr>
-      </thead><tbody>${body}</tbody></table>`;
+    function catPct(rows) {
+      if (!rows.length) return null;
+      const selisih = rows.filter((r) => r.status === "Selisih").length;
+      return Math.round(((rows.length - selisih) / rows.length) * 100);
     }
 
     const stockSelisihCount = [...stockKat1, ...stockKat2].filter((r) => r.status === "Selisih").length;
     const stockTotalCount = stockKat1.length + stockKat2.length;
-    const problemItems = [...stockKat1, ...stockKat2].filter((r) => r.status === "Selisih");
+    const stockPct = stockTotalCount ? Math.round(((stockTotalCount - stockSelisihCount) / stockTotalCount) * 100) : 0;
+    const stockInfo = kategoriInfo(stockPct / 100);
+    const kat1Pct = catPct(stockKat1);
+    const kat2Pct = catPct(stockKat2);
+    const kat1Color = kat1Pct === null ? "#999" : kategoriInfo(kat1Pct / 100).color;
+    const kat2Color = kat2Pct === null ? "#999" : kategoriInfo(kat2Pct / 100).color;
+
+    const invRusakCount = countRusak(inventaris);
+    const invTotalCount = INVENTARIS_CATEGORIES.length;
+    const invPct = invTotalCount ? Math.round(((invTotalCount - invRusakCount) / invTotalCount) * 100) : 0;
+    const invInfo = kategoriInfo(invPct / 100);
+    const invTidakPct = 100 - invPct;
+
+    function stockTable(title, rows) {
+      const body = rows.map((r) => {
+        const isBad = r.status === "Selisih";
+        return `<tr>
+          <td style="font-weight:600;">${esc(r.nama) || "\u2014"}</td>
+          <td class="${isBad ? "status-bad" : "status-ok"}">${isBad ? "SELISIH" : "LENGKAP"}</td>
+          <td>${esc(r.keterangan) || "-"}</td>
+        </tr>`;
+      }).join("") || `<tr><td colspan="3" style="text-align:center;color:#999;padding:10px;">Tidak ada baris diisi</td></tr>`;
+      return `<tr class="kat-row"><td colspan="3">${esc(title)}</td></tr>${body}`;
+    }
+
+    const invRows = INVENTARIS_CATEGORIES.map((cat) => {
+      const row = inventaris[cat] || { status: "Berfungsi", keterangan: "" };
+      const isBad = row.status === "Rusak";
+      return `<tr>
+        <td style="font-weight:600;">${esc(cat)}</td>
+        <td class="${isBad ? "status-bad" : "status-ok"}">${isBad ? "SELISIH" : "LENGKAP"}</td>
+        <td>${esc(row.keterangan) || "-"}</td>
+      </tr>`;
+    }).join("");
+
+    const ICON = {
+      store: `<svg viewBox="0 0 24 24" fill="none" stroke="#2A1F52" stroke-width="2.4"><path d="M3 9l1.5-5h15L21 9"/><path d="M4 9v10a1 1 0 001 1h14a1 1 0 001-1V9"/></svg>`,
+      calendar: `<svg viewBox="0 0 24 24" fill="none" stroke="#2A1F52" stroke-width="2.4"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>`,
+      person: `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-8 8-8s8 3.6 8 8"/></svg>`,
+      people: `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"><circle cx="9" cy="8" r="3.2"/><path d="M2.5 20c0-3.6 2.9-6.5 6.5-6.5s6.5 2.9 6.5 6.5"/></svg>`,
+      clipboard: `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"><rect x="6" y="4" width="12" height="17" rx="1.5"/><path d="M9 11h6M9 15h6"/></svg>`,
+      laptop: `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"><rect x="4" y="4" width="16" height="11" rx="1.5"/><path d="M2 19h20"/></svg>`,
+      box: `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/></svg>`,
+      checklist: `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>`,
+    };
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Berita Acara ${esc(selectedBranch.name)}</title>
     <style>
       * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-      @page { size: A4; }
-      body { font-family: Arial, Helvetica, sans-serif; color: #222; font-size: 11px; margin: 0; }
-      html, body { height: 100%; }
-      body { width: 210mm; margin: 0 auto; }
-      .hdr { display: flex; justify-content: space-between; align-items: center; background: linear-gradient(120deg,#2A1F52,#3d2a72); margin: 0 0 16px; padding: 16px 14mm; border-bottom: 4px solid #F4B740; }
-      .hdr-left { display: flex; align-items: center; gap: 12px; }
-      .hdr-badge { width: 36px; height: 36px; border-radius: 9px; background: #F4B740; color: #2A1F52; display: flex; align-items: center; justify-content: center; font-weight: 900; font-size: 13px; flex-shrink: 0; }
-      .hdr-title { color: #fff; font-weight: 800; font-size: 15px; }
-      .hdr-sub { color: #cfc7e6; font-size: 8.5px; }
-      .hdr-right { text-align: right; }
-      .hdr-tag { color: #F4B740; font-size: 8px; font-weight: 800; letter-spacing: 0.06em; }
-      .hdr-date { color: #cfc7e6; font-size: 8.5px; margin-top: 2px; }
-      .content { padding: 16px 14mm 14mm; flex: 1; display: flex; flex-direction: column; }
-      h1 { font-size: 16px; color: #2A1F52; margin: 0 0 2px; }
-      .sub { font-size: 10px; color: #888; margin-bottom: 14px; }
-      .info-row { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-bottom: 8px; }
-      .info-box { border: 1px solid #eadfc4; background: #fdfaf1; border-radius: 8px; padding: 8px 11px; }
-      .info-box .l { font-size: 7px; font-weight: 800; color: #b8860b; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 2px; }
-      .info-box .v { font-size: 10.5px; font-weight: 700; color: #2A1F52; }
-      .info-wide { border: 1px solid #e0d8f0; background: #f5f3fa; border-radius: 8px; padding: 8px 11px; margin-bottom: 14px; font-size: 10px; color: #2A1F52; }
-      .info-wide b { color: #3c3489; }
-      .metric-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 14px 0; }
-      .metric-card { border-radius: 10px; padding: 10px 12px; background: #fafafd; }
-      .metric-card .l { font-size: 6.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.04em; color: #888; margin-bottom: 3px; }
-      .metric-card .v { font-size: 17px; font-weight: 900; color: #2A1F52; }
-      .problem-box { background: #faece7; border-radius: 8px; padding: 10px 13px; margin-bottom: 14px; }
-      .problem-box .t { font-size: 10px; font-weight: 800; color: #712b13; margin-bottom: 6px; }
-      .problem-box ul { margin: 0; padding-left: 16px; font-size: 9.5px; color: #4a1b0c; }
-      .problem-box li { margin-bottom: 2px; }
-      .sect { background: #2A1F52; color: #fff; font-weight: 700; padding: 7px 11px; font-size: 11px; margin-top: 16px; border-radius: 6px 6px 0 0; display: flex; align-items: center; gap: 6px; }
-      .sect .dot { width: 6px; height: 6px; border-radius: 50%; background: #F4B740; }
-      table.data th.subsect-th { background: #f0edf7; color: #3c3489; font-weight: 700; padding: 8px 11px; font-size: 9.5px; letter-spacing: 0.02em; text-align: left; text-transform: none; border-bottom: none; }
-      .subsect-brand { float: right; color: #8b7fb0; font-weight: 500; font-size: 8px; }
-      table.data { width: 100%; border-collapse: collapse; font-size: 10px; margin-bottom: 4px; }
-      table.data th { background: #f7f6fb; text-align: left; padding: 6px 8px; border-bottom: 2px solid #2A1F52; font-size: 9px; color: #2A1F52; text-transform: uppercase; letter-spacing: 0.03em; }
-      table.data td { padding: 6px 8px; border-bottom: 1px solid #eee; vertical-align: middle; }
-      .sign { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; text-align: center; page-break-inside: avoid; break-inside: avoid; margin-top: 24px; }
-      .sign > div { border: 1px solid #ddd; border-radius: 8px; padding: 10px; font-size: 9.5px; font-weight: 800; color: #2A1F52; letter-spacing: 0.05em; }
-      .sign .line { margin-top: 30px; border-top: 1.5px solid #2A1F52; padding-top: 5px; font-weight: 700; font-size: 11px; color: #222; }
-      .footer { display: flex; justify-content: space-between; margin-top: 24px; padding-top: 8px; border-top: 1px solid #eee; font-size: 8px; color: #999; page-break-inside: avoid; break-inside: avoid; }
+      @page { size: A4; margin: 6mm; }
+      body { font-family: Arial, Helvetica, sans-serif; color: #232323; font-size: 10.5px; margin: 0; }
+      .page { border: 3px solid #2A1F52; border-radius: 10px; padding: 8mm 9mm; }
+
+      .hdr { display: flex; justify-content: space-between; align-items: center; padding-bottom: 8px; border-bottom: 3px solid #2A1F52; margin-bottom: 9px; }
+      .hdr-logo { display: flex; align-items: center; gap: 9px; }
+      .hdr-logo-text .name { font-weight: 900; font-size: 13.5px; color: #2A1F52; letter-spacing: 0.01em; line-height: 1.1; }
+      .hdr-logo-text .tag { font-size: 7px; color: #b8860b; font-weight: 700; letter-spacing: 0.03em; }
+      .hdr-title { flex: 1; text-align: center; }
+      .hdr-title h1 { font-family: 'Arial Black', Arial, sans-serif; font-weight: 900; font-size: 19px; color: #2A1F52; margin: 0; }
+      .hdr-spacer { width: 100px; }
+
+      .info-bar { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 10px; }
+      .info-card { border: 1px solid #e4dff2; border-radius: 9px; padding: 7px 9px; display: flex; flex-direction: column; gap: 6px; justify-content: center; }
+      .info-row { display: flex; gap: 6px; align-items: center; }
+      .info-icon { width: 18px; height: 18px; border-radius: 5px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+      .info-icon svg { width: 10px; height: 10px; }
+      .info-icon.gold { background: #F4B740; }
+      .info-icon.purple { background: #2A1F52; }
+      .info-txt .l { font-size: 6.4px; font-weight: 700; color: #999; text-transform: uppercase; letter-spacing: 0.03em; }
+      .info-txt .v { font-size: 8.8px; font-weight: 700; color: #2A1F52; margin-top: 1px; }
+
+      .sect-title { background: #2A1F52; color: #fff; font-weight: 800; font-size: 10px; padding: 6px 13px; border-radius: 7px; margin-bottom: 8px; letter-spacing: 0.03em; border-left: 4px solid #F4B740; }
+
+      .summary-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 9px; }
+      .summary-card { border: 1px solid #e4dff2; border-radius: 11px; padding: 9px; display: flex; align-items: center; gap: 9px; }
+      .summary-card .icon-circle { width: 34px; height: 34px; border-radius: 50%; background: #2A1F52; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+      .summary-card .icon-circle svg { width: 16px; height: 16px; }
+      .summary-card .mid { flex-shrink: 0; }
+      .summary-card .t { font-size: 8px; font-weight: 800; color: #2A1F52; margin-bottom: 1px; }
+      .summary-card .pct { font-size: 18px; font-weight: 900; line-height: 1.1; }
+      .summary-card .badge { display: inline-block; font-size: 6.8px; font-weight: 800; padding: 2px 9px; border-radius: 20px; color: #fff; margin-top: 3px; }
+      .legend { border-left: 1px solid #eee; padding-left: 9px; display: flex; flex-direction: column; gap: 3px; flex: 1; }
+      .legend-row { display: flex; align-items: center; gap: 5px; font-size: 7.4px; }
+      .legend-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
+      .legend-label { color: #555; flex: 1; }
+      .legend-val { font-weight: 800; color: #232323; }
+
+      .tables-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 8px; }
+      .table-block-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
+      .table-block-hdr .lbl { font-weight: 800; font-size: 9.3px; color: #2A1F52; }
+      .table-block-hdr .pill { font-size: 8px; font-weight: 800; padding: 2px 9px; border-radius: 20px; color: #fff; }
+      table.data { width: 100%; border-collapse: collapse; font-size: 8px; border: 1px solid #e4dff2; }
+      table.data th { background: #2A1F52; color: #fff; text-align: left; padding: 3.2px 6px; font-size: 7px; text-transform: uppercase; letter-spacing: 0.02em; }
+      table.data td { padding: 2.4px 6px; border-bottom: 1px solid #efecf7; vertical-align: middle; }
+      table.data tr.kat-row td { background: #ece8f7; color: #2A1F52; font-weight: 800; font-size: 7.4px; padding: 2.2px 6px; }
+      .status-ok { color: #1a9e6e; font-weight: 800; }
+      .status-bad { color: #c0392b; font-weight: 800; }
+
+      .footer-row { display: grid; grid-template-columns: 1fr 1fr 1.5fr; gap: 10px; margin-top: 9px; page-break-inside: avoid; break-inside: avoid; }
+      .sign-box { border: 1px solid #e4dff2; border-radius: 9px; padding: 7px; text-align: center; }
+      .sign-badge { width: 20px; height: 20px; border-radius: 50%; background: #F4B740; display: flex; align-items: center; justify-content: center; margin: 0 auto 3px; }
+      .sign-badge svg { width: 11px; height: 11px; }
+      .sign-box .t { font-size: 8px; font-weight: 800; color: #2A1F52; letter-spacing: 0.05em; }
+      .sign-box .role { font-size: 6.8px; color: #999; margin-bottom: 11px; }
+      .sign-box .line { border-top: 1px solid #ccc; padding-top: 3px; margin-top: 3px; }
+      .sign-box .name { font-weight: 700; font-size: 8.3px; }
+      .catatan-box { border: 1px solid #e4dff2; border-radius: 9px; padding: 7px 10px; }
+      .catatan-box .hd { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
+      .catatan-box .t { font-size: 8px; font-weight: 800; color: #2A1F52; }
+      .catatan-box p { font-size: 7.3px; color: #555; line-height: 1.3; margin: 0 0 4px; }
+      .catatan-box .tgl { font-size: 7.3px; color: #2A1F52; font-weight: 700; }
+
+      .brand-footer { margin-top: 9px; background: #2A1F52; border-radius: 7px; padding: 7px 12px; display: flex; justify-content: space-between; align-items: center; }
+      .brand-footer .left .name { color: #fff; font-weight: 800; font-size: 8.3px; }
+      .brand-footer .left .tag { color: #cfc7e6; font-size: 6.6px; margin-top: 1px; }
+      .brand-footer .right { display: flex; align-items: center; gap: 9px; }
+      .brand-footer .right .item { display: flex; align-items: center; gap: 3px; color: #cfc7e6; font-size: 6.6px; }
+      .brand-footer .right svg { width: 9px; height: 9px; }
     </style></head><body><div id="pdfZoom">
-      <div class="hdr">
-        <div class="hdr-left">
-          <div class="hdr-badge">KLA</div>
-          <div><div class="hdr-title">Berita Acara Audit Store</div><div class="hdr-sub">Divisi Audit &middot; KLA Computer</div></div>
-        </div>
-        <div class="hdr-right">
-          <div class="hdr-tag">DOKUMEN RESMI</div>
-          <div class="hdr-date">Dicetak ${printDate}</div>
-        </div>
-      </div>
+      <div class="page">
 
-      <div class="content">
-        <div class="info-row">
-          <div class="info-box"><div class="l">Store Cabang</div><div class="v">${esc(selectedBranch.name)}</div></div>
-          <div class="info-box"><div class="l">Waktu Audit</div><div class="v" style="font-size:9.5px;">${esc(waktuAudit) || "\u2014"}</div></div>
-        </div>
-        <div class="info-wide">
-          <b>Staff Audit:</b> ${esc(profile?.full_name || "\u2014")} &nbsp;&middot;&nbsp;
-          <b>Kegiatan:</b> ${esc(kegiatan)} &nbsp;&middot;&nbsp;
-          <b>Perlengkapan:</b> ${esc(perlengkapan)}
+        <div class="hdr">
+          <div class="hdr-logo">
+            <svg width="28" height="28" viewBox="0 0 40 40"><polygon points="20,2 36,11 36,29 20,38 4,29 4,11" fill="#2A1F52"/><text x="20" y="26" text-anchor="middle" font-family="Arial" font-weight="900" font-size="16" fill="#F4B740">K</text></svg>
+            <div class="hdr-logo-text"><div class="name">KLA COMPUTER</div><div class="tag">DIVISI AUDIT KLA COMPUTER</div></div>
+          </div>
+          <div class="hdr-title"><h1>BERITA ACARA AUDIT STORE</h1></div>
+          <div class="hdr-spacer"></div>
         </div>
 
-        <div class="metric-row">
-          <div class="metric-card"><div class="l">Item Dicek</div><div class="v">${stockTotalCount}</div></div>
-          <div class="metric-card" style="background:#fcebeb;"><div class="l" style="color:#a32020;">Selisih</div><div class="v" style="color:#a32020;">${stockSelisihCount}</div></div>
-          <div class="metric-card" style="background:#eaf3de;"><div class="l" style="color:#27500a;">% Lengkap</div><div class="v" style="color:#27500a;">${stockTotalCount ? Math.round(((stockTotalCount - stockSelisihCount) / stockTotalCount) * 100) : 0}%</div></div>
-          <div class="metric-card"><div class="l">Auditor</div><div class="v" style="font-size:12px;">${esc(profile?.full_name || "\u2014")}</div></div>
+        <div class="info-bar">
+          <div class="info-card">
+            <div class="info-row"><span class="info-icon gold">${ICON.store}</span><div class="info-txt"><div class="l">Store / Cabang</div><div class="v">${esc(selectedBranch.name)}</div></div></div>
+            <div class="info-row"><span class="info-icon gold">${ICON.calendar}</span><div class="info-txt"><div class="l">Tanggal Audit</div><div class="v">${esc(waktuAudit) || "\u2014"}</div></div></div>
+          </div>
+          <div class="info-card">
+            <div class="info-row"><span class="info-icon purple">${ICON.person}</span><div class="info-txt"><div class="l">Auditor</div><div class="v">${esc(profile?.full_name || "\u2014")}</div></div></div>
+            <div class="info-row"><span class="info-icon purple">${ICON.people}</span><div class="info-txt"><div class="l">Team Leader</div><div class="v">${esc(storeLeaderName) || "\u2014"}</div></div></div>
+          </div>
+          <div class="info-card" style="justify-content:center;">
+            <div class="info-row"><span class="info-icon purple">${ICON.clipboard}</span><div class="info-txt"><div class="l">Ruang Lingkup</div><div class="v">${esc(kegiatan)}</div></div></div>
+          </div>
+          <div class="info-card" style="justify-content:center;">
+            <div class="info-row"><span class="info-icon purple">${ICON.laptop}</span><div class="info-txt"><div class="l">Perlengkapan</div><div class="v">${esc(perlengkapan)}</div></div></div>
+          </div>
         </div>
 
-        ${problemItems.length ? `<div class="problem-box">
-          <div class="t">&#9888; ITEM BERMASALAH &mdash; PERLU TINDAK LANJUT</div>
-          <ul>${problemItems.map((p) => `<li>${esc(p.nama) || "(tanpa nama)"} ${p.keterangan ? "&mdash; " + esc(p.keterangan) : ""}</li>`).join("")}</ul>
-        </div>` : ""}
-
-        <div class="sect"><span class="dot"></span>AUDIT STOCK OPNAME</div>
-        ${stockTable("Kategori 1", stockKat1)}
-        <div style="height:14px;"></div>
-        ${stockTable("Kategori 2", stockKat2)}
-
-        <div class="sign">
-          <div>MENGETAHUI<div class="line">${esc(storeManagerName || "\u2014")}<br><span style="font-weight:400;font-size:9px;color:#888;">Store Manager ${esc(selectedBranch.name)}</span></div></div>
-          <div>PELAKSANA<div class="line">${esc(profile?.full_name || "\u2014")}<br><span style="font-weight:400;font-size:9px;color:#888;">Staff Audit</span></div></div>
+        <div class="sect-title">RINGKASAN HASIL AUDIT</div>
+        <div class="summary-row">
+          <div class="summary-card">
+            <div class="icon-circle">${ICON.box}</div>
+            <div class="mid">
+              <div class="t">1. STOCK OPNAME</div>
+              <div class="pct" style="color:${stockInfo.color};">${stockPct}%</div>
+              <div class="badge" style="background:${stockInfo.color};">${stockInfo.lbl.toUpperCase()}</div>
+            </div>
+            <div class="legend">
+              <div class="legend-row"><span class="legend-dot" style="background:${kat1Color};"></span><span class="legend-label">Kategori 1</span><span class="legend-val">${kat1Pct === null ? "-" : kat1Pct + "%"}</span></div>
+              <div class="legend-row"><span class="legend-dot" style="background:${kat2Color};"></span><span class="legend-label">Kategori 2</span><span class="legend-val">${kat2Pct === null ? "-" : kat2Pct + "%"}</span></div>
+            </div>
+          </div>
+          <div class="summary-card">
+            <div class="icon-circle">${ICON.checklist}</div>
+            <div class="mid">
+              <div class="t">2. INVENTARIS</div>
+              <div class="pct" style="color:${invInfo.color};">${invPct}%</div>
+              <div class="badge" style="background:${invInfo.color};">${invInfo.lbl.toUpperCase()}</div>
+            </div>
+            <div class="legend">
+              <div class="legend-row"><span class="legend-dot" style="background:#1a9e6e;"></span><span class="legend-label">Lengkap</span><span class="legend-val">${invPct}%</span></div>
+              <div class="legend-row"><span class="legend-dot" style="background:#c0392b;"></span><span class="legend-label">Tidak Lengkap</span><span class="legend-val">${invTidakPct}%</span></div>
+            </div>
+          </div>
         </div>
 
-        <div class="footer">
-          <span>PT. KLA Teknologi Indonesia &bull; Confidential</span>
-          <span>Berita Acara &bull; ${esc(selectedBranch.name)} &bull; ${esc(periodeLabel(viewPeriod))}</span>
+        <div class="tables-row">
+          <div>
+            <div class="table-block-hdr"><span class="lbl">1. AUDIT STOCK OPNAME</span><span class="pill" style="background:${stockInfo.color};">${stockPct}%</span></div>
+            <table class="data">
+              <thead><tr><th>Kategori / Item</th><th>Kelengkapan</th><th>Keterangan</th></tr></thead>
+              <tbody>
+                ${stockTable("Kategori 1", stockKat1)}
+                ${stockTable("Kategori 2", stockKat2)}
+              </tbody>
+            </table>
+          </div>
+          <div>
+            <div class="table-block-hdr"><span class="lbl">2. AUDIT INVENTARIS</span><span class="pill" style="background:${invInfo.color};">${invPct}%</span></div>
+            <table class="data">
+              <thead><tr><th>Nama Inventaris</th><th>Keadaan</th><th>Keterangan</th></tr></thead>
+              <tbody>${invRows}</tbody>
+            </table>
+          </div>
         </div>
+
+        <div class="footer-row">
+          <div class="sign-box">
+            <div class="sign-badge">${ICON.checklist.replace(/#fff/g, "#2A1F52")}</div>
+            <div class="t">MENGETAHUI</div>
+            <div class="role">STORE MANAGER<br>${esc(selectedBranch.name.toUpperCase())}</div>
+            <div class="line"><div class="name">${esc(storeManagerName || storeLeaderName || "\u2014")}</div></div>
+          </div>
+          <div class="sign-box">
+            <div class="sign-badge">${ICON.person.replace(/#fff/g, "#2A1F52")}</div>
+            <div class="t">PELAKSANA</div>
+            <div class="role">STAFF AUDIT</div>
+            <div class="line"><div class="name">${esc(profile?.full_name || "\u2014")}</div></div>
+          </div>
+          <div class="catatan-box">
+            <div class="hd">${ICON.clipboard.replace(/#fff/g, "#2A1F52").replace('viewBox="0 0 24 24"', 'viewBox="0 0 24 24" width="13" height="13"')}<span class="t">CATATAN</span></div>
+            <p>Berita acara ini dibuat berdasarkan hasil audit yang dilakukan pada ${esc(waktuAudit) || "periode terkait"} di Store ${esc(selectedBranch.name)}. Demikian berita acara ini dibuat dengan sebenar-benarnya untuk dipergunakan sebagaimana mestinya.</p>
+            <div class="tgl">Tanggal: ${printDate}</div>
+          </div>
+        </div>
+
+        <div class="brand-footer">
+          <div class="left">
+            <div class="name">KLA COMPUTER</div>
+            <div class="tag">Solusi Lengkap Kebutuhan Digital Anda</div>
+          </div>
+          <div class="right">
+            <span class="item">klacomputer.co.id</span>
+            <span class="item">audit@klacomputer.id</span>
+          </div>
+        </div>
+
       </div>
       </div>
       <script>
-        window.onload = () => {
+        function fitToPage() {
           const zoomEl = document.getElementById("pdfZoom");
-          // A4 = ~1123px @96dpi. Margin "Default" Chrome \u2248 10mm (~38px) atas+bawah.
-          const targetHeight = (1123 - 38 * 2) * 0.96; // 4% buffer aman biar nggak numpuk ke halaman 2
-          const actualHeight = zoomEl.scrollHeight;
-          let zoom = targetHeight / actualHeight;
-          zoom = Math.min(zoom, 1.6);
+          const targetHeight = 1000; // ruang aman cetak A4, sengaja dikonservatifkan (antisipasi margin printer/browser)
+
+          zoomEl.style.zoom = 1;
+          const naturalHeight = zoomEl.scrollHeight;
+          let zoom = targetHeight / naturalHeight;
+          zoom = Math.min(zoom, 1.05);
+          zoom = Math.max(zoom, 0.55); // batas bawah biar teks jangan sampai nggak kebaca
           zoomEl.style.zoom = zoom;
-          setTimeout(() => window.print(), 350);
+
+          // Cek ulang sekali lagi — kalau masih meleset dikit, koreksi lagi.
+          setTimeout(() => {
+            const afterHeight = zoomEl.getBoundingClientRect().height;
+            if (afterHeight > targetHeight + 4) {
+              const corrected = Math.max((targetHeight / afterHeight) * zoom, 0.5);
+              zoomEl.style.zoom = corrected;
+            }
+            setTimeout(() => window.print(), 250);
+          }, 100);
+        }
+        window.onload = () => {
+          if (document.fonts && document.fonts.ready) {
+            document.fonts.ready.then(fitToPage);
+          } else {
+            fitToPage();
+          }
         };
       <\/script>
     </body></html>`;
@@ -302,7 +510,7 @@ export default function BeritaAcara({ profile }) {
         <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
           <div>
             <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Berita Acara</div>
-            <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Dokumen resmi audit store per cabang, per bulan</div>
+            <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Dokumen resmi audit store per cabang, per bulan &mdash; Stock Opname &amp; Inventaris</div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px" }}>
             <button className="btn-ghost" onClick={() => setViewPeriod(addMonthsToPeriod(viewPeriod, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
@@ -382,10 +590,12 @@ export default function BeritaAcara({ profile }) {
         ) : (
           <>
             {/* Progress steps */}
-            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 20 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
               <StepPill icon="📋" label="Informasi" done />
               <StepLine />
               <StepPill icon="📦" label="Stock Opname" done={stockKat1.length + stockKat2.length > 0} />
+              <StepLine />
+              <StepPill icon="🗂️" label="Inventaris" done={countRusak(inventaris) >= 0 && Object.keys(inventaris).length > 0} />
               <StepLine />
               <StepPill icon="✍️" label="Tanda Tangan" done={!!storeManagerName} />
             </div>
@@ -400,6 +610,9 @@ export default function BeritaAcara({ profile }) {
                 <Field label="Staff Audit">
                   <input className="input" value={profile?.full_name || ""} disabled />
                 </Field>
+                <Field label="Store Leader">
+                  <input className="input" placeholder="Nama Store Leader" value={storeLeaderName} disabled={!canEdit} onChange={(e) => { setStoreLeaderName(e.target.value); setSaved(false); }} />
+                </Field>
               </div>
               <Field label="Kegiatan">
                 <textarea className="input" rows={2} value={kegiatan} disabled={!canEdit} onChange={(e) => { setKegiatan(e.target.value); setSaved(false); }} style={{ resize: "vertical" }} />
@@ -411,7 +624,7 @@ export default function BeritaAcara({ profile }) {
               </div>
             </div>
 
-            {/* Ringkasan live */}
+            {/* Ringkasan live — Stock Opname */}
             {(() => {
               const allRows = [...stockKat1, ...stockKat2];
               const selisihCount = allRows.filter((r) => r.status === "Selisih").length;
@@ -442,8 +655,17 @@ export default function BeritaAcara({ profile }) {
               </div>
             </div>
 
-            <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginBottom: 16 }}>
-              Cek kondisi aset (Jaringan Internet, Peralatan Kasir, dst) sekarang ada di modul terpisah: <b>Inventaris</b>.
+            {/* Section: Inventaris */}
+            <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>🗂️ Audit Inventaris</div>
+              <InventarisChecklist
+                inventaris={inventaris}
+                canEdit={canEdit}
+                uploadingKey={uploadingKey}
+                onUpdate={updateInventaris}
+                onUploadMedia={handleUploadInventarisMedia}
+                onRemoveMedia={removeInventarisMedia}
+              />
             </div>
 
             {/* Footer */}
