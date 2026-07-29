@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { calcWeightedFromRecord, CATS, nowPeriode, periodeLabel, addMonthsToPeriod } from "../lib/sopConfig";
 import { countRusak } from "./AuditInventaris";
+import BranchMultiSelect from "./BranchMultiSelect";
 
 // ── Warna & style ──
 const PURPLE = "2A1F52";
@@ -16,6 +17,40 @@ function kondisiSOP(score) {
   if (score >= 85) return { lbl: "Baik", color: GREEN };
   if (score >= 70) return { lbl: "Perlu Perhatian", color: AMBER };
   return { lbl: "Berisiko Tinggi", color: RED };
+}
+
+// Definisi modul yang bisa multi-audit per bulan — dipakai buat deteksi & resolusi "audit mana yang dipakai"
+const MODULE_DEFS = [
+  { key: "sop", label: "SOP" },
+  { key: "svc", label: "Service Ratio" },
+  { key: "kes", label: "Kesehatan Stok" },
+  { key: "keu", label: "Audit Keuangan" },
+  { key: "inv", label: "Inventaris" },
+];
+function dateOfEntry(moduleKey, entry) {
+  if (!entry) return null;
+  return moduleKey === "keu" ? entry.audit_date : entry.data?.audit_date;
+}
+function groupByBranch(arr) {
+  const map = {};
+  (arr || []).forEach((r) => {
+    if (!map[r.branch_id]) map[r.branch_id] = [];
+    map[r.branch_id].push(r);
+  });
+  return map;
+}
+// Pilih entri yang dipakai buat 1 cabang+modul: pakai pilihan manual user kalau ada (multiAuditChoices),
+// kalau nggak ada pilihan (atau cuma 1 entri), otomatis pakai yang audit_date-nya paling baru.
+function resolveEntry(moduleKey, branchId, grouped, choices) {
+  const entries = grouped[branchId];
+  if (!entries || !entries.length) return null;
+  if (entries.length === 1) return entries[0];
+  const chosenDate = choices[`${branchId}|${moduleKey}`];
+  if (chosenDate) {
+    const match = entries.find((e) => dateOfEntry(moduleKey, e) === chosenDate);
+    if (match) return match;
+  }
+  return [...entries].sort((a, b) => (dateOfEntry(moduleKey, b) || "").localeCompare(dateOfEntry(moduleKey, a) || ""))[0];
 }
 
 // ── Kalkulasi Kepatuhan SOP gabungan (4 sumber) — sama persis formula di SopKepatuhan.js ──
@@ -69,10 +104,29 @@ export default function LaporanBulanan({ profile }) {
   const [progress, setProgress] = useState("");
   const [error, setError] = useState(null);
   const [done, setDone] = useState(false);
+  const [pendingMultiAudit, setPendingMultiAudit] = useState([]); // [{branchId,branchName,moduleKey,moduleLabel,options:[{date,label}]}]
+  const [multiAuditChoices, setMultiAuditChoices] = useState({}); // `${branchId}|${moduleKey}` -> audit_date terpilih
+  const [showPicker, setShowPicker] = useState(false);
+  const [allBranches, setAllBranches] = useState([]);
+  const [selectedBranchIds, setSelectedBranchIds] = useState(null); // null = semua cabang
+
+  useEffect(() => {
+    supabase.from("branches").select("*").order("name").then(({ data }) => setAllBranches(data || []));
+  }, []);
 
   function addMonths(p, d) { return addMonthsToPeriod(p, d); }
 
-  async function generate() {
+  function changePeriod(delta) {
+    setPeriod((p) => addMonths(p, delta));
+    setShowPicker(false);
+    setPendingMultiAudit([]);
+    setMultiAuditChoices({});
+    setDone(false);
+    setError(null);
+  }
+
+  async function generate(choicesOverride) {
+    const choices = choicesOverride || multiAuditChoices;
     setGenerating(true);
     setDone(false);
     setError(null);
@@ -98,22 +152,65 @@ export default function LaporanBulanan({ profile }) {
         supabase.from("profiles").select("*"),
       ]);
 
-      const branches = brRes.data || [];
-      if (!branches.length) throw new Error("Belum ada data cabang.");
+      const allBr = brRes.data || [];
+      if (!allBr.length) throw new Error("Belum ada data cabang.");
+      const branches = (!selectedBranchIds || selectedBranchIds.length === 0 || selectedBranchIds.length === allBr.length)
+        ? allBr
+        : allBr.filter((b) => selectedBranchIds.includes(b.id));
+      if (!branches.length) throw new Error("Pilih minimal 1 cabang dulu.");
 
-      const find = (arr, bid) => (arr || []).find((r) => r.branch_id === bid) || null;
+      // Kelompokkan per cabang (sekarang bisa lebih dari 1 audit per cabang per bulan)
+      const groupedCur = {
+        sop: groupByBranch(sopCurRes.data), svc: groupByBranch(svcCurRes.data), kes: groupByBranch(kesCurRes.data),
+        keu: groupByBranch(keuCurRes.data), inv: groupByBranch(invCurRes.data),
+      };
+      const groupedPrev = {
+        sop: groupByBranch(sopPrevRes.data), svc: groupByBranch(svcPrevRes.data), kes: groupByBranch(kesPrevRes.data),
+        keu: groupByBranch(keuPrevRes.data),
+      };
+
+      // ── Deteksi cabang yang punya lebih dari 1 audit bulan ini di modul manapun ──
+      // Kalau ada yang belum dipastikan pilihannya, tampilkan panel pilihan dulu, jangan lanjut generate.
+      const needsChoice = [];
+      MODULE_DEFS.forEach((m) => {
+        const grouped = groupedCur[m.key];
+        Object.keys(grouped).forEach((branchId) => {
+          const entries = grouped[branchId];
+          if (entries.length <= 1) return;
+          const key = `${branchId}|${m.key}`;
+          if (choices[key]) return; // sudah dipilih user
+          const branch = branches.find((b) => String(b.id) === String(branchId));
+          needsChoice.push({
+            branchId, branchName: branch?.name || branchId, moduleKey: m.key, moduleLabel: m.label,
+            options: [...entries]
+              .sort((a, b) => (dateOfEntry(m.key, b) || "").localeCompare(dateOfEntry(m.key, a) || ""))
+              .map((e, i, arr) => ({ date: dateOfEntry(m.key, e), label: `Audit ${arr.length - i} (${dateOfEntry(m.key, e) || "?"})` })),
+          });
+        });
+      });
+
+      if (needsChoice.length) {
+        setPendingMultiAudit(needsChoice);
+        setShowPicker(true);
+        setGenerating(false);
+        setProgress("");
+        return;
+      }
+      setShowPicker(false);
+
+      const find = (grouped, moduleKey, bid) => resolveEntry(moduleKey, bid, grouped, choices);
 
       // ── Hitung per cabang ──
       const rows = branches.map((b) => {
-        const sopCur = find(sopCurRes.data, b.id);
-        const sopPrev = find(sopPrevRes.data, b.id);
-        const svcCur = find(svcCurRes.data, b.id);
-        const svcPrev = find(svcPrevRes.data, b.id);
-        const kesCur = find(kesCurRes.data, b.id);
-        const kesPrev = find(kesPrevRes.data, b.id);
-        const keuCur = find(keuCurRes.data, b.id);
-        const keuPrev = find(keuPrevRes.data, b.id);
-        const invCur = find(invCurRes.data, b.id);
+        const sopCur = find(groupedCur.sop, "sop", b.id);
+        const sopPrev = resolveEntry("sop", b.id, groupedPrev.sop, {});
+        const svcCur = find(groupedCur.svc, "svc", b.id);
+        const svcPrev = resolveEntry("svc", b.id, groupedPrev.svc, {});
+        const kesCur = find(groupedCur.kes, "kes", b.id);
+        const kesPrev = resolveEntry("kes", b.id, groupedPrev.kes, {});
+        const keuCur = find(groupedCur.keu, "keu", b.id);
+        const keuPrev = resolveEntry("keu", b.id, groupedPrev.keu, {});
+        const invCur = find(groupedCur.inv, "inv", b.id);
 
         const tidakVisitSOP = sopCur?.data?.tidak_visit;
         const sopScore = sopCur && !tidakVisitSOP ? calcWeightedFromRecord(sopCur.data) : null;
@@ -156,6 +253,7 @@ export default function LaporanBulanan({ profile }) {
         return {
           branch: b, sopCur, sopScore, sopScorePrev, tidakVisitSOP,
           svcRatio, svcRatioPrev, kesPct, kesPctPrev, sisa, sisaPrev,
+          pengeluaran: keuCur ? parseFloat(keuCur.pengeluaran) || 0 : 0,
           kepatuhan, findings,
         };
       });
@@ -189,7 +287,7 @@ export default function LaporanBulanan({ profile }) {
 
       const negBalanceNow = rows.filter((r) => r.sisa !== null && r.sisa < 0).length;
       const negBalancePrev = rows.filter((r) => r.sisaPrev !== null && r.sisaPrev < 0).length;
-      const totalKasKeluar = keuCurRes.data?.reduce((s, e) => s + (parseFloat(e.pengeluaran) || 0), 0) || 0;
+      const totalKasKeluar = rows.reduce((s, r) => s + r.pengeluaran, 0);
 
       const kepatuhanRows = rows.filter((r) => r.kepatuhan !== null);
       const kepatuhanAvg = kepatuhanRows.length ? kepatuhanRows.reduce((s, r) => s + r.kepatuhan, 0) / kepatuhanRows.length : null;
@@ -488,20 +586,85 @@ export default function LaporanBulanan({ profile }) {
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 24 }}>
           <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>Periode Laporan</label>
           <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px", width: "fit-content", marginBottom: 20 }}>
-            <button className="btn-ghost" onClick={() => setPeriod(addMonths(period, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
+            <button className="btn-ghost" onClick={() => changePeriod(-1)} style={{ padding: "6px 10px" }}>{"<"}</button>
             <div className="mono" style={{ fontWeight: 600, minWidth: 150, textAlign: "center", fontSize: 14 }}>{periodeLabel(period)}</div>
-            <button className="btn-ghost" onClick={() => setPeriod(addMonths(period, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
+            <button className="btn-ghost" onClick={() => changePeriod(1)} style={{ padding: "6px 10px" }}>{">"}</button>
+          </div>
+
+          <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 6 }}>Cabang</label>
+          <div style={{ marginBottom: 20 }}>
+            <BranchMultiSelect
+              branches={allBranches}
+              selectedIds={selectedBranchIds}
+              onChange={(ids) => {
+                setSelectedBranchIds(ids);
+                setShowPicker(false);
+                setPendingMultiAudit([]);
+                setMultiAuditChoices({});
+                setDone(false);
+              }}
+            />
           </div>
 
           {error && <div style={{ background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 16 }}>{error}</div>}
           {done && !generating && <div style={{ background: "var(--success-bg)", border: "1px solid rgba(26,158,110,0.35)", color: "var(--success-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 16 }}>\u2713 Laporan berhasil dibuat & didownload.</div>}
 
-          <button className="btn" disabled={generating} onClick={generate} style={{ width: "100%" }}>
-            {generating ? (progress || "Memproses\u2026") : "Generate Laporan PPT"}
-          </button>
-          <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>
-            Proses ini bisa makan waktu beberapa detik sampai 1-2 menit tergantung jumlah cabang & foto temuan. Jangan tutup halaman selagi proses berjalan.
-          </div>
+          {showPicker ? (
+            <div>
+              <div style={{ background: "var(--warning-bg, #fdf6e3)", border: "1px solid rgba(176,114,18,0.35)", color: "var(--warning-text, #b07212)", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 14 }}>
+                {pendingMultiAudit.length} cabang punya lebih dari 1 audit bulan ini di beberapa modul. Pilih audit mana yang mau dipakai buat laporan ini sebelum lanjut.
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
+                {pendingMultiAudit.map((p) => {
+                  const key = `${p.branchId}|${p.moduleKey}`;
+                  return (
+                    <div key={key} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px" }}>
+                      <div>
+                        <div style={{ fontSize: 13, fontWeight: 600 }}>{p.branchName}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-faint)" }}>{p.moduleLabel}</div>
+                      </div>
+                      <select
+                        className="input"
+                        style={{ width: 220 }}
+                        value={multiAuditChoices[key] || p.options[0]?.date || ""}
+                        onChange={(e) => setMultiAuditChoices((prev) => ({ ...prev, [key]: e.target.value }))}
+                      >
+                        {p.options.map((o) => <option key={o.date} value={o.date}>{o.label}</option>)}
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn-ghost" onClick={() => { setShowPicker(false); setPendingMultiAudit([]); }}>Batal</button>
+                <button
+                  className="btn"
+                  style={{ flex: 1 }}
+                  onClick={() => {
+                    // Default-in pilihan yang belum disentuh user ke opsi pertama (audit paling baru)
+                    const filled = { ...multiAuditChoices };
+                    pendingMultiAudit.forEach((p) => {
+                      const key = `${p.branchId}|${p.moduleKey}`;
+                      if (!filled[key]) filled[key] = p.options[0]?.date;
+                    });
+                    setMultiAuditChoices(filled);
+                    generate(filled);
+                  }}
+                >
+                  Lanjutkan Export
+                </button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <button className="btn" disabled={generating} onClick={() => generate()} style={{ width: "100%" }}>
+                {generating ? (progress || "Memproses\u2026") : "Generate Laporan PPT"}
+              </button>
+              <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 10 }}>
+                Proses ini bisa makan waktu beberapa detik sampai 1-2 menit tergantung jumlah cabang & foto temuan. Jangan tutup halaman selagi proses berjalan. Kalau ada cabang dengan lebih dari 1 audit bulan ini, kamu akan diminta memilih dulu sebelum laporan dibuat.
+              </div>
+            </>
+          )}
         </div>
       </div>
     </div>

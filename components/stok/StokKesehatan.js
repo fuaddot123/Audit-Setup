@@ -7,13 +7,20 @@ import {
 
 const EMPTY_FORM = { temuan_count: "", bonus_count: "", untung_rugi: "", tidak_visit: false };
 
+function shortDate(d) {
+  if (!d) return "\u2014";
+  return new Date(d + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
+}
+
 export default function StokKesehatan({ profile }) {
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
-  const [allRecords, setAllRecords] = useState([]);
+  const [latestByBranchPeriod, setLatestByBranchPeriod] = useState({});
   const [viewPeriod, setViewPeriod] = useState(nowPeriode());
   const [selectedBranch, setSelectedBranch] = useState(null);
-  const [existingRow, setExistingRow] = useState(null);
+  const [entriesThisPeriod, setEntriesThisPeriod] = useState([]);
+  const [selectedEntryId, setSelectedEntryId] = useState(null);
+  const [fullHistory, setFullHistory] = useState([]);
   const [form, setForm] = useState(EMPTY_FORM);
   const [auditDate, setAuditDate] = useState(todayInputValue());
   const [saving, setSaving] = useState(false);
@@ -31,8 +38,22 @@ export default function StokKesehatan({ profile }) {
     setLoadingBranches(true);
     const { data, error: err } = await supabase.from("branches").select("*").order("name");
     if (!err) setBranches(data || []);
-    const { data: recs, error: recErr } = await supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan");
-    if (!recErr) setAllRecords(recs || []);
+    const { data: recs, error: recErr } = await supabase
+      .from("audit_generic")
+      .select("*")
+      .eq("module", "stok_kesehatan");
+    if (!recErr) {
+      const sorted = [...(recs || [])].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""));
+      const map = {};
+      sorted.forEach((r) => {
+        const key = `${r.branch_id}|${r.period}`;
+        if (!map[key]) map[key] = { entry: r, count: 1 };
+        else map[key].count += 1;
+      });
+      setLatestByBranchPeriod(map);
+    } else {
+      setError("Gagal memuat data: " + recErr.message);
+    }
     setLoadingBranches(false);
   }
 
@@ -57,39 +78,54 @@ export default function StokKesehatan({ profile }) {
     }
   }
 
+  function applyEntryToForm(entry) {
+    setForm({
+      temuan_count: entry.data?.temuan_count ?? "",
+      bonus_count: entry.data?.bonus_count ?? "",
+      untung_rugi: entry.data?.untung_rugi ?? "",
+      tidak_visit: !!entry.data?.tidak_visit,
+    });
+    setAuditDate(entry.data?.audit_date || todayInputValue());
+    setSelectedEntryId(entry.id);
+  }
+
+  function startNewEntry(period) {
+    setForm(EMPTY_FORM);
+    setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
+    setSelectedEntryId(null);
+    setSaved(false);
+  }
+
   async function pickBranch(b) {
     setSelectedBranch(b);
     setSaved(false);
     setError(null);
     setLoadingRecord(true);
     const period = viewPeriod;
-    const { data, error: err } = await supabase
-      .from("audit_generic")
-      .select("*")
-      .eq("module", "stok_kesehatan")
-      .eq("branch_id", b.id)
-      .eq("period", period)
-      .maybeSingle();
-    if (!err && data) {
-      setExistingRow(data);
-      setForm({
-        temuan_count: data.data?.temuan_count ?? "",
-        bonus_count: data.data?.bonus_count ?? "",
-        untung_rugi: data.data?.untung_rugi ?? "",
-        tidak_visit: !!data.data?.tidak_visit,
-      });
-      setAuditDate(data.data?.audit_date || (period === nowPeriode() ? todayInputValue() : period + "-01"));
-    } else {
-      setExistingRow(null);
-      setForm(EMPTY_FORM);
-      setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
-    }
+    const [periodRes, histRes] = await Promise.all([
+      supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("branch_id", b.id).eq("period", period),
+      supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("branch_id", b.id),
+    ]);
+    if (periodRes.error) setError("Gagal memuat riwayat bulan ini: " + periodRes.error.message);
+    if (histRes.error) setError((prev) => prev || "Gagal memuat riwayat: " + histRes.error.message);
+    const entries = !periodRes.error
+      ? [...(periodRes.data || [])].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))
+      : [];
+    setEntriesThisPeriod(entries);
+    if (entries.length) applyEntryToForm(entries[0]);
+    else startNewEntry(period);
+    const hist = !histRes.error
+      ? [...(histRes.data || [])].sort((a, b) => (a.data?.audit_date || "").localeCompare(b.data?.audit_date || ""))
+      : [];
+    setFullHistory(hist);
     setLoadingRecord(false);
   }
 
   function backToList() {
     setSelectedBranch(null);
-    setExistingRow(null);
+    setEntriesThisPeriod([]);
+    setSelectedEntryId(null);
+    setFullHistory([]);
     loadBranches();
   }
 
@@ -111,17 +147,21 @@ export default function StokKesehatan({ profile }) {
   const kesehatanPct = calcKesehatanPct(skorTotal);
   const status = kesehatanStatusInfo(kesehatanPct);
   const period = periodFromDate(auditDate);
+  const selectedEntry = entriesThisPeriod.find((e) => e.id === selectedEntryId) || null;
 
   async function deleteRecord() {
-    if (!existingRow || profile?.role !== "super_admin") return;
-    if (!window.confirm(`Hapus data Kesehatan Stok ${selectedBranch.name} periode ${periodeLabel(period)}? Aksi ini tidak bisa dibatalkan.`)) return;
+    if (!selectedEntry || profile?.role !== "super_admin") return;
+    if (!window.confirm(`Hapus audit ${selectedBranch.name} tanggal ${shortDate(selectedEntry.data?.audit_date)}? Aksi ini tidak bisa dibatalkan.`)) return;
     setSaving(true);
     setError(null);
     try {
-      const { error: err } = await supabase.from("audit_generic").delete().eq("id", existingRow.id);
+      const { error: err } = await supabase.from("audit_generic").delete().eq("id", selectedEntry.id);
       if (err) throw err;
-      setExistingRow(null);
-      setForm(EMPTY_FORM);
+      const remaining = entriesThisPeriod.filter((e) => e.id !== selectedEntry.id);
+      setEntriesThisPeriod(remaining);
+      setFullHistory((prev) => prev.filter((e) => e.id !== selectedEntry.id));
+      if (remaining.length) applyEntryToForm(remaining[0]);
+      else startNewEntry(viewPeriod);
       setSaved(false);
     } catch (err) {
       setError("Gagal menghapus: " + err.message);
@@ -159,14 +199,28 @@ export default function StokKesehatan({ profile }) {
               auditor_name: profile?.full_name || null,
             },
       };
-      const { data, error: err } = await supabase
-        .from("audit_generic")
-        .upsert(payload, { onConflict: "module,branch_id,period" })
-        .select()
-        .single();
-      if (err) throw err;
-      setExistingRow(data);
+      let saved_;
+      if (selectedEntryId) {
+        const res = await supabase.from("audit_generic").update(payload).eq("id", selectedEntryId).select().single();
+        if (res.error) throw res.error;
+        saved_ = res.data;
+      } else {
+        const res = await supabase.from("audit_generic").insert(payload).select().single();
+        if (res.error) throw res.error;
+        saved_ = res.data;
+      }
+      setSelectedEntryId(saved_.id);
       setSaved(true);
+      if (period === viewPeriod) {
+        setEntriesThisPeriod((prev) => {
+          const others = prev.filter((e) => e.id !== saved_.id);
+          return [saved_, ...others].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""));
+        });
+      }
+      setFullHistory((prev) => {
+        const others = prev.filter((e) => e.id !== saved_.id);
+        return [...others, saved_].sort((a, b) => (a.data?.audit_date || "").localeCompare(b.data?.audit_date || ""));
+      });
     } catch (err) {
       setError("Gagal menyimpan: " + err.message);
     } finally {
@@ -176,11 +230,6 @@ export default function StokKesehatan({ profile }) {
 
   // ── Tampilan: pilih cabang ──
   if (!selectedBranch) {
-    const rowsByBranch = {};
-    allRecords.filter((r) => r.period === viewPeriod).forEach((r) => {
-      if (!rowsByBranch[r.branch_id]) rowsByBranch[r.branch_id] = r;
-    });
-
     return (
       <div style={{ flex: 1 }}>
         <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
@@ -212,10 +261,10 @@ export default function StokKesehatan({ profile }) {
         )}
         <div style={{ padding: 24 }}>
           {(() => {
-            const rows = branches.map((b) => rowsByBranch[b.id]).filter((r) => r && !r.data.tidak_visit);
+            const rows = branches.map((b) => latestByBranchPeriod[`${b.id}|${viewPeriod}`]).filter((r) => r && !r.entry.data.tidak_visit);
             const auditedCount = rows.length;
-            const avgPct = auditedCount ? rows.reduce((s, r) => s + (r.data.kesehatan_pct || 0), 0) / auditedCount : null;
-            const alertCount = rows.filter((r) => kesehatanStatusInfo(r.data.kesehatan_pct || 0).lbl === "Perlu Perhatian").length;
+            const avgPct = auditedCount ? rows.reduce((s, r) => s + (r.entry.data.kesehatan_pct || 0), 0) / auditedCount : null;
+            const alertCount = rows.filter((r) => kesehatanStatusInfo(r.entry.data.kesehatan_pct || 0).lbl === "Perlu Perhatian").length;
             return (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14, marginBottom: 20 }}>
                 <SummaryCard label="Cabang sudah diaudit" value={`${auditedCount} / ${branches.length}`} />
@@ -229,9 +278,9 @@ export default function StokKesehatan({ profile }) {
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 12 }}>
               {branches.map((b) => {
-                const row = rowsByBranch[b.id];
-                const tidakVisit = row?.data?.tidak_visit;
-                const pct = row && !tidakVisit ? row.data.kesehatan_pct || 0 : null;
+                const row = latestByBranchPeriod[`${b.id}|${viewPeriod}`];
+                const tidakVisit = row?.entry.data?.tidak_visit;
+                const pct = row && !tidakVisit ? row.entry.data.kesehatan_pct || 0 : null;
                 const rStatus = pct !== null ? kesehatanStatusInfo(pct) : null;
                 return (
                   <div
@@ -240,7 +289,12 @@ export default function StokKesehatan({ profile }) {
                     style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", overflow: "hidden" }}
                   >
                     <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: row ? (tidakVisit ? "#888" : rStatus.color) : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
-                    <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: row ? 8 : 4 }}>{b.name}</div>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: row ? 8 : 4 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14.5 }}>{b.name}</div>
+                      {row && row.count > 1 && (
+                        <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7c3aed", background: "#7c3aed18", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>{row.count} audit</span>
+                      )}
+                    </div>
                     {row ? (
                       tidakVisit ? (
                         <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: "#88888822", color: "#888", fontSize: 11, fontWeight: 600 }}>Tidak Visit</span>
@@ -248,6 +302,7 @@ export default function StokKesehatan({ profile }) {
                         <>
                           <div style={{ fontSize: 22, fontWeight: 800, color: rStatus.color }}>{formatKesehatanPct(pct)}</div>
                           <span style={{ display: "inline-block", marginTop: 6, padding: "3px 10px", borderRadius: 20, background: `${rStatus.color}22`, color: rStatus.color, fontSize: 11, fontWeight: 600 }}>{rStatus.lbl}</span>
+                          <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 6 }}>Terakhir: {shortDate(row.entry.data?.audit_date)}</div>
                         </>
                       )
                     ) : (
@@ -272,7 +327,8 @@ export default function StokKesehatan({ profile }) {
             <button className="btn-ghost" style={{ marginBottom: 8, fontSize: 12.5 }} onClick={backToList}>&larr; Pilih cabang lain</button>
             <div className="display" style={{ fontSize: 19, fontWeight: 600 }}>Kesehatan Stok &mdash; {selectedBranch.name}</div>
             <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-              Periode: {periodeLabel(period)} {existingRow && <span style={{ color: "var(--text-faint)" }}>&middot; sudah pernah diisi, kamu mengedit data yang ada</span>}
+              Periode: {periodeLabel(viewPeriod)}
+              {selectedEntryId ? <span> &middot; mengedit audit tanggal {shortDate(selectedEntry?.data?.audit_date)}</span> : <span> &middot; audit baru</span>}
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -283,7 +339,7 @@ export default function StokKesehatan({ profile }) {
             <button className="btn" disabled={saving || !canEdit} onClick={saveRecord} style={{ alignSelf: "flex-end" }} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
               {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan" : "Hanya Lihat"}
             </button>
-            {profile?.role === "super_admin" && existingRow && (
+            {profile?.role === "super_admin" && selectedEntryId && (
               <button className="btn-ghost" disabled={saving} onClick={deleteRecord} style={{ alignSelf: "flex-end", color: "var(--danger-text)" }}>
                 Hapus Data
               </button>
@@ -299,6 +355,57 @@ export default function StokKesehatan({ profile }) {
           <div style={{ color: "var(--text-secondary)" }}>Memuat data\u2026</div>
         ) : (
           <>
+            {entriesThisPeriod.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>
+                  Riwayat audit {periodeLabel(viewPeriod)} ({entriesThisPeriod.length})
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {entriesThisPeriod.map((e, i) => {
+                    const tidakVisit = e.data?.tidak_visit;
+                    const st = tidakVisit ? null : kesehatanStatusInfo(e.data.kesehatan_pct || 0);
+                    const active = e.id === selectedEntryId;
+                    return (
+                      <div
+                        key={e.id}
+                        onClick={() => applyEntryToForm(e)}
+                        style={{
+                          cursor: "pointer", padding: "8px 14px", borderRadius: 10,
+                          border: `1.5px solid ${active ? "#7c3aed" : "var(--border)"}`,
+                          background: active ? "#7c3aed14" : "var(--surface)",
+                          display: "flex", alignItems: "center", gap: 8,
+                        }}
+                      >
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {entriesThisPeriod.length - i}</span>
+                        <span style={{ fontSize: 12, fontWeight: 600 }}>{shortDate(e.data?.audit_date)}</span>
+                        {tidakVisit ? (
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#888" }}>Tidak Visit</span>
+                        ) : (
+                          <>
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: st.color }} />
+                            <span style={{ fontSize: 12, fontWeight: 700, color: st.color }}>{formatKesehatanPct(e.data.kesehatan_pct || 0)}</span>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {canEdit && (
+                    <div
+                      onClick={() => startNewEntry(viewPeriod)}
+                      style={{
+                        cursor: "pointer", padding: "8px 14px", borderRadius: 10,
+                        border: `1.5px dashed ${!selectedEntryId ? "#7c3aed" : "var(--border)"}`,
+                        color: "#7c3aed", background: !selectedEntryId ? "#7c3aed14" : "transparent",
+                        display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700,
+                      }}
+                    >
+                      + Audit Baru
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, cursor: "pointer", fontSize: 13, color: "var(--text-secondary)" }}>
               <input type="checkbox" checked={form.tidak_visit} onChange={(e) => { setForm((f) => ({ ...f, tidak_visit: e.target.checked })); setSaved(false); }} disabled={!canEdit} />
               Cabang ini tidak dikunjungi bulan ini (Tidak Visit)
@@ -364,8 +471,8 @@ export default function StokKesehatan({ profile }) {
 
                 {/* Card 3: Riwayat */}
                 <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20 }}>
-                  <div style={{ fontWeight: 700, fontSize: 14.5, color: "#7c3aed", marginBottom: 14 }}>3. RIWAYAT KESEHATAN STOK SEMUA BULAN</div>
-                  <KesehatanHistoryChart allRecords={allRecords} branchId={selectedBranch.id} currentPeriod={period} currentPct={kesehatanPct} />
+                  <div style={{ fontWeight: 700, fontSize: 14.5, color: "#7c3aed", marginBottom: 14 }}>3. RIWAYAT KESEHATAN STOK SEMUA AUDIT</div>
+                  <KesehatanHistoryChart history={fullHistory} />
                 </div>
               </>
             )}
@@ -407,29 +514,25 @@ function ThresholdLegend({ color, label, range }) {
   );
 }
 
-function KesehatanHistoryChart({ allRecords, branchId, currentPeriod, currentPct }) {
-  const points = allRecords
-    .filter((r) => r.branch_id === branchId && !r.data?.tidak_visit && r.period <= currentPeriod)
-    .sort((a, b) => (a.period < b.period ? -1 : 1))
-    .map((r) => ({ period: r.period, kesehatanPct: r.data.kesehatan_pct || 0 }));
-  if (!points.length || points[points.length - 1]?.period !== currentPeriod) {
-    points.push({ period: currentPeriod, kesehatanPct: currentPct });
-  }
-  const shown = points;
+function KesehatanHistoryChart({ history }) {
+  const shown = history
+    .filter((r) => r.data?.audit_date && !r.data?.tidak_visit)
+    .map((r) => ({ date: r.data.audit_date, pct: r.data.kesehatan_pct || 0 }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 
   if (shown.length < 2) {
     return <div style={{ fontSize: 12.5, color: "var(--text-faint)", padding: "40px 0", textAlign: "center" }}>Belum cukup riwayat buat ditampilkan sebagai grafik.</div>;
   }
 
   const H = 220, padL = 46, padR = 16, padT = 20, padB = 30;
-  const colWidth = 70;
+  const colWidth = 60;
   const W = Math.max(640, padL + padR + (shown.length - 1) * colWidth);
   const maxVal = 1;
   const xStep = (W - padL - padR) / (shown.length - 1);
   const xAt = (i) => padL + i * xStep;
   const yAt = (v) => padT + (1 - v / maxVal) * (H - padT - padB);
 
-  const linePoints = shown.map((p, i) => `${xAt(i)},${yAt(p.kesehatanPct)}`).join(" ");
+  const linePoints = shown.map((p, i) => `${xAt(i)},${yAt(p.pct)}`).join(" ");
   const areaPoints = `${padL},${yAt(0)} ${linePoints} ${xAt(shown.length - 1)},${yAt(0)}`;
   const yTicks = [0, 0.25, 0.5, 0.75, 1];
   const labelEvery = Math.ceil(shown.length / 9);
@@ -456,9 +559,9 @@ function KesehatanHistoryChart({ allRecords, branchId, currentPeriod, currentPct
           const showLabel = i % labelEvery === 0 || isLast;
           return (
             <g key={i}>
-              <circle cx={xAt(i)} cy={yAt(p.kesehatanPct)} r={isLast ? 4 : 3} fill={isLast ? "#F4B740" : "#7c3aed"} />
-              {showLabel && <text x={xAt(i)} y={yAt(p.kesehatanPct) - 10} textAnchor="middle" fontSize="10" fontWeight="700" fill={isLast ? "#F4B740" : "var(--text-secondary)"}>{(p.kesehatanPct * 100).toFixed(0)}%</text>}
-              {showLabel && <text x={xAt(i)} y={H - 10} textAnchor="middle" fontSize="9.5" fill="var(--text-faint)">{periodeLabel(p.period).slice(0, 8)}</text>}
+              <circle cx={xAt(i)} cy={yAt(p.pct)} r={isLast ? 4 : 3} fill={isLast ? "#F4B740" : "#7c3aed"} />
+              {showLabel && <text x={xAt(i)} y={yAt(p.pct) - 10} textAnchor="middle" fontSize="10" fontWeight="700" fill={isLast ? "#F4B740" : "var(--text-secondary)"}>{(p.pct * 100).toFixed(0)}%</text>}
+              {showLabel && <text x={xAt(i)} y={H - 10} textAnchor="middle" fontSize="9.5" fill="var(--text-faint)">{shortDate(p.date)}</text>}
             </g>
           );
         })}

@@ -32,7 +32,10 @@ export default function SopRanking() {
 
   const rows = useMemo(() => {
     const list = branches.map((b) => {
-      const rec = records.find((r) => r.branch_id === b.id && r.period === period);
+      const matches = records.filter((r) => r.branch_id === b.id && r.period === period);
+      const rec = matches.length
+        ? [...matches].sort((a, b2) => (b2.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))[0]
+        : null;
       if (!rec || rec.data?.tidak_visit) return null;
       const score = calcWeightedFromRecord(rec.data);
       return { branch: b, rec, score };

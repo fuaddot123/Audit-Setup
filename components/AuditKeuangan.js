@@ -63,6 +63,15 @@ function formatThousands(v) {
 function parseThousands(v) {
   return String(v || "").replace(/[^\d]/g, "");
 }
+function shortDate(d) {
+  if (!d) return "\u2014";
+  return new Date(d + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
+}
+// entries: array of audit_keuangan rows (bisa lebih dari 1 per bulan sekarang) — ambil yang audit_date-nya paling baru
+function latestOf(entries) {
+  if (!entries || !entries.length) return null;
+  return [...entries].sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""))[0];
+}
 
 const ICON_PATHS = {
   wallet: <><rect x="3" y="6" width="18" height="13" rx="2" /><path d="M17 12h2M3 10h18" /></>,
@@ -97,6 +106,7 @@ export default function AuditKeuangan({ profile }) {
   const [entriesByBranch, setEntriesByBranch] = useState({});
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
+  const [selectedEntryId, setSelectedEntryId] = useState(null);
   const [form, setForm] = useState({ saldo_sebelumnya: "", saldo_masuk: "", limit_kas: "", pengeluaran: "", sisa_saldo: "" });
   const [editingLimit, setEditingLimit] = useState(false);
   const [limitDraft, setLimitDraft] = useState("");
@@ -131,7 +141,8 @@ export default function AuditKeuangan({ profile }) {
       const grouped = {};
       (entries || []).forEach((e) => {
         if (!grouped[e.branch_id]) grouped[e.branch_id] = {};
-        grouped[e.branch_id][e.period] = e;
+        if (!grouped[e.branch_id][e.period]) grouped[e.branch_id][e.period] = [];
+        grouped[e.branch_id][e.period].push(e);
       });
       setEntriesByBranch(grouped);
     } catch (err) {
@@ -155,29 +166,50 @@ export default function AuditKeuangan({ profile }) {
   function closeModal() {
     setSelectedBranch(null);
     setSelectedPeriod(null);
+    setSelectedEntryId(null);
     setEditingLimit(false);
+  }
+
+  function applyEntryToFormK(e) {
+    setForm({ saldo_sebelumnya: e.saldo_sebelumnya, saldo_masuk: e.saldo_masuk, limit_kas: e.limit_kas, pengeluaran: e.pengeluaran, sisa_saldo: e.sisa_saldo ?? "" });
+    setSelectedEntryId(e.id);
   }
 
   function selectPeriod(branchId, period) {
     setSelectedPeriod(period);
-    const e = (entriesByBranch[branchId] || {})[period];
+    const entriesHere = (entriesByBranch[branchId] || {})[period] || [];
     const branch = branches.find((b) => b.id === branchId);
-    if (e) {
-      setForm({ saldo_sebelumnya: e.saldo_sebelumnya, saldo_masuk: e.saldo_masuk, limit_kas: e.limit_kas, pengeluaran: e.pengeluaran, sisa_saldo: e.sisa_saldo ?? "" });
+    if (entriesHere.length) {
+      applyEntryToFormK(latestOf(entriesHere));
       return;
     }
-    const prevEntry = (entriesByBranch[branchId] || {})[getPrevPeriod(period)];
+    const prevEntries = (entriesByBranch[branchId] || {})[getPrevPeriod(period)] || [];
+    const prevEntry = latestOf(prevEntries);
     const carryForward = prevEntry
       ? (prevEntry.sisa_saldo !== undefined && prevEntry.sisa_saldo !== null
           ? parseFloat(prevEntry.sisa_saldo) || 0
           : (parseFloat(prevEntry.saldo_sebelumnya) || 0) + (parseFloat(prevEntry.saldo_masuk) || 0) - (parseFloat(prevEntry.pengeluaran) || 0))
       : "";
     setForm({ saldo_sebelumnya: carryForward, saldo_masuk: "", limit_kas: branch?.limit_kas || "", pengeluaran: "", sisa_saldo: "" });
+    setSelectedEntryId(null);
+  }
+
+  function startNewEntryK() {
+    const prevEntries = (entriesByBranch[selectedBranch.id] || {})[getPrevPeriod(selectedPeriod)] || [];
+    const prevEntry = latestOf(prevEntries);
+    const carryForward = prevEntry
+      ? (prevEntry.sisa_saldo !== undefined && prevEntry.sisa_saldo !== null
+          ? parseFloat(prevEntry.sisa_saldo) || 0
+          : (parseFloat(prevEntry.saldo_sebelumnya) || 0) + (parseFloat(prevEntry.saldo_masuk) || 0) - (parseFloat(prevEntry.pengeluaran) || 0))
+      : "";
+    setForm({ saldo_sebelumnya: carryForward, saldo_masuk: "", limit_kas: selectedBranch?.limit_kas || "", pengeluaran: "", sisa_saldo: "" });
+    setSelectedEntryId(null);
+    setSavedFlash(false);
   }
 
   // true kalau ini audit pertama untuk cabang ini (belum ada histori sama sekali untuk narik saldo)
   const isFirstEverEntry = selectedBranch && selectedPeriod
-    ? !(entriesByBranch[selectedBranch.id] || {})[selectedPeriod] && !(entriesByBranch[selectedBranch.id] || {})[getPrevPeriod(selectedPeriod)]
+    ? !((entriesByBranch[selectedBranch.id] || {})[selectedPeriod] || []).length && !((entriesByBranch[selectedBranch.id] || {})[getPrevPeriod(selectedPeriod)] || []).length
     : false;
 
   async function saveLimitOnly() {
@@ -200,9 +232,10 @@ export default function AuditKeuangan({ profile }) {
   }
 
   async function deleteEntry() {
-    const existing = (entriesByBranch[selectedBranch.id] || {})[selectedPeriod];
+    const entriesHere = (entriesByBranch[selectedBranch.id] || {})[selectedPeriod] || [];
+    const existing = entriesHere.find((e) => e.id === selectedEntryId) || latestOf(entriesHere);
     if (!existing || profile?.role !== "super_admin") return;
-    if (!window.confirm(`Hapus data Audit Keuangan ${selectedBranch.name} periode ${monthLabel(selectedPeriod)}? Aksi ini tidak bisa dibatalkan.`)) return;
+    if (!window.confirm(`Hapus audit ${selectedBranch.name} tanggal ${shortDate(existing.audit_date)}? Aksi ini tidak bisa dibatalkan.`)) return;
     setSaving(true);
     setError(null);
     try {
@@ -210,10 +243,13 @@ export default function AuditKeuangan({ profile }) {
       if (err) throw err;
       const grouped = { ...entriesByBranch };
       const branchEntries = { ...(grouped[selectedBranch.id] || {}) };
-      delete branchEntries[selectedPeriod];
+      const remaining = (branchEntries[selectedPeriod] || []).filter((e) => e.id !== existing.id);
+      if (remaining.length) branchEntries[selectedPeriod] = remaining;
+      else delete branchEntries[selectedPeriod];
       grouped[selectedBranch.id] = branchEntries;
       setEntriesByBranch(grouped);
-      setForm({ saldo_sebelumnya: "", saldo_masuk: "", limit_kas: selectedBranch.limit_kas || "", pengeluaran: "", sisa_saldo: "" });
+      if (remaining.length) applyEntryToFormK(latestOf(remaining));
+      else startNewEntryK();
       setSavedFlash(false);
     } catch (err) {
       setError("Gagal menghapus: " + err.message);
@@ -227,10 +263,11 @@ export default function AuditKeuangan({ profile }) {
     setSaving(true);
     setError(null);
     try {
-      const existing = (entriesByBranch[selectedBranch.id] || {})[selectedPeriod];
+      const today = new Date().toISOString().slice(0, 10);
       const payload = {
         branch_id: selectedBranch.id,
         period: selectedPeriod,
+        audit_date: today,
         saldo_sebelumnya: parseFloat(form.saldo_sebelumnya) || 0,
         saldo_masuk: parseFloat(form.saldo_masuk) || 0,
         limit_kas: parseFloat(form.limit_kas) || 0,
@@ -240,15 +277,20 @@ export default function AuditKeuangan({ profile }) {
         submitted_by: (await supabase.auth.getUser()).data.user.id,
       };
       let res;
-      if (existing) {
-        res = await supabase.from("audit_keuangan").update(payload).eq("id", existing.id).select().single();
+      if (selectedEntryId) {
+        const { audit_date, ...updatePayload } = payload; // jangan timpa tanggal audit asli pas cuma edit data
+        res = await supabase.from("audit_keuangan").update(updatePayload).eq("id", selectedEntryId).select().single();
       } else {
         res = await supabase.from("audit_keuangan").insert(payload).select().single();
       }
       if (res.error) throw res.error;
       const grouped = { ...entriesByBranch };
-      grouped[selectedBranch.id] = { ...(grouped[selectedBranch.id] || {}), [selectedPeriod]: res.data };
+      const branchEntries = { ...(grouped[selectedBranch.id] || {}) };
+      const others = (branchEntries[selectedPeriod] || []).filter((e) => e.id !== res.data.id);
+      branchEntries[selectedPeriod] = [...others, res.data];
+      grouped[selectedBranch.id] = branchEntries;
       setEntriesByBranch(grouped);
+      setSelectedEntryId(res.data.id);
 
       // Kalau cabang ini belum pernah punya limit kas tersimpan, kunci sekarang buat seterusnya
       if (!selectedBranch.limit_kas && payload.limit_kas > 0) {
@@ -267,7 +309,8 @@ export default function AuditKeuangan({ profile }) {
   }
 
   function exportReport() {
-    const existing = (entriesByBranch[selectedBranch.id] || {})[selectedPeriod];
+    const entriesHere = (entriesByBranch[selectedBranch.id] || {})[selectedPeriod] || [];
+    const existing = latestOf(entriesHere);
     if (!existing) return;
     const c = computeStatus(existing, settings);
     const rows = [
@@ -314,7 +357,7 @@ export default function AuditKeuangan({ profile }) {
     const groupCount = { good: 0, warn: 0, bad: 0 };
 
     const tableRows = exportBranches.map((b, i) => {
-      const e = (entriesByBranch[b.id] || {})[period];
+      const e = latestOf((entriesByBranch[b.id] || {})[period]);
       if (!e) return { cells: [String(i + 1), b.name, null, null, null, null, null, null, null], badge: null };
       const c = computeStatus(e, settings);
       totalSb += parseFloat(e.saldo_sebelumnya) || 0;
@@ -381,13 +424,13 @@ export default function AuditKeuangan({ profile }) {
     setShowExportAll(false);
   }
 
-  const currentEntry = selectedBranch ? (entriesByBranch[selectedBranch.id] || {})[selectedPeriod] : null;
+  const currentEntry = selectedBranch ? latestOf((entriesByBranch[selectedBranch.id] || {})[selectedPeriod]) : null;
   const current = computeStatus(selectedPeriod ? { ...(currentEntry || {}), ...form } : null, settings);
   const sisaHitung = (parseFloat(form.saldo_sebelumnya) || 0) + (parseFloat(form.saldo_masuk) || 0) - (parseFloat(form.pengeluaran) || 0);
 
   const visibleBranches = branches.filter((b) => {
     if (filter === "all") return true;
-    const e = (entriesByBranch[b.id] || {})[viewPeriod];
+    const e = latestOf((entriesByBranch[b.id] || {})[viewPeriod]);
     const st = e ? computeStatus(e, settings) : null;
     const tone = st ? st.tone : "none";
     return tone === filter;
@@ -405,7 +448,8 @@ export default function AuditKeuangan({ profile }) {
               <button className="btn-ghost" style={{ marginBottom: 8, fontSize: 12.5 }} onClick={closeModal}>&larr; Pilih cabang lain</button>
               <div className="display" style={{ fontSize: 19, fontWeight: 600 }}>Audit Keuangan &mdash; {selectedBranch.name}</div>
               <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-                Audit Kas Kecil {currentEntry && <span style={{ color: "var(--text-faint)" }}>&middot; sudah pernah diisi, kamu mengedit data yang ada</span>}
+                Bulan: {monthLabel(selectedPeriod)}
+                {selectedEntryId ? <span> &middot; mengedit audit tanggal {shortDate(currentEntry?.audit_date)}</span> : <span> &middot; audit baru</span>}
               </div>
             </div>
             <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -420,7 +464,7 @@ export default function AuditKeuangan({ profile }) {
                   {saving ? "Menyimpan\u2026" : savedFlash ? "\u2713 Tersimpan" : "Simpan"}
                 </button>
               )}
-              {profile?.role === "super_admin" && currentEntry && (
+              {profile?.role === "super_admin" && selectedEntryId && (
                 <button className="btn-ghost" disabled={saving} onClick={deleteEntry} style={{ alignSelf: "flex-end", color: "var(--danger-text)" }}>
                   Hapus Data
                 </button>
@@ -435,6 +479,52 @@ export default function AuditKeuangan({ profile }) {
         {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
 
         <div style={{ padding: 24 }}>
+          {((entriesByBranch[selectedBranch.id] || {})[selectedPeriod] || []).length > 0 && (
+            <div style={{ marginBottom: 16 }}>
+              <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>
+                Riwayat audit {monthLabel(selectedPeriod)} ({((entriesByBranch[selectedBranch.id] || {})[selectedPeriod] || []).length})
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {[...((entriesByBranch[selectedBranch.id] || {})[selectedPeriod] || [])]
+                  .sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""))
+                  .map((e, i, arr) => {
+                    const st = computeStatus(e, settings);
+                    const active = e.id === selectedEntryId;
+                    return (
+                      <div
+                        key={e.id}
+                        onClick={() => applyEntryToFormK(e)}
+                        style={{
+                          cursor: "pointer", padding: "8px 14px", borderRadius: 10,
+                          border: `1.5px solid ${active ? "#7c3aed" : "var(--border)"}`,
+                          background: active ? "#7c3aed14" : "var(--surface)",
+                          display: "flex", alignItems: "center", gap: 8,
+                        }}
+                      >
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {arr.length - i}</span>
+                        <span style={{ fontSize: 12, fontWeight: 600 }}>{shortDate(e.audit_date)}</span>
+                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: TONE[st.tone].dot }} />
+                        <span style={{ fontSize: 12, fontWeight: 700, color: TONE[st.tone].dot }}>{pct(st.posisi)}</span>
+                      </div>
+                    );
+                  })}
+                {canEdit && (
+                  <div
+                    onClick={startNewEntryK}
+                    style={{
+                      cursor: "pointer", padding: "8px 14px", borderRadius: 10,
+                      border: `1.5px dashed ${!selectedEntryId ? "#7c3aed" : "var(--border)"}`,
+                      color: "#7c3aed", background: !selectedEntryId ? "#7c3aed14" : "transparent",
+                      display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700,
+                    }}
+                  >
+                    + Audit Baru
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           <div style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gap: 16, marginBottom: 16, alignItems: "start" }}>
 
             {/* Card 1: Input data */}
@@ -575,7 +665,7 @@ export default function AuditKeuangan({ profile }) {
           {/* Card 3: Riwayat */}
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20 }}>
             <div style={{ fontWeight: 700, fontSize: 14.5, color: "#7c3aed", marginBottom: 14 }}>3. RIWAYAT POSISI KAS SEMUA BULAN</div>
-            <KeuanganHistoryChart entriesByBranch={entriesByBranch} branchId={selectedBranch.id} settings={settings} currentPeriod={selectedPeriod} currentPosisi={current?.posisi ?? 0} />
+            <KeuanganHistoryChart entriesByBranch={entriesByBranch} branchId={selectedBranch.id} settings={settings} />
           </div>
 
           {savedFlash && <div style={{ color: "var(--success-text)", fontSize: 13, marginTop: 10 }}>Tersimpan \u2713</div>}
@@ -601,7 +691,7 @@ export default function AuditKeuangan({ profile }) {
 
       <div style={{ padding: "20px 28px" }}>
         {(() => {
-          const stats = branches.map((b) => (entriesByBranch[b.id] || {})[viewPeriod]).map((e) => (e ? computeStatus(e, settings) : null));
+          const stats = branches.map((b) => latestOf((entriesByBranch[b.id] || {})[viewPeriod])).map((e) => (e ? computeStatus(e, settings) : null));
           const audited = stats.filter(Boolean);
           const auditedCount = audited.length;
           const avgPosisi = auditedCount ? audited.reduce((s, c) => s + c.posisi, 0) / auditedCount : null;
@@ -632,7 +722,8 @@ export default function AuditKeuangan({ profile }) {
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 14 }}>
           {visibleBranches.map((b) => {
-            const e = (entriesByBranch[b.id] || {})[viewPeriod];
+            const entriesHere = (entriesByBranch[b.id] || {})[viewPeriod] || [];
+            const e = latestOf(entriesHere);
             const st = e ? computeStatus(e, settings) : null;
             const tone = st ? st.tone : "none";
             const toneIcon = tone === "good" ? "check" : tone === "warn" ? "alertCircle" : tone === "bad" ? "alertTriangle" : "wallet";
@@ -645,8 +736,13 @@ export default function AuditKeuangan({ profile }) {
                 <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: tone === "none" ? "linear-gradient(90deg, #7c3aed, #F4B740)" : TONE[tone].dot }} />
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
                   <div className="display" style={{ fontSize: 15.5, fontWeight: 600 }}>{b.name}</div>
-                  <div style={{ width: 26, height: 26, borderRadius: 8, background: TONE[tone].bg, color: TONE[tone].dot, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                    <Icon name={toneIcon} size={14} />
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {entriesHere.length > 1 && (
+                      <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7c3aed", background: "#7c3aed18", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>{entriesHere.length} audit</span>
+                    )}
+                    <div style={{ width: 26, height: 26, borderRadius: 8, background: TONE[tone].bg, color: TONE[tone].dot, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                      <Icon name={toneIcon} size={14} />
+                    </div>
                   </div>
                 </div>
                 <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: TONE[tone].bg, color: TONE[tone].text, fontSize: 11.5, fontWeight: 600, marginBottom: 10 }}>
@@ -654,7 +750,7 @@ export default function AuditKeuangan({ profile }) {
                 </span>
                 <div style={{ height: 1, background: "var(--border)", margin: "10px 0" }} />
                 <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
-                  {e ? `Sisa ${rupiah(st.sisa)} \u00b7 ${monthLabel(viewPeriod)}` : "Belum ada audit pada periode ini"}
+                  {e ? `Sisa ${rupiah(st.sisa)} \u00b7 ${shortDate(e.audit_date) !== "\u2014" ? shortDate(e.audit_date) : monthLabel(viewPeriod)}` : "Belum ada audit pada periode ini"}
                 </div>
               </div>
             );
@@ -703,16 +799,13 @@ function ThresholdLegend({ color, label, range }) {
   );
 }
 
-function KeuanganHistoryChart({ entriesByBranch, branchId, settings, currentPeriod, currentPosisi }) {
+function KeuanganHistoryChart({ entriesByBranch, branchId, settings }) {
   const byPeriod = entriesByBranch[branchId] || {};
-  const points = Object.keys(byPeriod)
-    .filter((p) => p <= currentPeriod)
-    .sort()
-    .map((p) => ({ period: p, posisi: computeStatus(byPeriod[p], settings)?.posisi || 0 }));
-  if (!points.length || points[points.length - 1]?.period !== currentPeriod) {
-    points.push({ period: currentPeriod, posisi: currentPosisi });
-  }
-  const shown = points;
+  const shown = Object.values(byPeriod)
+    .flat()
+    .filter((e) => e.audit_date)
+    .map((e) => ({ date: e.audit_date, posisi: computeStatus(e, settings)?.posisi || 0 }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 
   if (shown.length < 2) {
     return <div style={{ fontSize: 12.5, color: "var(--text-faint)", padding: "40px 0", textAlign: "center" }}>Belum cukup riwayat buat ditampilkan sebagai grafik.</div>;
@@ -755,7 +848,7 @@ function KeuanganHistoryChart({ entriesByBranch, branchId, settings, currentPeri
             <g key={i}>
               <circle cx={xAt(i)} cy={yAt(p.posisi)} r={isLast ? 4 : 3} fill={isLast ? "#F4B740" : "#7c3aed"} />
               {showLabel && <text x={xAt(i)} y={yAt(p.posisi) - 10} textAnchor="middle" fontSize="10" fontWeight="700" fill={isLast ? "#F4B740" : "var(--text-secondary)"}>{(p.posisi * 100).toFixed(0)}%</text>}
-              {showLabel && <text x={xAt(i)} y={H - 10} textAnchor="middle" fontSize="9.5" fill="var(--text-faint)">{monthLabel(p.period).slice(0, 8)}</text>}
+              {showLabel && <text x={xAt(i)} y={H - 10} textAnchor="middle" fontSize="9.5" fill="var(--text-faint)">{shortDate(p.date)}</text>}
             </g>
           );
         })}

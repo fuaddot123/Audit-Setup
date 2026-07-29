@@ -51,7 +51,9 @@ export default function SopLaporan() {
   }, [sopRecords]);
 
   function latestFor(branchId, period) {
-    return sopRecords.find((r) => r.branch_id === branchId && r.period === period) || null;
+    const matches = sopRecords.filter((r) => r.branch_id === branchId && r.period === period);
+    if (!matches.length) return null;
+    return [...matches].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))[0];
   }
 
   // ── EXCEL: laporan 1 periode ──

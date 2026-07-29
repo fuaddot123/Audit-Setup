@@ -23,6 +23,14 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function newStockRow() { return { nama: "", status: "Lengkap", keterangan: "" }; }
+function shortDate(d) {
+  if (!d) return "\u2014";
+  return new Date(d + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
+}
+function todayInputValue() {
+  const n = new Date();
+  return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}-${String(n.getDate()).padStart(2, "0")}`;
+}
 
 // Sama persis dengan pola threshold di components/sop/SopKepatuhan.js
 function kategoriInfo(pct) {
@@ -38,12 +46,15 @@ export default function BeritaAcara({ profile }) {
 
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
-  const [allRecords, setAllRecords] = useState([]);
+  const [latestByBranchPeriod, setLatestByBranchPeriod] = useState({});
   const [viewPeriod, setViewPeriod] = useState(nowPeriode());
   const [selectedBranch, setSelectedBranch] = useState(null);
-  const [existingRow, setExistingRow] = useState(null);
-  const [existingInventarisRow, setExistingInventarisRow] = useState(null);
 
+  const [entriesThisPeriod, setEntriesThisPeriod] = useState([]);
+  const [selectedEntryId, setSelectedEntryId] = useState(null);
+  const [selectedInventarisEntryId, setSelectedInventarisEntryId] = useState(null);
+
+  const [auditDate, setAuditDate] = useState(todayInputValue());
   const [waktuAudit, setWaktuAudit] = useState("");
   const [kegiatan, setKegiatan] = useState("Audit Stock Opname, SOP, Inventaris, Kas Kecil, dan Report Penjualan");
   const [perlengkapan, setPerlengkapan] = useState("Laptop dan Scanner");
@@ -66,8 +77,48 @@ export default function BeritaAcara({ profile }) {
     const { data, error: err } = await supabase.from("branches").select("*").order("name");
     if (!err) setBranches(data || []);
     const { data: recs, error: recErr } = await supabase.from("berita_acara").select("*");
-    if (!recErr) setAllRecords(recs || []);
+    if (!recErr) {
+      const sorted = [...(recs || [])].sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""));
+      const map = {};
+      sorted.forEach((r) => {
+        const key = `${r.branch_id}|${r.period}`;
+        if (!map[key]) map[key] = { entry: r, count: 1 };
+        else map[key].count += 1;
+      });
+      setLatestByBranchPeriod(map);
+    } else {
+      setError("Gagal memuat data: " + recErr.message);
+    }
     setLoadingBranches(false);
+  }
+
+  function applyEntryToForm(entry, invEntry) {
+    setWaktuAudit(entry.waktu_audit || "");
+    setKegiatan(entry.kegiatan || "Audit Stock Opname, SOP, Inventaris, Kas Kecil, dan Report Penjualan");
+    setPerlengkapan(entry.perlengkapan || "Laptop dan Scanner");
+    setStockKat1(Array.isArray(entry.stock_opname_kat1) ? entry.stock_opname_kat1 : []);
+    setStockKat2(Array.isArray(entry.stock_opname_kat2) ? entry.stock_opname_kat2 : []);
+    setStoreManagerName(entry.store_manager_name || "");
+    setStoreLeaderName(entry.store_leader_name || "");
+    setAuditDate(entry.audit_date || todayInputValue());
+    setSelectedEntryId(entry.id);
+    setInventaris(normalizeInventaris(invEntry?.data?.categories));
+    setSelectedInventarisEntryId(invEntry?.id || null);
+  }
+
+  function startNewEntry(period) {
+    setWaktuAudit("");
+    setKegiatan("Audit Stock Opname, SOP, Inventaris, Kas Kecil, dan Report Penjualan");
+    setPerlengkapan("Laptop dan Scanner");
+    setStockKat1([]);
+    setStockKat2([]);
+    setInventaris(freshInventaris());
+    setStoreManagerName("");
+    setStoreLeaderName("");
+    setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
+    setSelectedEntryId(null);
+    setSelectedInventarisEntryId(null);
+    setSaved(false);
   }
 
   async function pickBranch(b) {
@@ -75,43 +126,31 @@ export default function BeritaAcara({ profile }) {
     setSaved(false);
     setError(null);
     setLoadingRecord(true);
+    const period = viewPeriod;
     const [beRes, invRes] = await Promise.all([
-      supabase.from("berita_acara").select("*").eq("branch_id", b.id).eq("period", viewPeriod).maybeSingle(),
-      supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", viewPeriod).maybeSingle(),
+      supabase.from("berita_acara").select("*").eq("branch_id", b.id).eq("period", period),
+      supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", period),
     ]);
-    if (!beRes.error && beRes.data) {
-      setExistingRow(beRes.data);
-      setWaktuAudit(beRes.data.waktu_audit || "");
-      setKegiatan(beRes.data.kegiatan || "Audit Stock Opname, SOP, Inventaris, Kas Kecil, dan Report Penjualan");
-      setPerlengkapan(beRes.data.perlengkapan || "Laptop dan Scanner");
-      setStockKat1(Array.isArray(beRes.data.stock_opname_kat1) ? beRes.data.stock_opname_kat1 : []);
-      setStockKat2(Array.isArray(beRes.data.stock_opname_kat2) ? beRes.data.stock_opname_kat2 : []);
-      setStoreManagerName(beRes.data.store_manager_name || "");
-      setStoreLeaderName(beRes.data.store_leader_name || "");
+    const entries = !beRes.error
+      ? [...(beRes.data || [])].sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""))
+      : [];
+    const invEntries = !invRes.error ? (invRes.data || []) : [];
+    setEntriesThisPeriod(entries);
+    if (entries.length) {
+      const latest = entries[0];
+      const pairedInv = invEntries.find((iv) => iv.data?.audit_date === latest.audit_date) || invEntries[0] || null;
+      applyEntryToForm(latest, pairedInv);
     } else {
-      setExistingRow(null);
-      setWaktuAudit("");
-      setKegiatan("Audit Stock Opname, SOP, Inventaris, Kas Kecil, dan Report Penjualan");
-      setPerlengkapan("Laptop dan Scanner");
-      setStockKat1([]);
-      setStockKat2([]);
-      setStoreManagerName("");
-      setStoreLeaderName("");
-    }
-    if (!invRes.error && invRes.data) {
-      setExistingInventarisRow(invRes.data);
-      setInventaris(normalizeInventaris(invRes.data.data?.categories));
-    } else {
-      setExistingInventarisRow(null);
-      setInventaris(freshInventaris());
+      startNewEntry(period);
     }
     setLoadingRecord(false);
   }
 
   function backToList() {
     setSelectedBranch(null);
-    setExistingRow(null);
-    setExistingInventarisRow(null);
+    setEntriesThisPeriod([]);
+    setSelectedEntryId(null);
+    setSelectedInventarisEntryId(null);
     loadBranches();
   }
 
@@ -156,6 +195,7 @@ export default function BeritaAcara({ profile }) {
 
   async function saveRecord() {
     if (!canEdit) { setError("Kamu tidak punya izin untuk menyimpan."); return; }
+    if (!auditDate) { setError("Tanggal audit wajib diisi."); return; }
     setSaving(true);
     setError(null);
     try {
@@ -164,6 +204,7 @@ export default function BeritaAcara({ profile }) {
       const beritaPayload = {
         branch_id: selectedBranch.id,
         period: viewPeriod,
+        audit_date: auditDate,
         waktu_audit: waktuAudit,
         kegiatan,
         perlengkapan,
@@ -174,8 +215,16 @@ export default function BeritaAcara({ profile }) {
         submitted_by: user.id,
         updated_at: new Date().toISOString(),
       };
-      const beRes = await supabase.from("berita_acara").upsert(beritaPayload, { onConflict: "branch_id,period" }).select().single();
-      if (beRes.error) throw beRes.error;
+      let beRow;
+      if (selectedEntryId) {
+        const res = await supabase.from("berita_acara").update(beritaPayload).eq("id", selectedEntryId).select().single();
+        if (res.error) throw res.error;
+        beRow = res.data;
+      } else {
+        const res = await supabase.from("berita_acara").insert(beritaPayload).select().single();
+        if (res.error) throw res.error;
+        beRow = res.data;
+      }
 
       const invPayload = {
         module: "inventaris",
@@ -183,13 +232,25 @@ export default function BeritaAcara({ profile }) {
         period: viewPeriod,
         status: "submitted",
         submitted_by: user.id,
-        data: { tidak_visit: false, categories: inventaris, auditor_name: profile?.full_name || null },
+        data: { tidak_visit: false, categories: inventaris, auditor_name: profile?.full_name || null, audit_date: auditDate },
       };
-      const invRes = await supabase.from("audit_generic").upsert(invPayload, { onConflict: "module,branch_id,period" }).select().single();
-      if (invRes.error) throw invRes.error;
+      let invRow;
+      if (selectedInventarisEntryId) {
+        const res = await supabase.from("audit_generic").update(invPayload).eq("id", selectedInventarisEntryId).select().single();
+        if (res.error) throw res.error;
+        invRow = res.data;
+      } else {
+        const res = await supabase.from("audit_generic").insert(invPayload).select().single();
+        if (res.error) throw res.error;
+        invRow = res.data;
+      }
 
-      setExistingRow(beRes.data);
-      setExistingInventarisRow(invRes.data);
+      setSelectedEntryId(beRow.id);
+      setSelectedInventarisEntryId(invRow.id);
+      setEntriesThisPeriod((prev) => {
+        const others = prev.filter((e) => e.id !== beRow.id);
+        return [beRow, ...others].sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""));
+      });
       setSaved(true);
     } catch (err) {
       setError("Gagal menyimpan: " + err.message);
@@ -199,21 +260,26 @@ export default function BeritaAcara({ profile }) {
   }
 
   async function deleteRecord() {
-    if (!existingRow || profile?.role !== "super_admin") return;
-    if (!window.confirm(`Hapus Berita Acara ${selectedBranch.name} periode ${periodeLabel(viewPeriod)}? Aksi ini tidak bisa dibatalkan.`)) return;
+    if (!selectedEntryId || profile?.role !== "super_admin") return;
+    const entry = entriesThisPeriod.find((e) => e.id === selectedEntryId);
+    if (!window.confirm(`Hapus audit ${selectedBranch.name} tanggal ${shortDate(entry?.audit_date)}? Aksi ini tidak bisa dibatalkan.`)) return;
     setSaving(true);
     setError(null);
     try {
-      const { error: err } = await supabase.from("berita_acara").delete().eq("id", existingRow.id);
+      const { error: err } = await supabase.from("berita_acara").delete().eq("id", selectedEntryId);
       if (err) throw err;
-      if (existingInventarisRow) {
-        await supabase.from("audit_generic").delete().eq("id", existingInventarisRow.id);
+      if (selectedInventarisEntryId) {
+        await supabase.from("audit_generic").delete().eq("id", selectedInventarisEntryId);
       }
-      setExistingRow(null);
-      setExistingInventarisRow(null);
-      setStockKat1([]);
-      setStockKat2([]);
-      setInventaris(freshInventaris());
+      const remaining = entriesThisPeriod.filter((e) => e.id !== selectedEntryId);
+      setEntriesThisPeriod(remaining);
+      if (remaining.length) {
+        // Kalau masih ada sisa, buka yang paling baru — data Inventaris pasangannya nggak kita tau lagi
+        // dari cache lokal, jadi mulai polos (auditor bisa isi ulang kalau perlu).
+        applyEntryToForm(remaining[0], null);
+      } else {
+        startNewEntry(viewPeriod);
+      }
       setSaved(false);
     } catch (err) {
       setError("Gagal menghapus: " + err.message);
@@ -264,7 +330,7 @@ export default function BeritaAcara({ profile }) {
       const isBad = row.status === "Rusak";
       return `<tr>
         <td style="font-weight:600;">${esc(cat)}</td>
-        <td class="${isBad ? "status-bad" : "status-ok"}">${isBad ? "SELISIH" : "LENGKAP"}</td>
+        <td class="${isBad ? "status-bad" : "status-ok"}">${isBad ? "RUSAK" : "BERFUNGSI"}</td>
         <td>${esc(row.keterangan) || "-"}</td>
       </tr>`;
     }).join("");
@@ -502,9 +568,6 @@ export default function BeritaAcara({ profile }) {
 
   // ── Tampilan: pilih cabang ──
   if (!selectedBranch) {
-    const rowsByBranch = {};
-    allRecords.filter((r) => r.period === viewPeriod).forEach((r) => { rowsByBranch[r.branch_id] = r; });
-
     return (
       <div style={{ flex: 1 }}>
         <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
@@ -524,16 +587,22 @@ export default function BeritaAcara({ profile }) {
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 12 }}>
               {branches.map((b) => {
-                const row = rowsByBranch[b.id];
-                const kat1 = row?.stock_opname_kat1 || [];
-                const kat2 = row?.stock_opname_kat2 || [];
+                const row = latestByBranchPeriod[`${b.id}|${viewPeriod}`];
+                const entry = row?.entry;
+                const kat1 = entry?.stock_opname_kat1 || [];
+                const kat2 = entry?.stock_opname_kat2 || [];
                 const totalItem = kat1.length + kat2.length;
                 const selisihCount = [...kat1, ...kat2].filter((r) => r.status === "Selisih").length;
                 return (
                   <div key={b.id} onClick={() => pickBranch(b)} style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", overflow: "hidden" }}>
-                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: row ? (selisihCount > 0 ? "#a32020" : "#1a9e6e") : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
-                    <div style={{ fontWeight: 600, fontSize: 14.5, marginBottom: row ? 8 : 4 }}>{b.name}</div>
-                    {row ? (
+                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: entry ? (selisihCount > 0 ? "#a32020" : "#1a9e6e") : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: entry ? 8 : 4 }}>
+                      <div style={{ fontWeight: 600, fontSize: 14.5 }}>{b.name}</div>
+                      {row && row.count > 1 && (
+                        <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7c3aed", background: "#7c3aed18", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>{row.count} audit</span>
+                      )}
+                    </div>
+                    {entry ? (
                       <>
                         <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
                           <span style={{ fontSize: 22, fontWeight: 800, color: selisihCount > 0 ? "#a32020" : "#1a9e6e" }}>{selisihCount}</span>
@@ -542,6 +611,7 @@ export default function BeritaAcara({ profile }) {
                         <span style={{ display: "inline-block", marginTop: 6, padding: "2px 9px", borderRadius: 20, background: selisihCount > 0 ? "#a3202022" : "#1a9e6e22", color: selisihCount > 0 ? "#a32020" : "#1a9e6e", fontSize: 10.5, fontWeight: 600 }}>
                           {selisihCount > 0 ? "Ada temuan" : "Semua lengkap"}
                         </span>
+                        <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 6 }}>Terakhir: {shortDate(entry.audit_date)}</div>
                       </>
                     ) : (
                       <div style={{ fontSize: 11.5, fontWeight: 400, color: "var(--text-faint)" }}>Belum ada &middot; Mulai &rarr;</div>
@@ -565,17 +635,22 @@ export default function BeritaAcara({ profile }) {
             <button className="btn-ghost" style={{ marginBottom: 8, fontSize: 12.5 }} onClick={backToList}>&larr; Pilih cabang lain</button>
             <div className="display" style={{ fontSize: 19, fontWeight: 600 }}>Berita Acara &mdash; {selectedBranch.name}</div>
             <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-              Periode: {periodeLabel(viewPeriod)} {existingRow && <span style={{ color: "var(--text-faint)" }}>&middot; sudah pernah dibuat, kamu mengedit data yang ada</span>}
+              Periode: {periodeLabel(viewPeriod)}
+              {selectedEntryId ? <span> &middot; mengedit audit tanggal {shortDate(auditDate)}</span> : <span> &middot; audit baru</span>}
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "flex-end", gap: 8 }}>
+            <div>
+              <label style={{ display: "block", fontSize: 11, color: "var(--text-secondary)", marginBottom: 3 }}>Tanggal audit</label>
+              <input className="input" type="date" value={auditDate} disabled={!canEdit} onChange={(e) => { setAuditDate(e.target.value); setSaved(false); }} />
+            </div>
             <button className="btn-ghost" onClick={exportPDF}>Cetak PDF</button>
             {canEdit && (
               <button className="btn" disabled={saving} onClick={saveRecord}>
                 {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : "Simpan"}
               </button>
             )}
-            {profile?.role === "super_admin" && existingRow && (
+            {profile?.role === "super_admin" && selectedEntryId && (
               <button className="btn-ghost" disabled={saving} onClick={deleteRecord} style={{ color: "var(--danger-text)" }}>Hapus</button>
             )}
           </div>
@@ -589,6 +664,56 @@ export default function BeritaAcara({ profile }) {
           <div style={{ color: "var(--text-secondary)" }}>Memuat data\u2026</div>
         ) : (
           <>
+            {entriesThisPeriod.length > 0 && (
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11.5, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 8 }}>
+                  Riwayat audit {periodeLabel(viewPeriod)} ({entriesThisPeriod.length})
+                </div>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {entriesThisPeriod.map((e, i) => {
+                    const kat1 = e.stock_opname_kat1 || [];
+                    const kat2 = e.stock_opname_kat2 || [];
+                    const selisih = [...kat1, ...kat2].filter((r) => r.status === "Selisih").length;
+                    const active = e.id === selectedEntryId;
+                    return (
+                      <div
+                        key={e.id}
+                        onClick={async () => {
+                          const { data: iv } = await supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", selectedBranch.id).eq("period", viewPeriod);
+                          const pairedInv = (iv || []).find((r) => r.data?.audit_date === e.audit_date) || null;
+                          applyEntryToForm(e, pairedInv);
+                        }}
+                        style={{
+                          cursor: "pointer", padding: "8px 14px", borderRadius: 10,
+                          border: `1.5px solid ${active ? "#7c3aed" : "var(--border)"}`,
+                          background: active ? "#7c3aed14" : "var(--surface)",
+                          display: "flex", alignItems: "center", gap: 8,
+                        }}
+                      >
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {entriesThisPeriod.length - i}</span>
+                        <span style={{ fontSize: 12, fontWeight: 600 }}>{shortDate(e.audit_date)}</span>
+                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: selisih > 0 ? "#a32020" : "#1a9e6e" }} />
+                        <span style={{ fontSize: 12, fontWeight: 700, color: selisih > 0 ? "#a32020" : "#1a9e6e" }}>{selisih} selisih</span>
+                      </div>
+                    );
+                  })}
+                  {canEdit && (
+                    <div
+                      onClick={() => startNewEntry(viewPeriod)}
+                      style={{
+                        cursor: "pointer", padding: "8px 14px", borderRadius: 10,
+                        border: `1.5px dashed ${!selectedEntryId ? "#7c3aed" : "var(--border)"}`,
+                        color: "#7c3aed", background: !selectedEntryId ? "#7c3aed14" : "transparent",
+                        display: "flex", alignItems: "center", gap: 6, fontSize: 12, fontWeight: 700,
+                      }}
+                    >
+                      + Audit Baru
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
             {/* Progress steps */}
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
               <StepPill icon="📋" label="Informasi" done />

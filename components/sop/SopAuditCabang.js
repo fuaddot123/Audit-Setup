@@ -24,14 +24,20 @@ function normalizePhotos(raw) {
   return out;
 }
 
+function shortDate(d) {
+  if (!d) return "\u2014";
+  return new Date(d + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
+}
+
 export default function SopAuditCabang({ profile }) {
   const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
-  const [allRecords, setAllRecords] = useState([]); // semua audit_generic module='sop', buat status kartu
+  const [latestByBranchPeriod, setLatestByBranchPeriod] = useState({}); // buat kartu ringkasan & pilih-cabang
   const [viewPeriod, setViewPeriod] = useState(nowPeriode());
-  const [selectedBranch, setSelectedBranch] = useState(null); // objek branch
-  const [existingRow, setExistingRow] = useState(null); // record audit_generic kalau sudah ada utk periode ini
+  const [selectedBranch, setSelectedBranch] = useState(null);
+  const [entriesThisPeriod, setEntriesThisPeriod] = useState([]);
+  const [selectedEntryId, setSelectedEntryId] = useState(null);
   const [checklist, setChecklist] = useState(emptyChecklist());
   const [tidakVisit, setTidakVisit] = useState(false);
   const [notes, setNotes] = useState({});
@@ -51,8 +57,38 @@ export default function SopAuditCabang({ profile }) {
     const { data, error: err } = await supabase.from("branches").select("*").order("name");
     if (!err) setBranches(data || []);
     const { data: recs, error: recErr } = await supabase.from("audit_generic").select("*").eq("module", "sop");
-    if (!recErr) setAllRecords(recs || []);
+    if (!recErr) {
+      const sorted = [...(recs || [])].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""));
+      const map = {};
+      sorted.forEach((r) => {
+        const key = `${r.branch_id}|${r.period}`;
+        if (!map[key]) map[key] = { entry: r, count: 1 };
+        else map[key].count += 1;
+      });
+      setLatestByBranchPeriod(map);
+    } else {
+      setError("Gagal memuat data: " + recErr.message);
+    }
     setLoadingBranches(false);
+  }
+
+  function applyEntryToForm(entry) {
+    setChecklist({ ...emptyChecklist(), ...(entry.data?.checks || {}) });
+    setNotes(entry.data?.notes || {});
+    setPhotos(normalizePhotos(entry.data?.photos));
+    setTidakVisit(!!entry.data?.tidak_visit);
+    setAuditDate(entry.data?.audit_date || todayInputValue());
+    setSelectedEntryId(entry.id);
+  }
+
+  function startNewEntry(period) {
+    setChecklist(emptyChecklist());
+    setNotes({});
+    setPhotos({});
+    setTidakVisit(false);
+    setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
+    setSelectedEntryId(null);
+    setSaved(false);
   }
 
   async function pickBranch(b) {
@@ -66,29 +102,21 @@ export default function SopAuditCabang({ profile }) {
       .select("*")
       .eq("module", "sop")
       .eq("branch_id", b.id)
-      .eq("period", period)
-      .maybeSingle();
-    if (!err && data) {
-      setExistingRow(data);
-      setChecklist({ ...emptyChecklist(), ...(data.data?.checks || {}) });
-      setNotes(data.data?.notes || {});
-      setPhotos(normalizePhotos(data.data?.photos));
-      setTidakVisit(!!data.data?.tidak_visit);
-      setAuditDate(data.data?.audit_date || (period === nowPeriode() ? todayInputValue() : period + "-01"));
-    } else {
-      setExistingRow(null);
-      setChecklist(emptyChecklist());
-      setNotes({});
-      setPhotos({});
-      setTidakVisit(false);
-      setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
-    }
+      .eq("period", period);
+    const entries = !err
+      ? [...(data || [])].sort((a, b2) => (b2.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))
+      : [];
+    if (err) setError("Gagal memuat riwayat: " + err.message);
+    setEntriesThisPeriod(entries);
+    if (entries.length) applyEntryToForm(entries[0]);
+    else startNewEntry(period);
     setLoadingRecord(false);
   }
 
   function backToList() {
     setSelectedBranch(null);
-    setExistingRow(null);
+    setEntriesThisPeriod([]);
+    setSelectedEntryId(null);
     loadBranches();
   }
 
@@ -160,20 +188,19 @@ export default function SopAuditCabang({ profile }) {
   const period = periodFromDate(auditDate);
 
   async function deleteAudit() {
-    if (!existingRow || profile?.role !== "super_admin") return;
-    if (!window.confirm(`Hapus data audit SOP ${selectedBranch.name} periode ${periodeLabel(period)}? Aksi ini tidak bisa dibatalkan.`)) return;
+    if (!selectedEntryId || profile?.role !== "super_admin") return;
+    const entry = entriesThisPeriod.find((e) => e.id === selectedEntryId);
+    if (!window.confirm(`Hapus audit SOP ${selectedBranch.name} tanggal ${shortDate(entry?.data?.audit_date)}? Aksi ini tidak bisa dibatalkan.`)) return;
     setSaving(true);
     setError(null);
     try {
-      const { error: err } = await supabase.from("audit_generic").delete().eq("id", existingRow.id);
+      const { error: err } = await supabase.from("audit_generic").delete().eq("id", selectedEntryId);
       if (err) throw err;
-      setExistingRow(null);
-      setChecklist(emptyChecklist());
-      setNotes({});
-      setPhotos({});
-      setTidakVisit(false);
+      const remaining = entriesThisPeriod.filter((e) => e.id !== selectedEntryId);
+      setEntriesThisPeriod(remaining);
+      if (remaining.length) applyEntryToForm(remaining[0]);
+      else startNewEntry(viewPeriod);
       setSaved(false);
-      setAllRecords((prev) => prev.filter((r) => r.id !== existingRow.id));
     } catch (err) {
       setError("Gagal menghapus: " + err.message);
     } finally {
@@ -214,13 +241,21 @@ export default function SopAuditCabang({ profile }) {
             },
       };
 
-      const { data, error: err } = await supabase
-        .from("audit_generic")
-        .upsert(payload, { onConflict: "module,branch_id,period" })
-        .select()
-        .single();
-      if (err) throw err;
-      setExistingRow(data);
+      let row;
+      if (selectedEntryId) {
+        const res = await supabase.from("audit_generic").update(payload).eq("id", selectedEntryId).select().single();
+        if (res.error) throw res.error;
+        row = res.data;
+      } else {
+        const res = await supabase.from("audit_generic").insert(payload).select().single();
+        if (res.error) throw res.error;
+        row = res.data;
+      }
+      setSelectedEntryId(row.id);
+      setEntriesThisPeriod((prev) => {
+        const others = prev.filter((e) => e.id !== row.id);
+        return [row, ...others].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""));
+      });
       setSaved(true);
     } catch (err) {
       setError("Gagal menyimpan: " + err.message);
@@ -232,8 +267,9 @@ export default function SopAuditCabang({ profile }) {
   // ── Tampilan: pilih cabang ──
   if (!selectedBranch) {
     const rowsByBranch = {};
-    allRecords.filter((r) => r.period === viewPeriod).forEach((r) => {
-      if (!rowsByBranch[r.branch_id]) rowsByBranch[r.branch_id] = r;
+    Object.keys(latestByBranchPeriod).forEach((key) => {
+      const [branchId, per] = key.split("|");
+      if (per === viewPeriod) rowsByBranch[branchId] = latestByBranchPeriod[key].entry;
     });
 
     return (
@@ -253,8 +289,9 @@ export default function SopAuditCabang({ profile }) {
           {(() => {
             const prevPeriod = addMonthsToPeriod(viewPeriod, -1);
             const prevRowsByBranch = {};
-            allRecords.filter((r) => r.period === prevPeriod).forEach((r) => {
-              if (!prevRowsByBranch[r.branch_id]) prevRowsByBranch[r.branch_id] = r;
+            Object.keys(latestByBranchPeriod).forEach((key) => {
+              const [branchId, per] = key.split("|");
+              if (per === prevPeriod) prevRowsByBranch[branchId] = latestByBranchPeriod[key].entry;
             });
 
             const total = branches.length;
@@ -332,6 +369,7 @@ export default function SopAuditCabang({ profile }) {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 12 }}>
               {branches.map((b) => {
                 const row = rowsByBranch[b.id];
+                const rowMeta = latestByBranchPeriod[`${b.id}|${viewPeriod}`];
                 const isTidakVisit = row?.data?.tidak_visit;
                 const score = row && !isTidakVisit ? calcWeightedFromRecord(row.data) : null;
                 return (
@@ -343,16 +381,21 @@ export default function SopAuditCabang({ profile }) {
                     <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: isTidakVisit ? "#888" : row ? scoreColor(score) : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
                       <div style={{ fontWeight: 600, fontSize: 14.5 }}>{b.name}</div>
-                      {score !== null && score < ALERT_THRESHOLD && (
-                        <span style={{ fontSize: 9.5, fontWeight: 700, color: "var(--danger-text)", background: "var(--danger-bg)", padding: "2px 7px", borderRadius: 20 }}>ALERT</span>
-                      )}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {rowMeta && rowMeta.count > 1 && (
+                          <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7c3aed", background: "#7c3aed18", padding: "2px 7px", borderRadius: 20 }}>{rowMeta.count} audit</span>
+                        )}
+                        {score !== null && score < ALERT_THRESHOLD && (
+                          <span style={{ fontSize: 9.5, fontWeight: 700, color: "var(--danger-text)", background: "var(--danger-bg)", padding: "2px 7px", borderRadius: 20 }}>ALERT</span>
+                        )}
+                      </div>
                     </div>
                     {isTidakVisit ? (
                       <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: "#88888822", color: "#888", fontSize: 11, fontWeight: 600 }}>Tidak Visit</span>
                     ) : row ? (
                       <>
                         <div style={{ fontSize: 24, fontWeight: 800, color: scoreColor(score) }}>{score}%</div>
-                        <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Skor SOP &middot; {periodeLabel(viewPeriod)}</div>
+                        <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Skor SOP &middot; {shortDate(row.data?.audit_date)}</div>
                       </>
                     ) : (
                       <div style={{ fontSize: 11.5, fontWeight: 400, color: "var(--text-faint)", marginTop: 4 }}>Belum ada audit &middot; Mulai &rarr;</div>
@@ -376,7 +419,8 @@ export default function SopAuditCabang({ profile }) {
             <button className="btn-ghost" style={{ marginBottom: 8, fontSize: 12.5 }} onClick={backToList}>&larr; Pilih cabang lain</button>
             <div className="display" style={{ fontSize: 19, fontWeight: 600 }}>Audit &mdash; {selectedBranch.name}</div>
             <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
-              Periode: {periodeLabel(period)} {existingRow && <span style={{ color: "var(--text-faint)" }}>&middot; audit sudah pernah diisi, kamu mengedit data yang ada</span>}
+              Periode: {periodeLabel(period)}
+              {selectedEntryId ? <span> &middot; mengedit audit tanggal {shortDate(auditDate)}</span> : <span> &middot; audit baru</span>}
             </div>
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -387,13 +431,61 @@ export default function SopAuditCabang({ profile }) {
             <button className="btn" disabled={saving || !canEdit} onClick={saveAudit} style={{ alignSelf: "flex-end" }} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
               {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan Hasil Audit" : "Hanya Lihat"}
             </button>
-            {profile?.role === "super_admin" && existingRow && (
+            {profile?.role === "super_admin" && selectedEntryId && (
               <button className="btn-ghost" disabled={saving} onClick={deleteAudit} style={{ alignSelf: "flex-end", color: "var(--danger-text)", borderColor: "var(--danger-border, rgba(239,68,68,0.35))" }}>
                 Hapus Data
               </button>
             )}
           </div>
         </div>
+
+        {entriesThisPeriod.length > 0 && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: "var(--text-secondary)", textTransform: "uppercase", letterSpacing: 0.4, marginBottom: 6 }}>
+              Riwayat audit {periodeLabel(viewPeriod)} ({entriesThisPeriod.length})
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {entriesThisPeriod.map((e, i) => {
+                const isTV = e.data?.tidak_visit;
+                const sc = !isTV ? calcWeightedFromRecord(e.data) : null;
+                const active = e.id === selectedEntryId;
+                return (
+                  <div
+                    key={e.id}
+                    onClick={() => applyEntryToForm(e)}
+                    style={{
+                      cursor: "pointer", padding: "7px 12px", borderRadius: 10,
+                      border: `1.5px solid ${active ? "#7c3aed" : "var(--border)"}`,
+                      background: active ? "#7c3aed14" : "var(--surface)",
+                      display: "flex", alignItems: "center", gap: 7,
+                    }}
+                  >
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-faint)" }}>Audit {entriesThisPeriod.length - i}</span>
+                    <span style={{ fontSize: 11.5, fontWeight: 600 }}>{shortDate(e.data?.audit_date)}</span>
+                    {isTV ? (
+                      <span style={{ fontSize: 11, fontWeight: 700, color: "#888" }}>Tidak Visit</span>
+                    ) : (
+                      <span style={{ fontSize: 11.5, fontWeight: 700, color: scoreColor(sc) }}>{sc}%</span>
+                    )}
+                  </div>
+                );
+              })}
+              {canEdit && (
+                <div
+                  onClick={() => startNewEntry(viewPeriod)}
+                  style={{
+                    cursor: "pointer", padding: "7px 12px", borderRadius: 10,
+                    border: `1.5px dashed ${!selectedEntryId ? "#7c3aed" : "var(--border)"}`,
+                    color: "#7c3aed", background: !selectedEntryId ? "#7c3aed14" : "transparent",
+                    display: "flex", alignItems: "center", gap: 6, fontSize: 11.5, fontWeight: 700,
+                  }}
+                >
+                  + Audit Baru
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Toggle Tidak Visit */}
         <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>

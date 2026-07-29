@@ -78,9 +78,18 @@ export default function SopKepatuhan() {
   function computeForPeriod(p) {
     const rows = branches.map((b) => {
       const sopRec = sopRecords.find((r) => r.branch_id === b.id && r.period === p) || null;
-      const stokRec = stokRecords.find((r) => r.branch_id === b.id && r.period === p) || null;
-      const keuEntry = keuanganEntries.find((r) => r.branch_id === b.id && r.period === p) || null;
-      const invRec = inventarisRecords.find((r) => r.branch_id === b.id && r.period === p) || null;
+      const stokMatches = stokRecords.filter((r) => r.branch_id === b.id && r.period === p);
+      const stokRec = stokMatches.length
+        ? [...stokMatches].sort((a, b2) => (b2.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))[0]
+        : null;
+      const keuMatches = keuanganEntries.filter((r) => r.branch_id === b.id && r.period === p);
+      const keuEntry = keuMatches.length
+        ? [...keuMatches].sort((a, b2) => (b2.audit_date || "").localeCompare(a.audit_date || ""))[0]
+        : null;
+      const invMatches = inventarisRecords.filter((r) => r.branch_id === b.id && r.period === p);
+      const invRec = invMatches.length
+        ? [...invMatches].sort((a, b2) => (b2.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))[0]
+        : null;
 
       if (!sopRec) return { branch: b, status: "belum" };
       if (sopRec.data?.tidak_visit) return { branch: b, status: "tidak_visit" };

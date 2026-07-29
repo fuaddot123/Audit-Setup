@@ -63,16 +63,18 @@ export default function StokServiceRatio({ profile }) {
     const { data: recs, error: recErr } = await supabase
       .from("audit_generic")
       .select("*")
-      .eq("module", "stok_service")
-      .order("audit_date", { ascending: false, nullsFirst: false });
+      .eq("module", "stok_service");
     if (!recErr) {
+      const sorted = [...(recs || [])].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""));
       const map = {};
-      (recs || []).forEach((r) => {
+      sorted.forEach((r) => {
         const key = `${r.branch_id}|${r.period}`;
         if (!map[key]) map[key] = { entry: r, count: 1 };
         else map[key].count += 1;
       });
       setLatestByBranchPeriod(map);
+    } else {
+      setError("Gagal memuat data: " + recErr.message);
     }
     setLoadingBranches(false);
   }
@@ -105,14 +107,21 @@ export default function StokServiceRatio({ profile }) {
     setLoadingRecord(true);
     const period = viewPeriod;
     const [periodRes, histRes] = await Promise.all([
-      supabase.from("audit_generic").select("*").eq("module", "stok_service").eq("branch_id", b.id).eq("period", period).order("audit_date", { ascending: false, nullsFirst: false }),
-      supabase.from("audit_generic").select("*").eq("module", "stok_service").eq("branch_id", b.id).order("audit_date", { ascending: true, nullsFirst: false }),
+      supabase.from("audit_generic").select("*").eq("module", "stok_service").eq("branch_id", b.id).eq("period", period),
+      supabase.from("audit_generic").select("*").eq("module", "stok_service").eq("branch_id", b.id),
     ]);
-    const entries = !periodRes.error ? (periodRes.data || []) : [];
+    if (periodRes.error) setError("Gagal memuat riwayat bulan ini: " + periodRes.error.message);
+    if (histRes.error) setError((prev) => prev || "Gagal memuat riwayat: " + histRes.error.message);
+    const entries = !periodRes.error
+      ? [...(periodRes.data || [])].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))
+      : [];
     setEntriesThisPeriod(entries);
     if (entries.length) applyEntryToForm(entries[0]);
     else startNewEntry(period);
-    setFullHistory(!histRes.error ? (histRes.data || []) : []);
+    const hist = !histRes.error
+      ? [...(histRes.data || [])].sort((a, b) => (a.data?.audit_date || "").localeCompare(b.data?.audit_date || ""))
+      : [];
+    setFullHistory(hist);
     setLoadingRecord(false);
   }
 
