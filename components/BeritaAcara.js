@@ -70,6 +70,11 @@ export default function BeritaAcara({ profile }) {
   const [loadingRecord, setLoadingRecord] = useState(false);
   const [uploadingKey, setUploadingKey] = useState(null);
 
+  const [prevMonthData, setPrevMonthData] = useState(null); // { stockKat1, stockKat2, inventarisCategories, periodLabel } | null
+  const [showCopyBanner, setShowCopyBanner] = useState(false);
+  const [stockFilter, setStockFilter] = useState("all"); // "all" | "selisih"
+  const [invFilter, setInvFilter] = useState("all"); // "all" | "rusak"
+
   useEffect(() => { loadBranches(); }, []);
 
   async function loadBranches() {
@@ -104,6 +109,7 @@ export default function BeritaAcara({ profile }) {
     setSelectedEntryId(entry.id);
     setInventaris(normalizeInventaris(invEntry?.data?.categories));
     setSelectedInventarisEntryId(invEntry?.id || null);
+    setShowCopyBanner(false);
   }
 
   function startNewEntry(period) {
@@ -119,6 +125,7 @@ export default function BeritaAcara({ profile }) {
     setSelectedEntryId(null);
     setSelectedInventarisEntryId(null);
     setSaved(false);
+    setShowCopyBanner(!!prevMonthData);
   }
 
   async function pickBranch(b) {
@@ -127,23 +134,64 @@ export default function BeritaAcara({ profile }) {
     setError(null);
     setLoadingRecord(true);
     const period = viewPeriod;
-    const [beRes, invRes] = await Promise.all([
+    const prevPeriod = addMonthsToPeriod(period, -1);
+    const [beRes, invRes, bePrevRes, invPrevRes] = await Promise.all([
       supabase.from("berita_acara").select("*").eq("branch_id", b.id).eq("period", period),
       supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", period),
+      supabase.from("berita_acara").select("*").eq("branch_id", b.id).eq("period", prevPeriod),
+      supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", prevPeriod),
     ]);
     const entries = !beRes.error
       ? [...(beRes.data || [])].sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""))
       : [];
     const invEntries = !invRes.error ? (invRes.data || []) : [];
     setEntriesThisPeriod(entries);
+
+    // Siapkan data bulan lalu (buat tombol "Salin dari bulan lalu"), pakai audit paling baru kalau ada beberapa.
+    const bePrevEntries = !bePrevRes.error
+      ? [...(bePrevRes.data || [])].sort((a, b2) => (b2.audit_date || "").localeCompare(a.audit_date || ""))
+      : [];
+    const invPrevEntries = !invPrevRes.error ? (invPrevRes.data || []) : [];
+    if (bePrevEntries.length) {
+      const prevLatest = bePrevEntries[0];
+      const pairedInvPrev = invPrevEntries.find((iv) => iv.data?.audit_date === prevLatest.audit_date) || invPrevEntries[0] || null;
+      setPrevMonthData({
+        stockKat1: Array.isArray(prevLatest.stock_opname_kat1) ? prevLatest.stock_opname_kat1 : [],
+        stockKat2: Array.isArray(prevLatest.stock_opname_kat2) ? prevLatest.stock_opname_kat2 : [],
+        inventarisCategories: pairedInvPrev?.data?.categories || null,
+        periodLabel: periodeLabel(prevPeriod),
+      });
+    } else {
+      setPrevMonthData(null);
+    }
+
     if (entries.length) {
       const latest = entries[0];
       const pairedInv = invEntries.find((iv) => iv.data?.audit_date === latest.audit_date) || invEntries[0] || null;
       applyEntryToForm(latest, pairedInv);
+      setShowCopyBanner(false);
     } else {
       startNewEntry(period);
+      setShowCopyBanner(!!bePrevEntries.length);
     }
     setLoadingRecord(false);
+  }
+
+  function copyFromPrevMonth() {
+    if (!prevMonthData) return;
+    setStockKat1(prevMonthData.stockKat1.map((r) => ({ nama: r.nama, status: "Lengkap", keterangan: "" })));
+    setStockKat2(prevMonthData.stockKat2.map((r) => ({ nama: r.nama, status: "Lengkap", keterangan: "" })));
+    if (prevMonthData.inventarisCategories) {
+      setInventaris(normalizeInventaris(prevMonthData.inventarisCategories));
+      // reset status & keterangan & foto — auditor tinggal ubah yang beda aja
+      setInventaris((prev) => {
+        const next = {};
+        Object.keys(prev).forEach((cat) => { next[cat] = { status: "Berfungsi", keterangan: "", photos: [] }; });
+        return next;
+      });
+    }
+    setShowCopyBanner(false);
+    setSaved(false);
   }
 
   function backToList() {
@@ -326,12 +374,16 @@ export default function BeritaAcara({ profile }) {
     }
 
     const invRows = INVENTARIS_CATEGORIES.map((cat) => {
-      const row = inventaris[cat] || { status: "Berfungsi", keterangan: "" };
+      const row = inventaris[cat] || { status: "Berfungsi", keterangan: "", photos: [] };
       const isBad = row.status === "Rusak";
+      const photos = (row.photos || []).filter((p) => p.type !== "video"); // video nggak bisa dicetak, foto aja
+      const photosHtml = photos.length
+        ? `<div class="inv-photos">${photos.map((p) => `<img src="${esc(p.url)}" class="inv-thumb" />`).join("")}</div>`
+        : "";
       return `<tr>
         <td style="font-weight:600;">${esc(cat)}</td>
         <td class="${isBad ? "status-bad" : "status-ok"}">${isBad ? "RUSAK" : "BERFUNGSI"}</td>
-        <td>${esc(row.keterangan) || "-"}</td>
+        <td>${esc(row.keterangan) || "-"}${photosHtml}</td>
       </tr>`;
     }).join("");
 
@@ -394,6 +446,8 @@ export default function BeritaAcara({ profile }) {
       table.data { width: 100%; border-collapse: collapse; font-size: 8px; border: 1px solid #e4dff2; }
       table.data th { background: #2A1F52; color: #fff; text-align: left; padding: 3.2px 6px; font-size: 7px; text-transform: uppercase; letter-spacing: 0.02em; }
       table.data td { padding: 2.4px 6px; border-bottom: 1px solid #efecf7; vertical-align: middle; }
+      .inv-photos { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
+      .inv-thumb { width: 30px; height: 30px; object-fit: cover; border-radius: 3px; border: 1px solid #ddd; }
       table.data tr.kat-row td { background: #ece8f7; color: #2A1F52; font-weight: 800; font-size: 7.4px; padding: 2.2px 6px; }
       .status-ok { color: #1a9e6e; font-weight: 800; }
       .status-bad { color: #c0392b; font-weight: 800; }
@@ -550,12 +604,17 @@ export default function BeritaAcara({ profile }) {
             setTimeout(() => window.print(), 250);
           }, 100);
         }
+        function waitForImages() {
+          const imgs = Array.from(document.querySelectorAll("img"));
+          if (!imgs.length) return Promise.resolve();
+          return Promise.all(imgs.map((img) => img.complete ? Promise.resolve() : new Promise((res) => {
+            img.addEventListener("load", res);
+            img.addEventListener("error", res); // foto gagal load tetap lanjut, jangan sampai macet
+          })));
+        }
         window.onload = () => {
-          if (document.fonts && document.fonts.ready) {
-            document.fonts.ready.then(fitToPage);
-          } else {
-            fitToPage();
-          }
+          const fontsReady = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
+          Promise.all([fontsReady, waitForImages()]).then(fitToPage);
         };
       <\/script>
     </body></html>`;
@@ -714,6 +773,21 @@ export default function BeritaAcara({ profile }) {
               </div>
             )}
 
+            {showCopyBanner && prevMonthData && (
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, background: "#7c3aed14", border: "1px solid rgba(124,58,237,0.35)", borderRadius: 10, padding: "12px 16px", marginBottom: 16 }}>
+                <div style={{ fontSize: 13, color: "#7c3aed" }}>
+                  <b>Salin struktur dari {prevMonthData.periodLabel}?</b>
+                  <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
+                    {prevMonthData.stockKat1.length + prevMonthData.stockKat2.length} item Stock Opname akan disalin, semua status di-reset ke "Lengkap" & "Berfungsi" — tinggal ubah yang beda aja.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
+                  <button className="btn-ghost" onClick={() => setShowCopyBanner(false)}>Nggak usah</button>
+                  <button className="btn" onClick={copyFromPrevMonth}>Ya, Salin</button>
+                </div>
+              </div>
+            )}
+
             {/* Progress steps */}
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
               <StepPill icon="📋" label="Informasi" done />
@@ -754,11 +828,19 @@ export default function BeritaAcara({ profile }) {
               const allRows = [...stockKat1, ...stockKat2];
               const selisihCount = allRows.filter((r) => r.status === "Selisih").length;
               return (
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: selisihCount > 0 ? "var(--danger-bg)" : "var(--success-bg)", border: `1px solid ${selisihCount > 0 ? "rgba(239,68,68,0.35)" : "rgba(26,158,110,0.35)"}`, borderRadius: 10, padding: "10px 16px", marginBottom: 16 }}>
-                  <span style={{ fontSize: 13, fontWeight: 600, color: selisihCount > 0 ? "var(--danger-text)" : "var(--success-text)" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 16px", marginBottom: 16 }}>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)" }}>
                     {allRows.length} item dicek &middot; {selisihCount === 0 ? "semua lengkap" : `${selisihCount} selisih ditemukan`}
                   </span>
-                  <span style={{ fontSize: 20, fontWeight: 800, color: selisihCount > 0 ? "var(--danger-text)" : "var(--success-text)" }}>{selisihCount}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                    <span style={{ fontSize: 20, fontWeight: 800, color: selisihCount > 0 ? "#a32020" : "#1a9e6e" }}>{selisihCount}</span>
+                    {selisihCount > 0 && (
+                      <div style={{ display: "flex", gap: 4, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 3 }}>
+                        <button onClick={() => setStockFilter("all")} style={{ border: "none", background: stockFilter === "all" ? "#7c3aed" : "transparent", color: stockFilter === "all" ? "#fff" : "var(--text-secondary)", fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}>Semua ({allRows.length})</button>
+                        <button onClick={() => setStockFilter("selisih")} style={{ border: "none", background: stockFilter === "selisih" ? "#a32020" : "transparent", color: stockFilter === "selisih" ? "#fff" : "var(--text-secondary)", fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}>Selisih ({selisihCount})</button>
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })()}
@@ -767,13 +849,13 @@ export default function BeritaAcara({ profile }) {
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>📦 Audit Stock Opname</div>
 
-              <StockSubSection title="Kategori 1" rows={stockKat1} canEdit={canEdit}
+              <StockSubSection title="Kategori 1" rows={stockKat1} canEdit={canEdit} filter={stockFilter}
                 onAdd={() => addRow(setStockKat1)}
                 onUpdate={(i, f, v) => updateRow(setStockKat1, i, f, v)}
                 onRemove={(i) => removeRow(setStockKat1, i)} />
 
               <div style={{ marginTop: 18 }}>
-                <StockSubSection title="Kategori 2" rows={stockKat2} canEdit={canEdit}
+                <StockSubSection title="Kategori 2" rows={stockKat2} canEdit={canEdit} filter={stockFilter}
                   onAdd={() => addRow(setStockKat2)}
                   onUpdate={(i, f, v) => updateRow(setStockKat2, i, f, v)}
                   onRemove={(i) => removeRow(setStockKat2, i)} />
@@ -782,11 +864,20 @@ export default function BeritaAcara({ profile }) {
 
             {/* Section: Inventaris */}
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>🗂️ Audit Inventaris</div>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+                <div style={{ fontWeight: 700, fontSize: 14 }}>🗂️ Audit Inventaris</div>
+                {countRusak(inventaris) > 0 && (
+                  <div style={{ display: "flex", gap: 4, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: 3 }}>
+                    <button onClick={() => setInvFilter("all")} style={{ border: "none", background: invFilter === "all" ? "#7c3aed" : "transparent", color: invFilter === "all" ? "#fff" : "var(--text-secondary)", fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}>Semua ({INVENTARIS_CATEGORIES.length})</button>
+                    <button onClick={() => setInvFilter("rusak")} style={{ border: "none", background: invFilter === "rusak" ? "#a32020" : "transparent", color: invFilter === "rusak" ? "#fff" : "var(--text-secondary)", fontSize: 11, fontWeight: 600, padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}>Rusak ({countRusak(inventaris)})</button>
+                  </div>
+                )}
+              </div>
               <InventarisChecklist
                 inventaris={inventaris}
                 canEdit={canEdit}
                 uploadingKey={uploadingKey}
+                filter={invFilter}
                 onUpdate={updateInventaris}
                 onUploadMedia={handleUploadInventarisMedia}
                 onRemoveMedia={removeInventarisMedia}
@@ -810,7 +901,9 @@ export default function BeritaAcara({ profile }) {
   );
 }
 
-function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove }) {
+function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove, filter }) {
+  const indexed = rows.map((row, i) => ({ row, i }));
+  const shown = filter === "selisih" ? indexed.filter(({ row }) => row.status === "Selisih") : indexed;
   return (
     <div>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -819,17 +912,22 @@ function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove }) {
       </div>
       {rows.length === 0 ? (
         <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Belum ada baris.</div>
+      ) : shown.length === 0 ? (
+        <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Semua item di kategori ini "Lengkap" &mdash; nggak ada yang selisih.</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {rows.map((row, i) => {
+          {shown.map(({ row, i }) => {
             const isSelisih = row.status === "Selisih";
             return (
-              <div key={i} style={{ display: "grid", gridTemplateColumns: "1.8fr 120px 1.8fr auto", gap: 8, alignItems: "center", background: "var(--surface-alt)", padding: "10px 10px 10px 12px", borderRadius: 8, borderLeft: `3px solid ${isSelisih ? "#a32020" : "#1a9e6e55"}` }}>
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "1.6fr auto 1.8fr auto", gap: 8, alignItems: "center", background: "var(--surface-alt)", padding: "10px 10px 10px 12px", borderRadius: 8, borderLeft: `3px solid ${isSelisih ? "#a32020" : "#1a9e6e55"}` }}>
                 <input className="input" placeholder="Nama Barang/Brand" value={row.nama} disabled={!canEdit} onChange={(e) => onUpdate(i, "nama", e.target.value)} style={{ fontSize: 12.5 }} />
-                <select className="input" value={row.status} disabled={!canEdit} onChange={(e) => onUpdate(i, "status", e.target.value)} style={{ fontSize: 12.5, fontWeight: isSelisih ? 700 : 400, color: isSelisih ? "var(--danger-text)" : undefined }}>
-                  <option>Lengkap</option>
-                  <option>Selisih</option>
-                </select>
+                <StatusToggle
+                  value={row.status}
+                  onChange={(v) => onUpdate(i, "status", v)}
+                  disabled={!canEdit}
+                  okLabel="Lengkap"
+                  badLabel="Selisih"
+                />
                 <input className="input" placeholder="Keterangan" value={row.keterangan} disabled={!canEdit} onChange={(e) => onUpdate(i, "keterangan", e.target.value)} style={{ fontSize: 12.5 }} />
                 {canEdit && <span onClick={() => onRemove(i)} style={{ cursor: "pointer", color: "var(--danger-text)", fontSize: 18, textAlign: "center" }}>&times;</span>}
               </div>
@@ -837,6 +935,22 @@ function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove }) {
           })}
         </div>
       )}
+    </div>
+  );
+}
+
+// Tombol besar tap-to-toggle, gantiin dropdown — lebih cepat dipakai, terutama di HP/tablet.
+function StatusToggle({ value, onChange, disabled, okLabel, badLabel }) {
+  const isBad = value === badLabel;
+  const btnBase = { border: "none", cursor: disabled ? "default" : "pointer", fontSize: 11.5, fontWeight: 700, padding: "9px 12px", borderRadius: 7, whiteSpace: "nowrap", opacity: disabled ? 0.7 : 1 };
+  return (
+    <div style={{ display: "flex", gap: 4, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 9, padding: 3 }}>
+      <button type="button" disabled={disabled} onClick={() => onChange(okLabel)} style={{ ...btnBase, background: !isBad ? "#1a9e6e" : "transparent", color: !isBad ? "#fff" : "var(--text-faint)" }}>
+        &#10003; {okLabel}
+      </button>
+      <button type="button" disabled={disabled} onClick={() => onChange(badLabel)} style={{ ...btnBase, background: isBad ? "#a32020" : "transparent", color: isBad ? "#fff" : "var(--text-faint)" }}>
+        &#10005; {badLabel}
+      </button>
     </div>
   );
 }

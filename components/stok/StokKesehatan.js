@@ -5,7 +5,7 @@ import {
   periodFromDate, todayInputValue, periodeLabel, nowPeriode, addMonthsToPeriod,
 } from "../../lib/stokConfig";
 
-const EMPTY_FORM = { temuan_count: "", bonus_count: "", untung_rugi: "", tidak_visit: false };
+const EMPTY_FORM = { temuan_count: "", bonus_count: "", untung_rugi: "", tidak_visit: false, cabang_baru: false };
 
 function shortDate(d) {
   if (!d) return "\u2014";
@@ -84,6 +84,7 @@ export default function StokKesehatan({ profile }) {
       bonus_count: entry.data?.bonus_count ?? "",
       untung_rugi: entry.data?.untung_rugi ?? "",
       tidak_visit: !!entry.data?.tidak_visit,
+      cabang_baru: !!entry.data?.cabang_baru,
     });
     setAuditDate(entry.data?.audit_date || todayInputValue());
     setSelectedEntryId(entry.id);
@@ -184,10 +185,11 @@ export default function StokKesehatan({ profile }) {
         status: "submitted",
         submitted_by: user.id,
         data: form.tidak_visit
-          ? { audit_date: auditDate, tidak_visit: true, auditor_name: profile?.full_name || null }
+          ? { audit_date: auditDate, tidak_visit: true, cabang_baru: form.cabang_baru, auditor_name: profile?.full_name || null }
           : {
               audit_date: auditDate,
               tidak_visit: false,
+              cabang_baru: form.cabang_baru,
               temuan_count: parseInt(form.temuan_count, 10) || 0,
               bonus_count: parseInt(form.bonus_count, 10) || 0,
               untung_rugi: parseInt(form.untung_rugi, 10) || 0,
@@ -280,6 +282,7 @@ export default function StokKesehatan({ profile }) {
               {branches.map((b) => {
                 const row = latestByBranchPeriod[`${b.id}|${viewPeriod}`];
                 const tidakVisit = row?.entry.data?.tidak_visit;
+                const cabangBaru = row?.entry.data?.cabang_baru;
                 const pct = row && !tidakVisit ? row.entry.data.kesehatan_pct || 0 : null;
                 const rStatus = pct !== null ? kesehatanStatusInfo(pct) : null;
                 return (
@@ -291,9 +294,14 @@ export default function StokKesehatan({ profile }) {
                     <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: row ? (tidakVisit ? "#888" : rStatus.color) : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: row ? 8 : 4 }}>
                       <div style={{ fontWeight: 600, fontSize: 14.5 }}>{b.name}</div>
-                      {row && row.count > 1 && (
-                        <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7c3aed", background: "#7c3aed18", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>{row.count} audit</span>
-                      )}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {cabangBaru && (
+                          <span style={{ fontSize: 9.5, fontWeight: 700, color: "#F4B740", background: "#F4B74022", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>Cabang Baru</span>
+                        )}
+                        {row && row.count > 1 && (
+                          <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7c3aed", background: "#7c3aed18", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>{row.count} audit</span>
+                        )}
+                      </div>
                     </div>
                     {row ? (
                       tidakVisit ? (
@@ -378,6 +386,9 @@ export default function StokKesehatan({ profile }) {
                       >
                         <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {entriesThisPeriod.length - i}</span>
                         <span style={{ fontSize: 12, fontWeight: 600 }}>{shortDate(e.data?.audit_date)}</span>
+                        {e.data?.cabang_baru && (
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>\u2b50 Baru</span>
+                        )}
                         {tidakVisit ? (
                           <span style={{ fontSize: 11, fontWeight: 700, color: "#888" }}>Tidak Visit</span>
                         ) : (
@@ -409,6 +420,11 @@ export default function StokKesehatan({ profile }) {
             <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, cursor: "pointer", fontSize: 13, color: "var(--text-secondary)" }}>
               <input type="checkbox" checked={form.tidak_visit} onChange={(e) => { setForm((f) => ({ ...f, tidak_visit: e.target.checked })); setSaved(false); }} disabled={!canEdit} />
               Cabang ini tidak dikunjungi bulan ini (Tidak Visit)
+            </label>
+
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, cursor: "pointer", fontSize: 13, color: "var(--text-secondary)" }}>
+              <input type="checkbox" checked={form.cabang_baru} onChange={(e) => { setForm((f) => ({ ...f, cabang_baru: e.target.checked })); setSaved(false); }} disabled={!canEdit} />
+              Cabang Baru <span style={{ color: "var(--text-faint)" }}>(tetap dihitung normal, cuma ditandai di laporan)</span>
             </label>
 
             {!form.tidak_visit && (

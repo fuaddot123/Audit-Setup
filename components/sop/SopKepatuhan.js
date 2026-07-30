@@ -77,7 +77,10 @@ export default function SopKepatuhan() {
 
   function computeForPeriod(p) {
     const rows = branches.map((b) => {
-      const sopRec = sopRecords.find((r) => r.branch_id === b.id && r.period === p) || null;
+      const sopMatches = sopRecords.filter((r) => r.branch_id === b.id && r.period === p);
+      const sopRec = sopMatches.length
+        ? [...sopMatches].sort((a, b2) => (b2.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))[0]
+        : null;
       const stokMatches = stokRecords.filter((r) => r.branch_id === b.id && r.period === p);
       const stokRec = stokMatches.length
         ? [...stokMatches].sort((a, b2) => (b2.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))[0]
@@ -102,16 +105,21 @@ export default function SopKepatuhan() {
 
       const totalTemuan = sopTemuan + stokTemuan + keuanganTemuan + asetTemuan;
       const pct = Math.max(0, 1 - totalTemuan / BASELINE);
+      // Cabang Baru: tetap diaudit & dihitung total temuannya, tapi dikecualikan dari rata-rata/skor company-wide
+      // (dianggap belum apple-to-apple sama cabang lama). Sumber flag-nya dari record SOP.
+      const isCabangBaru = !!sopRec.data?.cabang_baru;
 
-      return { branch: b, status: "audited", sopTemuan, stokTemuan, keuanganTemuan, asetTemuan, totalTemuan, pct };
+      return { branch: b, status: "audited", sopTemuan, stokTemuan, keuanganTemuan, asetTemuan, totalTemuan, pct, isCabangBaru };
     });
 
     const visitedRows = rows.filter((r) => r.status === "audited");
     const tidakVisitRows = rows.filter((r) => r.status === "tidak_visit");
     const belumRows = rows.filter((r) => r.status === "belum");
-    const avgPct = visitedRows.length ? visitedRows.reduce((s, r) => s + r.pct, 0) / visitedRows.length : null;
+    const cabangBaruRows = visitedRows.filter((r) => r.isCabangBaru);
+    const scorableRows = visitedRows.filter((r) => !r.isCabangBaru);
+    const avgPct = scorableRows.length ? scorableRows.reduce((s, r) => s + r.pct, 0) / scorableRows.length : null;
 
-    return { rows, visitedRows, tidakVisitRows, belumRows, avgPct };
+    return { rows, visitedRows, tidakVisitRows, belumRows, cabangBaruRows, avgPct };
   }
 
   const current = useMemo(() => computeForPeriod(period), [branches, sopRecords, stokRecords, keuanganEntries, inventarisRecords, period]);
@@ -166,7 +174,7 @@ export default function SopKepatuhan() {
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px" }}>
             <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", marginBottom: 8 }}>Cabang Diaudit</div>
             <div style={{ fontSize: 30, fontWeight: 800 }}>{current.visitedRows.length} / {branches.length}</div>
-            <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>Tidak Visit: {current.tidakVisitRows.length} &middot; Belum Diaudit: {current.belumRows.length}</div>
+            <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>Tidak Visit: {current.tidakVisitRows.length} &middot; Belum Diaudit: {current.belumRows.length}{current.cabangBaruRows.length > 0 && <> &middot; Cabang Baru: {current.cabangBaruRows.length}</>}</div>
           </div>
         </div>
 
@@ -190,7 +198,12 @@ export default function SopKepatuhan() {
                 const info = r.status === "audited" ? kategoriInfo(r.pct) : null;
                 return (
                   <tr key={r.branch.id} style={{ borderTop: "1px solid var(--border)" }}>
-                    <td style={td}><b>{r.branch.name}</b></td>
+                    <td style={td}>
+                      <b>{r.branch.name}</b>
+                      {r.isCabangBaru && (
+                        <span style={{ marginLeft: 6, fontSize: 9.5, fontWeight: 700, color: "#F4B740", background: "#F4B74022", padding: "2px 7px", borderRadius: 20 }}>Cabang Baru</span>
+                      )}
+                    </td>
                     {r.status === "audited" ? (
                       <>
                         <td style={{ ...td, textAlign: "center" }} className="mono">{r.sopTemuan}</td>
@@ -217,7 +230,7 @@ export default function SopKepatuhan() {
 
         <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 12 }}>
           Formula: % Skor = 1 &minus; (Total Temuan &divide; {BASELINE}). Kategori: &ge;90% Sangat Baik &middot; 80-89% Baik &middot; 70-79% Cukup &middot; &lt;70% Perlu Perbaikan.
-          Cabang tanpa data Audit SOP bulan ini dianggap Tidak Visit dan dikecualikan dari rata-rata.
+          Cabang tanpa data Audit SOP bulan ini dianggap Tidak Visit dan dikecualikan dari rata-rata. Cabang bertanda "Cabang Baru" tetap dihitung & ditampilkan skornya di tabel, tapi ikut dikecualikan dari rata-rata company-wide di atas.
         </div>
       </div>
     </div>

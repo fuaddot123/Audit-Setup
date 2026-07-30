@@ -40,6 +40,7 @@ export default function SopAuditCabang({ profile }) {
   const [selectedEntryId, setSelectedEntryId] = useState(null);
   const [checklist, setChecklist] = useState(emptyChecklist());
   const [tidakVisit, setTidakVisit] = useState(false);
+  const [cabangBaru, setCabangBaru] = useState(false);
   const [notes, setNotes] = useState({});
   const [photos, setPhotos] = useState({}); // { catId_idx: url }
   const [uploadingKey, setUploadingKey] = useState(null);
@@ -77,6 +78,7 @@ export default function SopAuditCabang({ profile }) {
     setNotes(entry.data?.notes || {});
     setPhotos(normalizePhotos(entry.data?.photos));
     setTidakVisit(!!entry.data?.tidak_visit);
+    setCabangBaru(!!entry.data?.cabang_baru);
     setAuditDate(entry.data?.audit_date || todayInputValue());
     setSelectedEntryId(entry.id);
   }
@@ -86,6 +88,7 @@ export default function SopAuditCabang({ profile }) {
     setNotes({});
     setPhotos({});
     setTidakVisit(false);
+    setCabangBaru(false);
     setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
     setSelectedEntryId(null);
     setSaved(false);
@@ -227,10 +230,11 @@ export default function SopAuditCabang({ profile }) {
         status: "submitted",
         submitted_by: user.id,
         data: tidakVisit
-          ? { audit_date: auditDate, tidak_visit: true, auditor_name: profile?.full_name || null }
+          ? { audit_date: auditDate, tidak_visit: true, cabang_baru: cabangBaru, auditor_name: profile?.full_name || null }
           : {
               audit_date: auditDate,
               tidak_visit: false,
+              cabang_baru: cabangBaru,
               cats,
               checks: checklist,
               notes: cleanNotes,
@@ -382,6 +386,9 @@ export default function SopAuditCabang({ profile }) {
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
                       <div style={{ fontWeight: 600, fontSize: 14.5 }}>{b.name}</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {row?.data?.cabang_baru && (
+                          <span style={{ fontSize: 9.5, fontWeight: 700, color: "#F4B740", background: "#F4B74022", padding: "2px 7px", borderRadius: 20 }}>Cabang Baru</span>
+                        )}
                         {rowMeta && rowMeta.count > 1 && (
                           <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7c3aed", background: "#7c3aed18", padding: "2px 7px", borderRadius: 20 }}>{rowMeta.count} audit</span>
                         )}
@@ -462,6 +469,7 @@ export default function SopAuditCabang({ profile }) {
                   >
                     <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-faint)" }}>Audit {entriesThisPeriod.length - i}</span>
                     <span style={{ fontSize: 11.5, fontWeight: 600 }}>{shortDate(e.data?.audit_date)}</span>
+                    {e.data?.cabang_baru && <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>\u2b50 Baru</span>}
                     {isTV ? (
                       <span style={{ fontSize: 11, fontWeight: 700, color: "#888" }}>Tidak Visit</span>
                     ) : (
@@ -491,6 +499,11 @@ export default function SopAuditCabang({ profile }) {
         <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>
           <input type="checkbox" checked={tidakVisit} disabled={!canEdit} onChange={(e) => { setTidakVisit(e.target.checked); setSaved(false); }} />
           Cabang ini tidak dikunjungi bulan ini (Tidak Visit)
+        </label>
+
+        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>
+          <input type="checkbox" checked={cabangBaru} disabled={!canEdit} onChange={(e) => { setCabangBaru(e.target.checked); setSaved(false); }} />
+          Cabang Baru <span style={{ color: "var(--text-faint)" }}>(tetap dihitung normal, cuma ditandai di laporan)</span>
         </label>
 
         {/* Skor live */}

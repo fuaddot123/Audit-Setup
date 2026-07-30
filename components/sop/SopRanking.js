@@ -36,7 +36,7 @@ export default function SopRanking() {
       const rec = matches.length
         ? [...matches].sort((a, b2) => (b2.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))[0]
         : null;
-      if (!rec || rec.data?.tidak_visit) return null;
+      if (!rec || rec.data?.tidak_visit || rec.data?.cabang_baru) return null;
       const score = calcWeightedFromRecord(rec.data);
       return { branch: b, rec, score };
     }).filter(Boolean);
@@ -90,7 +90,7 @@ export default function SopRanking() {
 
             {notAudited > 0 && (
               <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 14 }}>
-                {notAudited} cabang belum diaudit / Tidak Visit periode ini, tidak masuk ranking.
+                {notAudited} cabang belum diaudit / Tidak Visit / Cabang Baru periode ini, tidak masuk ranking.
               </div>
             )}
           </>
