@@ -369,7 +369,7 @@ export default function StokKesehatan({ profile }) {
                   Riwayat audit {periodeLabel(viewPeriod)} ({entriesThisPeriod.length})
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {entriesThisPeriod.map((e, i) => {
+                  {[...entriesThisPeriod].sort((a, b) => (a.data?.audit_date || "").localeCompare(b.data?.audit_date || "")).map((e, i) => {
                     const tidakVisit = e.data?.tidak_visit;
                     const st = tidakVisit ? null : kesehatanStatusInfo(e.data.kesehatan_pct || 0);
                     const active = e.id === selectedEntryId;
@@ -384,7 +384,7 @@ export default function StokKesehatan({ profile }) {
                           display: "flex", alignItems: "center", gap: 8,
                         }}
                       >
-                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {entriesThisPeriod.length - i}</span>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {i + 1}</span>
                         <span style={{ fontSize: 12, fontWeight: 600 }}>{shortDate(e.data?.audit_date)}</span>
                         {e.data?.cabang_baru && (
                           <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>\u2b50 Baru</span>

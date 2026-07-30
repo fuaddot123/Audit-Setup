@@ -486,8 +486,8 @@ export default function AuditKeuangan({ profile }) {
               </div>
               <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                 {[...((entriesByBranch[selectedBranch.id] || {})[selectedPeriod] || [])]
-                  .sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""))
-                  .map((e, i, arr) => {
+                  .sort((a, b) => (a.audit_date || "").localeCompare(b.audit_date || ""))
+                  .map((e, i) => {
                     const st = computeStatus(e, settings);
                     const active = e.id === selectedEntryId;
                     return (
@@ -501,7 +501,7 @@ export default function AuditKeuangan({ profile }) {
                           display: "flex", alignItems: "center", gap: 8,
                         }}
                       >
-                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {arr.length - i}</span>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {i + 1}</span>
                         <span style={{ fontSize: 12, fontWeight: 600 }}>{shortDate(e.audit_date)}</span>
                         <span style={{ width: 6, height: 6, borderRadius: "50%", background: TONE[st.tone].dot }} />
                         <span style={{ fontSize: 12, fontWeight: 700, color: TONE[st.tone].dot }}>{pct(st.posisi)}</span>

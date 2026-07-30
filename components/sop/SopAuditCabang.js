@@ -452,7 +452,7 @@ export default function SopAuditCabang({ profile }) {
               Riwayat audit {periodeLabel(viewPeriod)} ({entriesThisPeriod.length})
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-              {entriesThisPeriod.map((e, i) => {
+              {[...entriesThisPeriod].sort((a, b) => (a.data?.audit_date || "").localeCompare(b.data?.audit_date || "")).map((e, i) => {
                 const isTV = e.data?.tidak_visit;
                 const sc = !isTV ? calcWeightedFromRecord(e.data) : null;
                 const active = e.id === selectedEntryId;
@@ -467,7 +467,7 @@ export default function SopAuditCabang({ profile }) {
                       display: "flex", alignItems: "center", gap: 7,
                     }}
                   >
-                    <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-faint)" }}>Audit {entriesThisPeriod.length - i}</span>
+                    <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-faint)" }}>Audit {i + 1}</span>
                     <span style={{ fontSize: 11.5, fontWeight: 600 }}>{shortDate(e.data?.audit_date)}</span>
                     {e.data?.cabang_baru && <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>\u2b50 Baru</span>}
                     {isTV ? (

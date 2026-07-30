@@ -729,7 +729,7 @@ export default function BeritaAcara({ profile }) {
                   Riwayat audit {periodeLabel(viewPeriod)} ({entriesThisPeriod.length})
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                  {entriesThisPeriod.map((e, i) => {
+                  {[...entriesThisPeriod].sort((a, b) => (a.audit_date || "").localeCompare(b.audit_date || "")).map((e, i) => {
                     const kat1 = e.stock_opname_kat1 || [];
                     const kat2 = e.stock_opname_kat2 || [];
                     const selisih = [...kat1, ...kat2].filter((r) => r.status === "Selisih").length;
@@ -749,7 +749,7 @@ export default function BeritaAcara({ profile }) {
                           display: "flex", alignItems: "center", gap: 8,
                         }}
                       >
-                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {entriesThisPeriod.length - i}</span>
+                        <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {i + 1}</span>
                         <span style={{ fontSize: 12, fontWeight: 600 }}>{shortDate(e.audit_date)}</span>
                         <span style={{ width: 6, height: 6, borderRadius: "50%", background: selisih > 0 ? "#a32020" : "#1a9e6e" }} />
                         <span style={{ fontSize: 12, fontWeight: 700, color: selisih > 0 ? "#a32020" : "#1a9e6e" }}>{selisih} selisih</span>
