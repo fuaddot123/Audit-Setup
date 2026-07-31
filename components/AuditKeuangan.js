@@ -56,12 +56,19 @@ function computeStatus(entry, settings) {
 }
 
 function formatThousands(v) {
-  const n = v === "" || v === null || v === undefined ? "" : String(v).replace(/[^\d]/g, "");
-  if (!n) return "";
-  return n.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  if (v === "" || v === null || v === undefined) return "";
+  const str = String(v);
+  const neg = str.trim().startsWith("-");
+  const digits = str.replace(/[^\d]/g, "");
+  if (!digits) return neg ? "-" : "";
+  const formatted = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ".");
+  return neg ? "-" + formatted : formatted;
 }
 function parseThousands(v) {
-  return String(v || "").replace(/[^\d]/g, "");
+  const str = String(v || "");
+  const neg = str.trim().startsWith("-");
+  const digits = str.replace(/[^\d]/g, "");
+  return (neg ? "-" : "") + digits;
 }
 function shortDate(d) {
   if (!d) return "\u2014";
@@ -107,7 +114,7 @@ export default function AuditKeuangan({ profile }) {
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [selectedEntryId, setSelectedEntryId] = useState(null);
-  const [form, setForm] = useState({ saldo_sebelumnya: "", saldo_masuk: "", limit_kas: "", pengeluaran: "", sisa_saldo: "" });
+  const [form, setForm] = useState({ saldo_sebelumnya: "", saldo_masuk: "", limit_kas: "", pengeluaran: "", sisa_saldo: "", cabang_baru: false });
   const [editingLimit, setEditingLimit] = useState(false);
   const [limitDraft, setLimitDraft] = useState("");
   const [savingLimit, setSavingLimit] = useState(false);
@@ -171,7 +178,7 @@ export default function AuditKeuangan({ profile }) {
   }
 
   function applyEntryToFormK(e) {
-    setForm({ saldo_sebelumnya: e.saldo_sebelumnya, saldo_masuk: e.saldo_masuk, limit_kas: e.limit_kas, pengeluaran: e.pengeluaran, sisa_saldo: e.sisa_saldo ?? "" });
+    setForm({ saldo_sebelumnya: e.saldo_sebelumnya, saldo_masuk: e.saldo_masuk, limit_kas: e.limit_kas, pengeluaran: e.pengeluaran, sisa_saldo: e.sisa_saldo ?? "", cabang_baru: !!e.cabang_baru });
     setSelectedEntryId(e.id);
   }
 
@@ -190,7 +197,7 @@ export default function AuditKeuangan({ profile }) {
           ? parseFloat(prevEntry.sisa_saldo) || 0
           : (parseFloat(prevEntry.saldo_sebelumnya) || 0) + (parseFloat(prevEntry.saldo_masuk) || 0) - (parseFloat(prevEntry.pengeluaran) || 0))
       : "";
-    setForm({ saldo_sebelumnya: carryForward, saldo_masuk: "", limit_kas: branch?.limit_kas || "", pengeluaran: "", sisa_saldo: "" });
+    setForm({ saldo_sebelumnya: carryForward, saldo_masuk: "", limit_kas: branch?.limit_kas || "", pengeluaran: "", sisa_saldo: "", cabang_baru: false });
     setSelectedEntryId(null);
   }
 
@@ -202,7 +209,7 @@ export default function AuditKeuangan({ profile }) {
           ? parseFloat(prevEntry.sisa_saldo) || 0
           : (parseFloat(prevEntry.saldo_sebelumnya) || 0) + (parseFloat(prevEntry.saldo_masuk) || 0) - (parseFloat(prevEntry.pengeluaran) || 0))
       : "";
-    setForm({ saldo_sebelumnya: carryForward, saldo_masuk: "", limit_kas: selectedBranch?.limit_kas || "", pengeluaran: "", sisa_saldo: "" });
+    setForm({ saldo_sebelumnya: carryForward, saldo_masuk: "", limit_kas: selectedBranch?.limit_kas || "", pengeluaran: "", sisa_saldo: "", cabang_baru: false });
     setSelectedEntryId(null);
     setSavedFlash(false);
   }
@@ -273,6 +280,7 @@ export default function AuditKeuangan({ profile }) {
         limit_kas: parseFloat(form.limit_kas) || 0,
         pengeluaran: parseFloat(form.pengeluaran) || 0,
         sisa_saldo: parseFloat(form.sisa_saldo) || 0,
+        cabang_baru: form.cabang_baru,
         status: "draft",
         submitted_by: (await supabase.auth.getUser()).data.user.id,
       };
@@ -503,6 +511,7 @@ export default function AuditKeuangan({ profile }) {
                       >
                         <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {i + 1}</span>
                         <span style={{ fontSize: 12, fontWeight: 600 }}>{shortDate(e.audit_date)}</span>
+                        {e.cabang_baru && <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>\u2b50 Baru</span>}
                         <span style={{ width: 6, height: 6, borderRadius: "50%", background: TONE[st.tone].dot }} />
                         <span style={{ fontSize: 12, fontWeight: 700, color: TONE[st.tone].dot }}>{pct(st.posisi)}</span>
                       </div>
@@ -624,6 +633,11 @@ export default function AuditKeuangan({ profile }) {
                   </div>
                 )}
               </div>
+
+              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>
+                <input type="checkbox" checked={form.cabang_baru} disabled={!canEdit} onChange={(e) => setForm((f) => ({ ...f, cabang_baru: e.target.checked }))} />
+                Cabang Baru <span style={{ color: "var(--text-faint)" }}>(tetap dihitung normal, cuma ditandai di laporan)</span>
+              </label>
             </div>
 
             {/* Card 2: Hasil perhitungan */}
@@ -737,6 +751,9 @@ export default function AuditKeuangan({ profile }) {
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
                   <div className="display" style={{ fontSize: 15.5, fontWeight: 600 }}>{b.name}</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    {e && e.cabang_baru && (
+                      <span style={{ fontSize: 9.5, fontWeight: 700, color: "#F4B740", background: "#F4B74022", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>Cabang Baru</span>
+                    )}
                     {entriesHere.length > 1 && (
                       <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7c3aed", background: "#7c3aed18", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>{entriesHere.length} audit</span>
                     )}
