@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { sortBranches } from "../lib/branchOrder";
 import { buildSummaryReportHtml, openPrintWindow } from "../lib/pdfReportTemplate";
 import BranchMultiSelect from "./BranchMultiSelect";
 
@@ -51,7 +52,7 @@ function computeStatus(entry, settings) {
   else if (posisi * 100 <= settings.efisien) { indikator = "Efisien"; keterangan = "Penggunaan baik, saldo cadangan memadai"; tone = "good"; }
   else if (posisi * 100 <= settings.monitoring) { indikator = "Monitoring"; keterangan = "Perlu dipantau, posisi kas mendekati limit"; tone = "warn"; }
   else { indikator = "Tindak Lanjut"; keterangan = "Posisi kas melebihi ambang, perlu tindak lanjut"; tone = "bad"; }
-  if (lim > 0 && pk > lim && sisa >= 0) keterangan += " \u00b7 saldo melebihi limit";
+  if (lim > 0 && sm > lim && sisa >= 0) keterangan += " \u00b7 saldo masuk melebihi limit";
   return { sisa, terpakai, posisi, indikator, keterangan, tone };
 }
 
@@ -114,7 +115,7 @@ export default function AuditKeuangan({ profile }) {
   const [selectedBranch, setSelectedBranch] = useState(null);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [selectedEntryId, setSelectedEntryId] = useState(null);
-  const [form, setForm] = useState({ saldo_sebelumnya: "", saldo_masuk: "", limit_kas: "", pengeluaran: "", sisa_saldo: "", cabang_baru: false });
+  const [form, setForm] = useState({ saldo_sebelumnya: "", saldo_masuk: "", limit_kas: "", pengeluaran: "", sisa_saldo: "", cabang_baru: false, tidak_visit: false });
   const [editingLimit, setEditingLimit] = useState(false);
   const [limitDraft, setLimitDraft] = useState("");
   const [savingLimit, setSavingLimit] = useState(false);
@@ -138,7 +139,7 @@ export default function AuditKeuangan({ profile }) {
     try {
       const { data: br, error: brErr } = await supabase.from("branches").select("*").order("name");
       if (brErr) throw brErr;
-      setBranches(br || []);
+      setBranches(sortBranches(br || []));
 
       const { data: st } = await supabase.from("settings_keuangan").select("*").eq("id", 1).single();
       if (st) setSettings(st);
@@ -178,7 +179,7 @@ export default function AuditKeuangan({ profile }) {
   }
 
   function applyEntryToFormK(e) {
-    setForm({ saldo_sebelumnya: e.saldo_sebelumnya, saldo_masuk: e.saldo_masuk, limit_kas: e.limit_kas, pengeluaran: e.pengeluaran, sisa_saldo: e.sisa_saldo ?? "", cabang_baru: !!e.cabang_baru });
+    setForm({ saldo_sebelumnya: e.saldo_sebelumnya, saldo_masuk: e.saldo_masuk, limit_kas: e.limit_kas, pengeluaran: e.pengeluaran, sisa_saldo: e.sisa_saldo ?? "", cabang_baru: !!e.cabang_baru, tidak_visit: !!e.tidak_visit });
     setSelectedEntryId(e.id);
   }
 
@@ -197,7 +198,7 @@ export default function AuditKeuangan({ profile }) {
           ? parseFloat(prevEntry.sisa_saldo) || 0
           : (parseFloat(prevEntry.saldo_sebelumnya) || 0) + (parseFloat(prevEntry.saldo_masuk) || 0) - (parseFloat(prevEntry.pengeluaran) || 0))
       : "";
-    setForm({ saldo_sebelumnya: carryForward, saldo_masuk: "", limit_kas: branch?.limit_kas || "", pengeluaran: "", sisa_saldo: "", cabang_baru: false });
+    setForm({ saldo_sebelumnya: carryForward, saldo_masuk: "", limit_kas: branch?.limit_kas || "", pengeluaran: "", sisa_saldo: "", cabang_baru: false, tidak_visit: false });
     setSelectedEntryId(null);
   }
 
@@ -209,7 +210,7 @@ export default function AuditKeuangan({ profile }) {
           ? parseFloat(prevEntry.sisa_saldo) || 0
           : (parseFloat(prevEntry.saldo_sebelumnya) || 0) + (parseFloat(prevEntry.saldo_masuk) || 0) - (parseFloat(prevEntry.pengeluaran) || 0))
       : "";
-    setForm({ saldo_sebelumnya: carryForward, saldo_masuk: "", limit_kas: selectedBranch?.limit_kas || "", pengeluaran: "", sisa_saldo: "", cabang_baru: false });
+    setForm({ saldo_sebelumnya: carryForward, saldo_masuk: "", limit_kas: selectedBranch?.limit_kas || "", pengeluaran: "", sisa_saldo: "", cabang_baru: false, tidak_visit: false });
     setSelectedEntryId(null);
     setSavedFlash(false);
   }
@@ -281,6 +282,7 @@ export default function AuditKeuangan({ profile }) {
         pengeluaran: parseFloat(form.pengeluaran) || 0,
         sisa_saldo: parseFloat(form.sisa_saldo) || 0,
         cabang_baru: form.cabang_baru,
+        tidak_visit: form.tidak_visit,
         status: "draft",
         submitted_by: (await supabase.auth.getUser()).data.user.id,
       };
@@ -320,6 +322,25 @@ export default function AuditKeuangan({ profile }) {
     const entriesHere = (entriesByBranch[selectedBranch.id] || {})[selectedPeriod] || [];
     const existing = latestOf(entriesHere);
     if (!existing) return;
+
+    if (existing.tidak_visit) {
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Laporan Audit</title><style>
+        * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        body{font-family:Arial,Helvetica,sans-serif;color:#1A1D24;padding:60px;text-align:center;}
+        .badge{display:inline-block;background:#88888822;color:#666;font-weight:800;font-size:16px;padding:10px 26px;border-radius:30px;margin-bottom:20px;}
+      </style></head><body>
+        <h1>Laporan Audit Kas Kecil</h1>
+        <div class="badge">TIDAK VISIT</div>
+        <div style="font-size:13px;color:#5B6270;">Cabang: ${esc(selectedBranch.name)} &middot; Bulan: ${esc(monthLabel(selectedPeriod))}</div>
+        <p style="font-size:12.5px;color:#444;margin-top:20px;">Cabang ini tidak dikunjungi/tidak diaudit pada periode tersebut.</p>
+        <script>window.onload=function(){setTimeout(function(){window.print();},350);}<\/script>
+      </body></html>`;
+      const w = window.open("", "_blank");
+      if (!w) { alert("Popup diblokir. Izinkan popup lalu coba lagi."); return; }
+      w.document.open(); w.document.write(html); w.document.close();
+      return;
+    }
+
     const c = computeStatus(existing, settings);
     const rows = [
       ["Saldo bulan sebelumnya", rupiah(existing.saldo_sebelumnya)],
@@ -335,12 +356,36 @@ export default function AuditKeuangan({ profile }) {
       body{font-family:Arial,Helvetica,sans-serif;color:#1A1D24;padding:40px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
       table{width:100%;border-collapse:collapse;font-size:13.5px;margin-bottom:20px;}
       .status{background:${TONE[c.tone].dot}1A;border:1px solid ${TONE[c.tone].dot};border-radius:10px;padding:14px 16px;color:${TONE[c.tone].dot};font-weight:600;}
-    </style></head><body>
+    </style></head><body><div id="pdfZoom">
       <h1>Laporan Audit Kas Kecil</h1>
       <div style="font-size:13px;color:#5B6270;margin-bottom:20px">Cabang: ${esc(selectedBranch.name)} &middot; Bulan: ${esc(monthLabel(selectedPeriod))}</div>
       <table>${rowsHtml}</table>
       <div class="status">${esc(c.indikator)} &mdash; ${esc(c.keterangan)}</div>
-      <script>window.onload=function(){setTimeout(function(){window.print();},400);}<\/script>
+      </div>
+      <script>
+        function fitToPage() {
+          const zoomEl = document.getElementById("pdfZoom");
+          const targetHeight = 1000;
+          zoomEl.style.zoom = 1;
+          const naturalHeight = zoomEl.scrollHeight;
+          let zoom = targetHeight / naturalHeight;
+          zoom = Math.min(zoom, 1.05);
+          zoom = Math.max(zoom, 0.55);
+          zoomEl.style.zoom = zoom;
+          setTimeout(() => {
+            const afterHeight = zoomEl.getBoundingClientRect().height;
+            if (afterHeight > targetHeight + 4) {
+              const corrected = Math.max((targetHeight / afterHeight) * zoom, 0.5);
+              zoomEl.style.zoom = corrected;
+            }
+            setTimeout(() => window.print(), 250);
+          }, 100);
+        }
+        window.onload = () => {
+          const fontsReady = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
+          fontsReady.then(fitToPage);
+        };
+      <\/script>
     </body></html>`;
     const w = window.open("", "_blank");
     if (!w) { alert("Popup diblokir. Izinkan popup lalu coba lagi."); return; }
@@ -361,12 +406,24 @@ export default function AuditKeuangan({ profile }) {
       : branches.filter((b) => exportBranchIds.includes(b.id));
 
     const colorMap = { good: "#1a9e6e", warn: "#b07212", bad: "#a32020", none: "#888" };
-    let totalSb = 0, totalSm = 0, totalLim = 0, totalPk = 0, totalSisa = 0, countFilled = 0;
+    const BARU_COLOR = "#F4B740";
+    const TV_COLOR = "#888";
+    let totalSb = 0, totalSm = 0, totalLim = 0, totalPk = 0, totalSisa = 0, countFilled = 0, countBaru = 0, countTV = 0;
     const groupCount = { good: 0, warn: 0, bad: 0 };
 
     const tableRows = exportBranches.map((b, i) => {
       const e = latestOf((entriesByBranch[b.id] || {})[period]);
       if (!e) return { cells: [String(i + 1), b.name, null, null, null, null, null, null, null], badge: null };
+      const isBaru = !!e.cabang_baru;
+      const isTV = !!e.tidak_visit;
+      if (isTV) {
+        countTV++;
+        countFilled++;
+        return {
+          cells: [String(i + 1), `${b.name} (TIDAK VISIT)`, "\u2014", "\u2014", "\u2014", "\u2014", "\u2014", "\u2014", "\u2014"],
+          badge: { label: "TIDAK VISIT", color: TV_COLOR },
+        };
+      }
       const c = computeStatus(e, settings);
       totalSb += parseFloat(e.saldo_sebelumnya) || 0;
       totalSm += parseFloat(e.saldo_masuk) || 0;
@@ -374,23 +431,26 @@ export default function AuditKeuangan({ profile }) {
       totalPk += parseFloat(e.pengeluaran) || 0;
       totalSisa += c.sisa;
       countFilled++;
-      groupCount[c.tone]++;
+      if (isBaru) countBaru++;
+      else groupCount[c.tone]++;
       return {
         cells: [
-          String(i + 1), b.name,
+          String(i + 1), isBaru ? `\u2b50 ${b.name} (CABANG BARU)` : b.name,
           rupiah(e.saldo_sebelumnya), rupiah(e.saldo_masuk), rupiah(e.limit_kas), rupiah(e.pengeluaran), rupiah(c.sisa),
           pct(c.terpakai), pct(c.posisi),
         ],
-        badge: { label: c.indikator, color: colorMap[c.tone] },
+        badge: isBaru ? { label: "CABANG BARU", color: BARU_COLOR } : { label: c.indikator, color: colorMap[c.tone] },
       };
     });
 
     const total = exportBranches.length;
     const scopeLabel = exportBranches.length === branches.length ? "SEMUA CABANG" : exportBranches.map((b) => b.name).join(", ").toUpperCase();
+    const distDenom = countFilled;
     const donutSegments = [
-      { label: "Terkendali / Efisien", count: groupCount.good, pct: countFilled ? Math.round((groupCount.good / countFilled) * 100) : 0, color: colorMap.good },
-      { label: "Monitoring", count: groupCount.warn, pct: countFilled ? Math.round((groupCount.warn / countFilled) * 100) : 0, color: colorMap.warn },
-      { label: "Pengecekan / Tindak Lanjut", count: groupCount.bad, pct: countFilled ? Math.round((groupCount.bad / countFilled) * 100) : 0, color: colorMap.bad },
+      { label: "Terkendali / Efisien", count: groupCount.good, pct: distDenom ? Math.round((groupCount.good / distDenom) * 100) : 0, color: colorMap.good },
+      { label: "Monitoring", count: groupCount.warn, pct: distDenom ? Math.round((groupCount.warn / distDenom) * 100) : 0, color: colorMap.warn },
+      { label: "Pengecekan / Tindak Lanjut", count: groupCount.bad, pct: distDenom ? Math.round((groupCount.bad / distDenom) * 100) : 0, color: colorMap.bad },
+      { label: "Cabang Baru", count: countBaru, pct: distDenom ? Math.round((countBaru / distDenom) * 100) : 0, color: BARU_COLOR },
     ].filter((s) => s.count > 0);
 
     const html = buildSummaryReportHtml({
@@ -400,9 +460,11 @@ export default function AuditKeuangan({ profile }) {
       printedAtLabel: new Date().toLocaleString("id-ID"),
       summaryCards: [
         { icon: "building", label: "TOTAL CABANG", value: String(total), sub: "Cabang", color: "#2A1F52" },
-        { icon: "shieldCheck", label: "TERKENDALI / EFISIEN", value: String(groupCount.good), sub: `Cabang (${countFilled ? Math.round((groupCount.good / countFilled) * 100) : 0}%)`, color: colorMap.good },
-        { icon: "alertCircle", label: "MONITORING", value: String(groupCount.warn), sub: `Cabang (${countFilled ? Math.round((groupCount.warn / countFilled) * 100) : 0}%)`, color: colorMap.warn },
-        { icon: "alertTriangle", label: "PENGECEKAN / TINDAK LANJUT", value: String(groupCount.bad), sub: `Cabang (${countFilled ? Math.round((groupCount.bad / countFilled) * 100) : 0}%)`, color: colorMap.bad },
+        { icon: "shieldCheck", label: "TERKENDALI / EFISIEN", value: String(groupCount.good), sub: `Cabang (${distDenom ? Math.round((groupCount.good / distDenom) * 100) : 0}%)`, color: colorMap.good },
+        { icon: "alertCircle", label: "MONITORING", value: String(groupCount.warn), sub: `Cabang (${distDenom ? Math.round((groupCount.warn / distDenom) * 100) : 0}%)`, color: colorMap.warn },
+        { icon: "alertTriangle", label: "PENGECEKAN / TINDAK LANJUT", value: String(groupCount.bad), sub: `Cabang (${distDenom ? Math.round((groupCount.bad / distDenom) * 100) : 0}%)`, color: colorMap.bad },
+        ...(countBaru > 0 ? [{ icon: "building", label: "CABANG BARU", value: String(countBaru), sub: "Belum masuk itungan indikator", color: BARU_COLOR }] : []),
+        ...(countTV > 0 ? [{ icon: "alertCircle", label: "TIDAK VISIT", value: String(countTV), sub: "Cabang", color: TV_COLOR }] : []),
       ],
       tableHeaders: ["No", "Cabang", "Saldo Sebelumnya", "Saldo Masuk", "Limit", "Pengeluaran", "Sisa Saldo", "% Terpakai", "% Posisi Kas", "Indikator"],
       tableRows,
@@ -412,6 +474,7 @@ export default function AuditKeuangan({ profile }) {
         { icon: "shieldCheck", color: colorMap.good, title: "TERKENDALI / EFISIEN", desc: `Posisi kas \u2264 ${settings.efisien}%` },
         { icon: "alertCircle", color: colorMap.warn, title: "MONITORING", desc: `Posisi kas ${settings.efisien}% s.d. ${settings.monitoring}%` },
         { icon: "alertTriangle", color: colorMap.bad, title: "PENGECEKAN / TINDAK LANJUT", desc: `Posisi kas > ${settings.monitoring}% atau saldo minus` },
+        ...(countBaru > 0 ? [{ icon: "building", color: BARU_COLOR, title: "CABANG BARU", desc: "Cabang baru dibuka, belum ikut dihitung ke indikator" }] : []),
       ],
       summaryList: [
         { icon: "arrowDown", label: "Total Saldo Sebelumnya", value: rupiah(totalSb) },
@@ -423,6 +486,7 @@ export default function AuditKeuangan({ profile }) {
         `Laporan ini merupakan ringkasan hasil audit kas kecil untuk seluruh cabang pada bulan yang dipilih (${countFilled} dari ${total} cabang terisi).`,
         "Status indikator berdasarkan persentase posisi kas (pengeluaran dibanding total saldo tersedia) terhadap ambang batas yang ditetapkan.",
         `Harap lakukan tindak lanjut untuk cabang dengan indikator "Pengecekan" atau "Tindak Lanjut".`,
+        ...(countBaru > 0 ? [`${countBaru} cabang ditandai "CABANG BARU" \u2014 datanya masih nol/minim karena baru dibuka, tidak ikut dihitung ke persentase distribusi indikator di atas.`] : []),
       ],
       pageLabel: "Halaman 1 dari 1",
     });
@@ -439,7 +503,7 @@ export default function AuditKeuangan({ profile }) {
   const visibleBranches = branches.filter((b) => {
     if (filter === "all") return true;
     const e = latestOf((entriesByBranch[b.id] || {})[viewPeriod]);
-    const st = e ? computeStatus(e, settings) : null;
+    const st = e && !e.tidak_visit ? computeStatus(e, settings) : null;
     const tone = st ? st.tone : "none";
     return tone === filter;
   });
@@ -496,7 +560,8 @@ export default function AuditKeuangan({ profile }) {
                 {[...((entriesByBranch[selectedBranch.id] || {})[selectedPeriod] || [])]
                   .sort((a, b) => (a.audit_date || "").localeCompare(b.audit_date || ""))
                   .map((e, i) => {
-                    const st = computeStatus(e, settings);
+                    const isTV = e.tidak_visit;
+                    const st = !isTV ? computeStatus(e, settings) : null;
                     const active = e.id === selectedEntryId;
                     return (
                       <div
@@ -512,8 +577,14 @@ export default function AuditKeuangan({ profile }) {
                         <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {i + 1}</span>
                         <span style={{ fontSize: 12, fontWeight: 600 }}>{shortDate(e.audit_date)}</span>
                         {e.cabang_baru && <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>\u2b50 Baru</span>}
-                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: TONE[st.tone].dot }} />
-                        <span style={{ fontSize: 12, fontWeight: 700, color: TONE[st.tone].dot }}>{pct(st.posisi)}</span>
+                        {isTV ? (
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#888" }}>Tidak Visit</span>
+                        ) : (
+                          <>
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: TONE[st.tone].dot }} />
+                            <span style={{ fontSize: 12, fontWeight: 700, color: TONE[st.tone].dot }}>{pct(st.posisi)}</span>
+                          </>
+                        )}
                       </div>
                     );
                   })}
@@ -534,6 +605,17 @@ export default function AuditKeuangan({ profile }) {
             </div>
           )}
 
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>
+            <input type="checkbox" checked={form.tidak_visit} disabled={!canEdit} onChange={(e) => setForm((f) => ({ ...f, tidak_visit: e.target.checked }))} />
+            Cabang ini tidak dikunjungi bulan ini (Tidak Visit)
+          </label>
+          <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>
+            <input type="checkbox" checked={form.cabang_baru} disabled={!canEdit} onChange={(e) => setForm((f) => ({ ...f, cabang_baru: e.target.checked }))} />
+            Cabang Baru <span style={{ color: "var(--text-faint)" }}>(tetap dihitung normal, cuma ditandai di laporan)</span>
+          </label>
+
+          {!form.tidak_visit && (
+          <>
           <div style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gap: 16, marginBottom: 16, alignItems: "start" }}>
 
             {/* Card 1: Input data */}
@@ -633,11 +715,6 @@ export default function AuditKeuangan({ profile }) {
                   </div>
                 )}
               </div>
-
-              <label style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 16, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>
-                <input type="checkbox" checked={form.cabang_baru} disabled={!canEdit} onChange={(e) => setForm((f) => ({ ...f, cabang_baru: e.target.checked }))} />
-                Cabang Baru <span style={{ color: "var(--text-faint)" }}>(tetap dihitung normal, cuma ditandai di laporan)</span>
-              </label>
             </div>
 
             {/* Card 2: Hasil perhitungan */}
@@ -681,6 +758,8 @@ export default function AuditKeuangan({ profile }) {
             <div style={{ fontWeight: 700, fontSize: 14.5, color: "#7c3aed", marginBottom: 14 }}>3. RIWAYAT POSISI KAS SEMUA BULAN</div>
             <KeuanganHistoryChart entriesByBranch={entriesByBranch} branchId={selectedBranch.id} settings={settings} />
           </div>
+          </>
+          )}
 
           {savedFlash && <div style={{ color: "var(--success-text)", fontSize: 13, marginTop: 10 }}>Tersimpan \u2713</div>}
         </div>
@@ -738,8 +817,9 @@ export default function AuditKeuangan({ profile }) {
           {visibleBranches.map((b) => {
             const entriesHere = (entriesByBranch[b.id] || {})[viewPeriod] || [];
             const e = latestOf(entriesHere);
-            const st = e ? computeStatus(e, settings) : null;
-            const tone = st ? st.tone : "none";
+            const isTV = e && e.tidak_visit;
+            const st = e && !isTV ? computeStatus(e, settings) : null;
+            const tone = isTV ? "none" : (st ? st.tone : "none");
             const toneIcon = tone === "good" ? "check" : tone === "warn" ? "alertCircle" : tone === "bad" ? "alertTriangle" : "wallet";
             return (
               <div
@@ -747,7 +827,7 @@ export default function AuditKeuangan({ profile }) {
                 onClick={() => openBranch(b)}
                 style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", overflow: "hidden" }}
               >
-                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: tone === "none" ? "linear-gradient(90deg, #7c3aed, #F4B740)" : TONE[tone].dot }} />
+                <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: isTV ? "#888" : (tone === "none" ? "linear-gradient(90deg, #7c3aed, #F4B740)" : TONE[tone].dot) }} />
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8 }}>
                   <div className="display" style={{ fontSize: 15.5, fontWeight: 600 }}>{b.name}</div>
                   <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -757,17 +837,23 @@ export default function AuditKeuangan({ profile }) {
                     {entriesHere.length > 1 && (
                       <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7c3aed", background: "#7c3aed18", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>{entriesHere.length} audit</span>
                     )}
-                    <div style={{ width: 26, height: 26, borderRadius: 8, background: TONE[tone].bg, color: TONE[tone].dot, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-                      <Icon name={toneIcon} size={14} />
-                    </div>
+                    {!isTV && (
+                      <div style={{ width: 26, height: 26, borderRadius: 8, background: TONE[tone].bg, color: TONE[tone].dot, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <Icon name={toneIcon} size={14} />
+                      </div>
+                    )}
                   </div>
                 </div>
-                <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: TONE[tone].bg, color: TONE[tone].text, fontSize: 11.5, fontWeight: 600, marginBottom: 10 }}>
-                  {st ? st.indikator : "Belum diisi"}
-                </span>
+                {isTV ? (
+                  <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: "#88888822", color: "#888", fontSize: 11.5, fontWeight: 600, marginBottom: 10 }}>Tidak Visit</span>
+                ) : (
+                  <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: TONE[tone].bg, color: TONE[tone].text, fontSize: 11.5, fontWeight: 600, marginBottom: 10 }}>
+                    {st ? st.indikator : "Belum diisi"}
+                  </span>
+                )}
                 <div style={{ height: 1, background: "var(--border)", margin: "10px 0" }} />
                 <div style={{ fontSize: 11.5, color: "var(--text-faint)" }}>
-                  {e ? `Sisa ${rupiah(st.sisa)} \u00b7 ${shortDate(e.audit_date) !== "\u2014" ? shortDate(e.audit_date) : monthLabel(viewPeriod)}` : "Belum ada audit pada periode ini"}
+                  {e ? (isTV ? `${shortDate(e.audit_date) !== "\u2014" ? shortDate(e.audit_date) : monthLabel(viewPeriod)}` : `Sisa ${rupiah(st.sisa)} \u00b7 ${shortDate(e.audit_date) !== "\u2014" ? shortDate(e.audit_date) : monthLabel(viewPeriod)}`) : "Belum ada audit pada periode ini"}
                 </div>
               </div>
             );
@@ -818,11 +904,13 @@ function ThresholdLegend({ color, label, range }) {
 
 function KeuanganHistoryChart({ entriesByBranch, branchId, settings }) {
   const byPeriod = entriesByBranch[branchId] || {};
-  const shown = Object.values(byPeriod)
-    .flat()
-    .filter((e) => e.audit_date)
-    .map((e) => ({ date: e.audit_date, posisi: computeStatus(e, settings)?.posisi || 0 }))
-    .sort((a, b) => a.date.localeCompare(b.date));
+  const shown = Object.keys(byPeriod)
+    .sort()
+    .map((period) => {
+      const latest = latestOf(byPeriod[period]);
+      return latest ? { period, posisi: computeStatus(latest, settings)?.posisi || 0 } : null;
+    })
+    .filter(Boolean);
 
   if (shown.length < 2) {
     return <div style={{ fontSize: 12.5, color: "var(--text-faint)", padding: "40px 0", textAlign: "center" }}>Belum cukup riwayat buat ditampilkan sebagai grafik.</div>;
@@ -865,7 +953,7 @@ function KeuanganHistoryChart({ entriesByBranch, branchId, settings }) {
             <g key={i}>
               <circle cx={xAt(i)} cy={yAt(p.posisi)} r={isLast ? 4 : 3} fill={isLast ? "#F4B740" : "#7c3aed"} />
               {showLabel && <text x={xAt(i)} y={yAt(p.posisi) - 10} textAnchor="middle" fontSize="10" fontWeight="700" fill={isLast ? "#F4B740" : "var(--text-secondary)"}>{(p.posisi * 100).toFixed(0)}%</text>}
-              {showLabel && <text x={xAt(i)} y={H - 10} textAnchor="middle" fontSize="9.5" fill="var(--text-faint)">{shortDate(p.date)}</text>}
+              {showLabel && <text x={xAt(i)} y={H - 10} textAnchor="middle" fontSize="9.5" fill="var(--text-faint)">{monthLabel(p.period)}</text>}
             </g>
           );
         })}

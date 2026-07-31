@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { sortBranches } from "../../lib/branchOrder";
 import {
   skorRugi, calcSkorTemuan, calcSkorTotal, calcKesehatanPct, kesehatanStatusInfo, formatKesehatanPct,
   periodFromDate, todayInputValue, periodeLabel, nowPeriode, addMonthsToPeriod,
@@ -37,7 +38,7 @@ export default function StokKesehatan({ profile }) {
   async function loadBranches() {
     setLoadingBranches(true);
     const { data, error: err } = await supabase.from("branches").select("*").order("name");
-    if (!err) setBranches(data || []);
+    if (!err) setBranches(sortBranches(data || []));
     const { data: recs, error: recErr } = await supabase
       .from("audit_generic")
       .select("*")

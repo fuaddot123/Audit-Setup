@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
+import { sortBranches } from "../lib/branchOrder";
 import {
   INVENTARIS_CATEGORIES, freshInventaris, normalizeInventaris, countRusak,
   uploadInventarisMedia, InventarisChecklist,
@@ -63,6 +64,8 @@ export default function BeritaAcara({ profile }) {
   const [inventaris, setInventaris] = useState(freshInventaris());
   const [storeManagerName, setStoreManagerName] = useState("");
   const [storeLeaderName, setStoreLeaderName] = useState("");
+  const [tidakVisit, setTidakVisit] = useState(false);
+  const [cabangBaru, setCabangBaru] = useState(false);
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -80,7 +83,7 @@ export default function BeritaAcara({ profile }) {
   async function loadBranches() {
     setLoadingBranches(true);
     const { data, error: err } = await supabase.from("branches").select("*").order("name");
-    if (!err) setBranches(data || []);
+    if (!err) setBranches(sortBranches(data || []));
     const { data: recs, error: recErr } = await supabase.from("berita_acara").select("*");
     if (!recErr) {
       const sorted = [...(recs || [])].sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""));
@@ -105,6 +108,8 @@ export default function BeritaAcara({ profile }) {
     setStockKat2(Array.isArray(entry.stock_opname_kat2) ? entry.stock_opname_kat2 : []);
     setStoreManagerName(entry.store_manager_name || "");
     setStoreLeaderName(entry.store_leader_name || "");
+    setTidakVisit(!!entry.tidak_visit);
+    setCabangBaru(!!entry.cabang_baru);
     setAuditDate(entry.audit_date || todayInputValue());
     setSelectedEntryId(entry.id);
     setInventaris(normalizeInventaris(invEntry?.data?.categories));
@@ -121,6 +126,8 @@ export default function BeritaAcara({ profile }) {
     setInventaris(freshInventaris());
     setStoreManagerName("");
     setStoreLeaderName("");
+    setTidakVisit(false);
+    setCabangBaru(false);
     setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
     setSelectedEntryId(null);
     setSelectedInventarisEntryId(null);
@@ -260,6 +267,8 @@ export default function BeritaAcara({ profile }) {
         stock_opname_kat2: stockKat2,
         store_manager_name: storeManagerName,
         store_leader_name: storeLeaderName,
+        tidak_visit: tidakVisit,
+        cabang_baru: cabangBaru,
         submitted_by: user.id,
         updated_at: new Date().toISOString(),
       };
@@ -274,27 +283,29 @@ export default function BeritaAcara({ profile }) {
         beRow = res.data;
       }
 
-      const invPayload = {
-        module: "inventaris",
-        branch_id: selectedBranch.id,
-        period: viewPeriod,
-        status: "submitted",
-        submitted_by: user.id,
-        data: { tidak_visit: false, categories: inventaris, auditor_name: profile?.full_name || null, audit_date: auditDate },
-      };
-      let invRow;
-      if (selectedInventarisEntryId) {
-        const res = await supabase.from("audit_generic").update(invPayload).eq("id", selectedInventarisEntryId).select().single();
-        if (res.error) throw res.error;
-        invRow = res.data;
-      } else {
-        const res = await supabase.from("audit_generic").insert(invPayload).select().single();
-        if (res.error) throw res.error;
-        invRow = res.data;
+      let invRow = null;
+      if (!tidakVisit) {
+        const invPayload = {
+          module: "inventaris",
+          branch_id: selectedBranch.id,
+          period: viewPeriod,
+          status: "submitted",
+          submitted_by: user.id,
+          data: { tidak_visit: false, categories: inventaris, auditor_name: profile?.full_name || null, audit_date: auditDate },
+        };
+        if (selectedInventarisEntryId) {
+          const res = await supabase.from("audit_generic").update(invPayload).eq("id", selectedInventarisEntryId).select().single();
+          if (res.error) throw res.error;
+          invRow = res.data;
+        } else {
+          const res = await supabase.from("audit_generic").insert(invPayload).select().single();
+          if (res.error) throw res.error;
+          invRow = res.data;
+        }
       }
 
       setSelectedEntryId(beRow.id);
-      setSelectedInventarisEntryId(invRow.id);
+      setSelectedInventarisEntryId(invRow ? invRow.id : null);
       setEntriesThisPeriod((prev) => {
         const others = prev.filter((e) => e.id !== beRow.id);
         return [beRow, ...others].sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""));
@@ -339,6 +350,34 @@ export default function BeritaAcara({ profile }) {
   function exportPDF() {
     if (!selectedBranch) return;
     const printDate = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
+
+    if (tidakVisit) {
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Berita Acara ${esc(selectedBranch.name)}</title>
+      <style>
+        * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        @page { size: A4; margin: 20mm; }
+        body { font-family: Arial, Helvetica, sans-serif; color: #232323; margin: 0; }
+        .page { border: 3px solid #2A1F52; border-radius: 10px; padding: 30mm 20mm; text-align: center; }
+        h1 { color: #2A1F52; font-family: 'Arial Black', Arial, sans-serif; font-size: 22px; margin-bottom: 6px; }
+        .sub { color: #6b5f96; font-size: 12px; font-weight: 700; margin-bottom: 30px; }
+        .badge { display: inline-block; background: #88888822; color: #666; font-weight: 800; font-size: 16px; padding: 10px 26px; border-radius: 30px; margin-bottom: 20px; }
+        p { font-size: 12.5px; color: #444; line-height: 1.6; }
+      </style></head><body>
+        <div class="page">
+          <h1>BERITA ACARA AUDIT STORE</h1>
+          <div class="sub">DIVISI AUDIT KLA COMPUTER</div>
+          <div class="badge">TIDAK VISIT</div>
+          <p><b>Cabang:</b> ${esc(selectedBranch.name)} &middot; <b>Periode:</b> ${esc(periodeLabel(viewPeriod))}</p>
+          <p>Cabang ini tidak dikunjungi/tidak diaudit pada periode tersebut.</p>
+          <p style="margin-top:30px;color:#999;">Dicetak ${printDate}</p>
+        </div>
+      </body></html>`;
+      const win = window.open("", "_blank");
+      if (!win) { setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF."); return; }
+      win.document.write(html);
+      win.document.close();
+      return;
+    }
 
     function catPct(rows) {
       if (!rows.length) return null;
@@ -654,24 +693,33 @@ export default function BeritaAcara({ profile }) {
                 const selisihCount = [...kat1, ...kat2].filter((r) => r.status === "Selisih").length;
                 return (
                   <div key={b.id} onClick={() => pickBranch(b)} style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", overflow: "hidden" }}>
-                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: entry ? (selisihCount > 0 ? "#a32020" : "#1a9e6e") : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
+                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: !entry ? "linear-gradient(90deg, #7c3aed, #F4B740)" : entry.tidak_visit ? "#888" : (selisihCount > 0 ? "#a32020" : "#1a9e6e") }} />
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: entry ? 8 : 4 }}>
                       <div style={{ fontWeight: 600, fontSize: 14.5 }}>{b.name}</div>
-                      {row && row.count > 1 && (
-                        <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7c3aed", background: "#7c3aed18", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>{row.count} audit</span>
-                      )}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {entry?.cabang_baru && (
+                          <span style={{ fontSize: 9.5, fontWeight: 700, color: "#F4B740", background: "#F4B74022", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>Cabang Baru</span>
+                        )}
+                        {row && row.count > 1 && (
+                          <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7c3aed", background: "#7c3aed18", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>{row.count} audit</span>
+                        )}
+                      </div>
                     </div>
                     {entry ? (
-                      <>
-                        <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                          <span style={{ fontSize: 22, fontWeight: 800, color: selisihCount > 0 ? "#a32020" : "#1a9e6e" }}>{selisihCount}</span>
-                          <span style={{ fontSize: 11, color: "var(--text-faint)" }}>selisih dari {totalItem} item</span>
-                        </div>
-                        <span style={{ display: "inline-block", marginTop: 6, padding: "2px 9px", borderRadius: 20, background: selisihCount > 0 ? "#a3202022" : "#1a9e6e22", color: selisihCount > 0 ? "#a32020" : "#1a9e6e", fontSize: 10.5, fontWeight: 600 }}>
-                          {selisihCount > 0 ? "Ada temuan" : "Semua lengkap"}
-                        </span>
-                        <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 6 }}>Terakhir: {shortDate(entry.audit_date)}</div>
-                      </>
+                      entry.tidak_visit ? (
+                        <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: "#88888822", color: "#888", fontSize: 11, fontWeight: 600 }}>Tidak Visit</span>
+                      ) : (
+                        <>
+                          <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
+                            <span style={{ fontSize: 22, fontWeight: 800, color: selisihCount > 0 ? "#a32020" : "#1a9e6e" }}>{selisihCount}</span>
+                            <span style={{ fontSize: 11, color: "var(--text-faint)" }}>selisih dari {totalItem} item</span>
+                          </div>
+                          <span style={{ display: "inline-block", marginTop: 6, padding: "2px 9px", borderRadius: 20, background: selisihCount > 0 ? "#a3202022" : "#1a9e6e22", color: selisihCount > 0 ? "#a32020" : "#1a9e6e", fontSize: 10.5, fontWeight: 600 }}>
+                            {selisihCount > 0 ? "Ada temuan" : "Semua lengkap"}
+                          </span>
+                          <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 6 }}>Terakhir: {shortDate(entry.audit_date)}</div>
+                        </>
+                      )
                     ) : (
                       <div style={{ fontSize: 11.5, fontWeight: 400, color: "var(--text-faint)" }}>Belum ada &middot; Mulai &rarr;</div>
                     )}
@@ -751,8 +799,15 @@ export default function BeritaAcara({ profile }) {
                       >
                         <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {i + 1}</span>
                         <span style={{ fontSize: 12, fontWeight: 600 }}>{shortDate(e.audit_date)}</span>
-                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: selisih > 0 ? "#a32020" : "#1a9e6e" }} />
-                        <span style={{ fontSize: 12, fontWeight: 700, color: selisih > 0 ? "#a32020" : "#1a9e6e" }}>{selisih} selisih</span>
+                        {e.cabang_baru && <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>\u2b50 Baru</span>}
+                        {e.tidak_visit ? (
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#888" }}>Tidak Visit</span>
+                        ) : (
+                          <>
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: selisih > 0 ? "#a32020" : "#1a9e6e" }} />
+                            <span style={{ fontSize: 12, fontWeight: 700, color: selisih > 0 ? "#a32020" : "#1a9e6e" }}>{selisih} selisih</span>
+                          </>
+                        )}
                       </div>
                     );
                   })}
@@ -823,6 +878,19 @@ export default function BeritaAcara({ profile }) {
               </div>
             </div>
 
+            <div style={{ display: "flex", gap: 20, flexWrap: "wrap", marginBottom: 16 }}>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>
+                <input type="checkbox" checked={tidakVisit} disabled={!canEdit} onChange={(e) => { setTidakVisit(e.target.checked); setSaved(false); }} />
+                Cabang ini tidak dikunjungi bulan ini (Tidak Visit)
+              </label>
+              <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>
+                <input type="checkbox" checked={cabangBaru} disabled={!canEdit} onChange={(e) => { setCabangBaru(e.target.checked); setSaved(false); }} />
+                Cabang Baru <span style={{ color: "var(--text-faint)" }}>(tetap dihitung normal, cuma ditandai di laporan)</span>
+              </label>
+            </div>
+
+            {!tidakVisit && (
+              <>
             {/* Ringkasan live — Stock Opname */}
             {(() => {
               const allRows = [...stockKat1, ...stockKat2];
@@ -883,6 +951,8 @@ export default function BeritaAcara({ profile }) {
                 onRemoveMedia={removeInventarisMedia}
               />
             </div>
+            </>
+            )}
 
             {/* Footer */}
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20 }}>

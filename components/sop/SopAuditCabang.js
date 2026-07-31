@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { sortBranches } from "../../lib/branchOrder";
 import {
   CATS, TOTAL_ITEMS, TIER_WEIGHTS, TIER1_CATS, TIER3_CATS, ALERT_THRESHOLD,
   calcWeightedScore, calcWeightedFromRecord, scoreColor, periodFromDate, todayInputValue, periodeLabel,
@@ -56,7 +57,7 @@ export default function SopAuditCabang({ profile }) {
   async function loadBranches() {
     setLoadingBranches(true);
     const { data, error: err } = await supabase.from("branches").select("*").order("name");
-    if (!err) setBranches(data || []);
+    if (!err) setBranches(sortBranches(data || []));
     const { data: recs, error: recErr } = await supabase.from("audit_generic").select("*").eq("module", "sop");
     if (!recErr) {
       const sorted = [...(recs || [])].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""));

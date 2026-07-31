@@ -1,5 +1,6 @@
 import { useState, useEffect, cloneElement } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { sortBranches } from "../../lib/branchOrder";
 import {
   calcServiceRatio, serviceStatusInfo, formatRatioPct,
   periodFromDate, todayInputValue, periodeLabel, SERVICE_THRESHOLDS,
@@ -48,6 +49,8 @@ export default function StokServiceRatio({ profile }) {
 
   const [form, setForm] = useState(EMPTY_FORM);
   const [catatan, setCatatan] = useState("");
+  const [cabangBaru, setCabangBaru] = useState(false);
+  const [tidakVisit, setTidakVisit] = useState(false);
   const [auditDate, setAuditDate] = useState(todayInputValue());
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -59,7 +62,7 @@ export default function StokServiceRatio({ profile }) {
   async function loadBranches() {
     setLoadingBranches(true);
     const { data, error: err } = await supabase.from("branches").select("*").order("name");
-    if (!err) setBranches(data || []);
+    if (!err) setBranches(sortBranches(data || []));
     const { data: recs, error: recErr } = await supabase
       .from("audit_generic")
       .select("*")
@@ -88,6 +91,8 @@ export default function StokServiceRatio({ profile }) {
       total_unit_cabang: entry.data?.total_unit_cabang ?? "",
     });
     setCatatan(entry.data?.catatan || "");
+    setCabangBaru(!!entry.data?.cabang_baru);
+    setTidakVisit(!!entry.data?.tidak_visit);
     setAuditDate(entry.data?.audit_date || todayInputValue());
     setSelectedEntryId(entry.id);
   }
@@ -95,6 +100,8 @@ export default function StokServiceRatio({ profile }) {
   function startNewEntry(period) {
     setForm(EMPTY_FORM);
     setCatatan("");
+    setCabangBaru(false);
+    setTidakVisit(false);
     setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
     setSelectedEntryId(null);
     setSaved(false);
@@ -182,18 +189,22 @@ export default function StokServiceRatio({ profile }) {
         period,
         status: "submitted",
         submitted_by: user.id,
-        data: {
-          audit_date: auditDate,
-          laptop: parseInt(form.laptop, 10) || 0,
-          aksesoris: parseInt(form.aksesoris, 10) || 0,
-          user: parseInt(form.user, 10) || 0,
-          stok_service: parseInt(form.stok_service, 10) || 0,
-          total_unit_cabang: parseInt(form.total_unit_cabang, 10) || 0,
-          ratio,
-          indikator: status.lbl,
-          catatan,
-          auditor_name: profile?.full_name || null,
-        },
+        data: tidakVisit
+          ? { audit_date: auditDate, tidak_visit: true, cabang_baru: cabangBaru, catatan, auditor_name: profile?.full_name || null }
+          : {
+              audit_date: auditDate,
+              tidak_visit: false,
+              laptop: parseInt(form.laptop, 10) || 0,
+              aksesoris: parseInt(form.aksesoris, 10) || 0,
+              user: parseInt(form.user, 10) || 0,
+              stok_service: parseInt(form.stok_service, 10) || 0,
+              total_unit_cabang: parseInt(form.total_unit_cabang, 10) || 0,
+              ratio,
+              indikator: status.lbl,
+              catatan,
+              cabang_baru: cabangBaru,
+              auditor_name: profile?.full_name || null,
+            },
       };
       let saved_;
       if (selectedEntryId) {
@@ -229,8 +240,39 @@ export default function StokServiceRatio({ profile }) {
   function exportPDF() {
     if (!selectedBranch) return;
     const printDate = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
-    const historyRows = fullHistory.map((r) => `<tr>
+
+    if (tidakVisit) {
+      const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Service Ratio ${esc(selectedBranch.name)}</title>
+      <style>
+        * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+        @page { size: A4; margin: 20mm; }
+        body { font-family: Arial, Helvetica, sans-serif; color: #232323; margin: 0; }
+        .page { border: 3px solid #2A1F52; border-radius: 10px; padding: 30mm 20mm; text-align: center; }
+        h1 { color: #2A1F52; font-size: 18px; margin-bottom: 20px; }
+        .badge { display: inline-block; background: #88888822; color: #666; font-weight: 800; font-size: 16px; padding: 10px 26px; border-radius: 30px; margin-bottom: 20px; }
+        p { font-size: 12.5px; color: #444; line-height: 1.6; }
+      </style></head><body>
+        <div class="page">
+          <h1>LAPORAN SERVICE RATIO</h1>
+          <div class="badge">TIDAK VISIT</div>
+          <p><b>Cabang:</b> ${esc(selectedBranch.name)} &middot; <b>Periode:</b> ${esc(periodeLabel(viewPeriod))}</p>
+          <p>Cabang ini tidak dikunjungi/tidak diaudit pada periode tersebut.</p>
+          <p style="margin-top:30px;color:#999;">Dicetak ${printDate}</p>
+        </div>
+      </body></html>`;
+      const win = window.open("", "_blank");
+      if (!win) { setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF."); return; }
+      win.document.write(html);
+      win.document.close();
+      return;
+    }
+
+    const historyRows = fullHistory.map((r) => r.data?.tidak_visit ? `<tr>
         <td>${esc(shortDate(r.data?.audit_date))}</td>
+        <td class="mono">\u2014</td>
+        <td>Tidak Visit</td>
+      </tr>` : `<tr>
+        <td>${esc(shortDate(r.data?.audit_date))}${r.data?.cabang_baru ? '<span class="baru-badge">BARU</span>' : ""}</td>
         <td class="mono">${esc(formatRatioPct(r.data.ratio || 0))}</td>
         <td>${esc(serviceStatusInfo(r.data.ratio || 0).lbl)}</td>
       </tr>`).join("") || `<tr><td colspan="3" style="text-align:center;color:#999;padding:10px;">Belum ada riwayat</td></tr>`;
@@ -253,13 +295,14 @@ export default function StokServiceRatio({ profile }) {
       th { background: #f7f6fb; text-align: left; padding: 6px 9px; border-bottom: 2px solid #2A1F52; color: #2A1F52; }
       td { padding: 6px 9px; border-bottom: 1px solid #eee; }
       .note-box { background: #f5f3fa; border-radius: 8px; padding: 10px 12px; font-size: 10.5px; color: #444; }
-    </style></head><body>
+      .baru-badge { display: inline-block; background: #F4B740; color: #2A1F52; font-weight: 800; font-size: 9px; padding: 2px 9px; border-radius: 20px; margin-left: 8px; }
+    </style></head><body><div id="pdfZoom">
       <div class="hdr">
         <div style="display:flex;align-items:center;gap:12px;"><div class="hdr-badge">KLA</div><div><div class="hdr-title">Laporan Service Ratio</div><div class="hdr-sub">Divisi Audit &middot; KLA Teknologi Indonesia</div></div></div>
         <div style="text-align:right;color:#cfc7e6;font-size:8.5px;">Dicetak ${printDate}</div>
       </div>
       <div class="content">
-        <p><b>Cabang:</b> ${esc(selectedBranch.name)} &nbsp;&middot;&nbsp; <b>Audit tanggal:</b> ${esc(shortDate(auditDate))}</p>
+        <p><b>Cabang:</b> ${esc(selectedBranch.name)} &nbsp;&middot;&nbsp; <b>Audit tanggal:</b> ${esc(shortDate(auditDate))}${cabangBaru ? '<span class="baru-badge">CABANG BARU</span>' : ""}</p>
         <div class="metric-row">
           <div class="metric-card"><div class="l">Stok Service</div><div class="v">${form.stok_service || 0} unit</div></div>
           <div class="metric-card"><div class="l">% Ratio Service</div><div class="v" style="color:${status.color};">${formatRatioPct(ratio)}</div></div>
@@ -271,7 +314,39 @@ export default function StokServiceRatio({ profile }) {
         </table>
         ${catatan ? `<div class="note-box"><b>Catatan:</b> ${esc(catatan)}</div>` : ""}
       </div>
-      <script>window.onload = () => setTimeout(() => window.print(), 300);<\/script>
+      </div>
+      <script>
+        function fitToPage() {
+          const zoomEl = document.getElementById("pdfZoom");
+          const targetHeight = 1000;
+          zoomEl.style.zoom = 1;
+          const naturalHeight = zoomEl.scrollHeight;
+          let zoom = targetHeight / naturalHeight;
+          zoom = Math.min(zoom, 1.05);
+          zoom = Math.max(zoom, 0.55);
+          zoomEl.style.zoom = zoom;
+          setTimeout(() => {
+            const afterHeight = zoomEl.getBoundingClientRect().height;
+            if (afterHeight > targetHeight + 4) {
+              const corrected = Math.max((targetHeight / afterHeight) * zoom, 0.5);
+              zoomEl.style.zoom = corrected;
+            }
+            setTimeout(() => window.print(), 250);
+          }, 100);
+        }
+        function waitForImages() {
+          const imgs = Array.from(document.querySelectorAll("img"));
+          if (!imgs.length) return Promise.resolve();
+          return Promise.all(imgs.map((img) => img.complete ? Promise.resolve() : new Promise((res) => {
+            img.addEventListener("load", res);
+            img.addEventListener("error", res);
+          })));
+        }
+        window.onload = () => {
+          const fontsReady = document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve();
+          Promise.all([fontsReady, waitForImages()]).then(fitToPage);
+        };
+      <\/script>
     </body></html>`;
 
     const win = window.open("", "_blank");
@@ -315,27 +390,37 @@ export default function StokServiceRatio({ profile }) {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(210px, 1fr))", gap: 12 }}>
               {branches.map((b) => {
                 const row = latestByBranchPeriod[`${b.id}|${viewPeriod}`];
-                const rRatio = row ? row.entry.data.ratio || 0 : null;
-                const rStatus = row ? serviceStatusInfo(rRatio) : null;
+                const isTidakVisit = row?.entry.data?.tidak_visit;
+                const rRatio = row && !isTidakVisit ? row.entry.data.ratio || 0 : null;
+                const rStatus = rRatio !== null ? serviceStatusInfo(rRatio) : null;
                 return (
                   <div
                     key={b.id}
                     onClick={() => pickBranch(b)}
                     style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", overflow: "hidden" }}
                   >
-                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: row ? rStatus.color : "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
+                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: !row ? "linear-gradient(90deg, #7c3aed, #F4B740)" : isTidakVisit ? "#888" : rStatus.color }} />
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: row ? 8 : 4 }}>
                       <div style={{ fontWeight: 600, fontSize: 14.5 }}>{b.name}</div>
-                      {row && row.count > 1 && (
-                        <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7c3aed", background: "#7c3aed18", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>{row.count} audit</span>
-                      )}
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        {row && row.entry.data?.cabang_baru && (
+                          <span style={{ fontSize: 9.5, fontWeight: 700, color: "#F4B740", background: "#F4B74022", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>Cabang Baru</span>
+                        )}
+                        {row && row.count > 1 && (
+                          <span style={{ fontSize: 9.5, fontWeight: 700, color: "#7c3aed", background: "#7c3aed18", padding: "2px 7px", borderRadius: 20, flexShrink: 0 }}>{row.count} audit</span>
+                        )}
+                      </div>
                     </div>
                     {row ? (
+                      isTidakVisit ? (
+                        <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: "#88888822", color: "#888", fontSize: 11, fontWeight: 600 }}>Tidak Visit</span>
+                      ) : (
                       <>
                         <div style={{ fontSize: 22, fontWeight: 800, color: rStatus.color }}>{formatRatioPct(rRatio)}</div>
                         <span style={{ display: "inline-block", marginTop: 6, padding: "3px 10px", borderRadius: 20, background: `${rStatus.color}22`, color: rStatus.color, fontSize: 11, fontWeight: 600 }}>{rStatus.lbl}</span>
                         <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 6 }}>Terakhir: {shortDate(row.entry.data?.audit_date)}</div>
                       </>
+                      )
                     ) : (
                       <div style={{ fontSize: 11.5, fontWeight: 400, color: "var(--text-faint)" }}>Belum ada audit &middot; Mulai &rarr;</div>
                     )}
@@ -394,7 +479,8 @@ export default function StokServiceRatio({ profile }) {
                 </div>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {[...entriesThisPeriod].sort((a, b) => (a.data?.audit_date || "").localeCompare(b.data?.audit_date || "")).map((e, i) => {
-                    const st = serviceStatusInfo(e.data.ratio || 0);
+                    const isTV = e.data?.tidak_visit;
+                    const st = !isTV ? serviceStatusInfo(e.data.ratio || 0) : null;
                     const active = e.id === selectedEntryId;
                     return (
                       <div
@@ -409,8 +495,15 @@ export default function StokServiceRatio({ profile }) {
                       >
                         <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {i + 1}</span>
                         <span style={{ fontSize: 12, fontWeight: 600 }}>{shortDate(e.data?.audit_date)}</span>
-                        <span style={{ width: 6, height: 6, borderRadius: "50%", background: st.color }} />
-                        <span style={{ fontSize: 12, fontWeight: 700, color: st.color }}>{formatRatioPct(e.data.ratio || 0)}</span>
+                        {e.data?.cabang_baru && <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>\u2b50 Baru</span>}
+                        {isTV ? (
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#888" }}>Tidak Visit</span>
+                        ) : (
+                          <>
+                            <span style={{ width: 6, height: 6, borderRadius: "50%", background: st.color }} />
+                            <span style={{ fontSize: 12, fontWeight: 700, color: st.color }}>{formatRatioPct(e.data.ratio || 0)}</span>
+                          </>
+                        )}
                       </div>
                     );
                   })}
@@ -431,6 +524,17 @@ export default function StokServiceRatio({ profile }) {
               </div>
             )}
 
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>
+              <input type="checkbox" checked={tidakVisit} disabled={!canEdit} onChange={(e) => { setTidakVisit(e.target.checked); setSaved(false); }} />
+              Cabang ini tidak dikunjungi bulan ini (Tidak Visit)
+            </label>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>
+              <input type="checkbox" checked={cabangBaru} disabled={!canEdit} onChange={(e) => { setCabangBaru(e.target.checked); setSaved(false); }} />
+              Cabang Baru <span style={{ color: "var(--text-faint)" }}>(tetap dihitung normal, cuma ditandai di laporan)</span>
+            </label>
+
+            {!tidakVisit && (
+              <>
             {/* Row 1: Input data + Hasil perhitungan */}
             <div style={{ display: "grid", gridTemplateColumns: "1.15fr 1fr", gap: 16, marginBottom: 16, alignItems: "start" }}>
 
@@ -523,6 +627,8 @@ export default function StokServiceRatio({ profile }) {
                 <div style={{ textAlign: "right", fontSize: 10.5, color: "var(--text-faint)", marginTop: 6 }}>{catatan.length} / 300</div>
               </div>
             </div>
+            </>
+            )}
 
             {/* Bottom action bar */}
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 12, padding: "12px 16px" }}>

@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { CATS, nowPeriode, periodeLabel, addMonthsToPeriod } from "../../lib/sopConfig";
 import { countRusak } from "../AuditInventaris";
+import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
 
 const BASELINE = 150; // baseline temuan per cabang, sesuai formula yang disepakati
 
@@ -135,6 +136,78 @@ export default function SopKepatuhan() {
 
   const companyInfo = current.avgPct !== null ? kategoriInfo(current.avgPct) : null;
 
+  function exportPDF() {
+    const now = new Date();
+    const printedAtLabel = now.toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }) + ", " + now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
+    const BARU_COLOR = "#F4B740";
+
+    const catGroup = { "Sangat Baik": 0, "Baik": 0, "Cukup": 0, "Perlu Perbaikan": 0 };
+    const catColor = { "Sangat Baik": "#1a9e6e", "Baik": "#2f9e46", "Cukup": "#b07212", "Perlu Perbaikan": "#a32020" };
+    const scorableRows = current.visitedRows.filter((r) => !r.isCabangBaru);
+    scorableRows.forEach((r) => { catGroup[kategoriInfo(r.pct).lbl]++; });
+    const countBaru = current.cabangBaruRows.length;
+
+    const tableRows = current.rows.map((r) => {
+      if (r.status !== "audited") {
+        return { cells: [r.branch.name, null, null, null, null, null, null], badge: { label: r.status === "tidak_visit" ? "Tidak Visit" : "Belum Diaudit", color: "#888" } };
+      }
+      const info = kategoriInfo(r.pct);
+      return {
+        cells: [
+          r.isCabangBaru ? `\u2b50 ${r.branch.name} (CABANG BARU)` : r.branch.name,
+          String(r.sopTemuan), String(r.stokTemuan), String(r.keuanganTemuan), String(r.asetTemuan),
+          String(r.totalTemuan), `${Math.round(r.pct * 100)}%`,
+        ],
+        badge: r.isCabangBaru ? { label: "CABANG BARU", color: BARU_COLOR } : { label: info.lbl, color: info.color },
+      };
+    });
+
+    const donutSegments = [
+      ...Object.entries(catGroup).filter(([, c]) => c > 0).map(([label, count]) => ({ label, count, pct: scorableRows.length ? Math.round((count / scorableRows.length) * 100) : 0, color: catColor[label] })),
+      ...(countBaru > 0 ? [{ label: "Cabang Baru", count: countBaru, pct: current.visitedRows.length ? Math.round((countBaru / current.visitedRows.length) * 100) : 0, color: BARU_COLOR }] : []),
+    ];
+
+    const html = buildSummaryReportHtml({
+      reportTitle: "LAPORAN KEPATUHAN SOP",
+      scopeLabel: "SEMUA CABANG",
+      periodLabel: periodeLabel(period),
+      printedAtLabel,
+      summaryCards: [
+        { icon: "shieldCheck", label: "SKOR KEPATUHAN", value: current.avgPct !== null ? `${Math.round(current.avgPct * 100)}%` : "\u2014", sub: companyInfo?.lbl || "Belum ada data", color: companyInfo?.color || "#2A1F52" },
+        { icon: "alertTriangle", label: "TOTAL TEMUAN", value: String(totalTemuanNow), sub: `Bulan lalu: ${totalTemuanPrev}`, color: "#a32020" },
+        { icon: "alertCircle", label: "TEMUAN BERULANG", value: String(temuanBerulang), sub: "SOP Operasional bulan ini", color: temuanBerulang > 0 ? "#a32020" : "#1a9e6e" },
+        { icon: "building", label: "CABANG DIAUDIT", value: `${current.visitedRows.length} / ${branches.length}`, sub: `Tidak Visit: ${current.tidakVisitRows.length}`, color: "#2A1F52" },
+        ...(countBaru > 0 ? [{ icon: "building", label: "CABANG BARU", value: String(countBaru), sub: "Belum masuk itungan skor", color: BARU_COLOR }] : []),
+      ],
+      tableHeaders: ["Cabang", "SOP Operasional", "Persediaan Stok", "Keuangan", "Aset", "Total Temuan", "% Skor"],
+      tableRows,
+      donutSegments,
+      donutCenterLines: [String(current.visitedRows.length), "Cabang Audited"],
+      legendItems: [
+        { icon: "shieldCheck", color: "#1a9e6e", title: "SANGAT BAIK", desc: "\u2265 90% skor kepatuhan" },
+        { icon: "shieldCheck", color: "#2f9e46", title: "BAIK", desc: "80\u201389% skor kepatuhan" },
+        { icon: "alertCircle", color: "#b07212", title: "CUKUP", desc: "70\u201379% skor kepatuhan" },
+        { icon: "alertTriangle", color: "#a32020", title: "PERLU PERBAIKAN", desc: "< 70% skor kepatuhan" },
+        ...(countBaru > 0 ? [{ icon: "building", color: BARU_COLOR, title: "CABANG BARU", desc: "Belum ikut dihitung ke skor company-wide" }] : []),
+      ],
+      summaryList: [
+        { icon: "shieldCheck", label: "Cabang Audited", value: `${current.visitedRows.length} / ${branches.length}` },
+        { icon: "alertTriangle", label: "Total Temuan Bulan Ini", value: String(totalTemuanNow) },
+        { icon: "alertCircle", label: "Total Temuan Bulan Lalu", value: String(totalTemuanPrev) },
+        { icon: "wallet", label: "Skor Kepatuhan Company-wide", value: current.avgPct !== null ? `${Math.round(current.avgPct * 100)}%` : "\u2014", strong: true },
+      ],
+      notes: [
+        `Formula: % Skor = 1 \u2212 (Total Temuan \u00f7 ${BASELINE}). Gabungan dari SOP Operasional + Persediaan Stok + Keuangan (saldo minus) + Aset.`,
+        "Kategori: \u226590% Sangat Baik \u00b7 80-89% Baik \u00b7 70-79% Cukup \u00b7 <70% Perlu Perbaikan.",
+        "Cabang tanpa data Audit SOP bulan ini dianggap Tidak Visit dan dikecualikan dari rata-rata.",
+        ...(countBaru > 0 ? [`${countBaru} cabang ditandai "CABANG BARU" \u2014 tetap dihitung & ditampilkan skornya di tabel, tapi dikecualikan dari skor company-wide di atas.`] : []),
+      ],
+      pageLabel: "Halaman 1 dari 1",
+    });
+    const opened = openPrintWindow("Laporan Kepatuhan SOP", html);
+    if (!opened) setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF.");
+  }
+
   return (
     <div style={{ flex: 1 }}>
       <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
@@ -142,10 +215,13 @@ export default function SopKepatuhan() {
           <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Skor Kepatuhan SOP</div>
           <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Gabungan: SOP Operasional + Persediaan Stok + Keuangan + Aset</div>
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px" }}>
-          <button className="btn-ghost" onClick={() => setPeriod(addMonthsToPeriod(period, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
-          <div className="mono" style={{ fontWeight: 600, minWidth: 130, textAlign: "center", fontSize: 13.5 }}>{periodeLabel(period)}</div>
-          <button className="btn-ghost" onClick={() => setPeriod(addMonthsToPeriod(period, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px" }}>
+            <button className="btn-ghost" onClick={() => setPeriod(addMonthsToPeriod(period, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
+            <div className="mono" style={{ fontWeight: 600, minWidth: 130, textAlign: "center", fontSize: 13.5 }}>{periodeLabel(period)}</div>
+            <button className="btn-ghost" onClick={() => setPeriod(addMonthsToPeriod(period, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
+          </div>
+          <button className="btn" onClick={exportPDF}>Export PDF</button>
         </div>
       </div>
 

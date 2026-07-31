@@ -57,7 +57,9 @@ export default function StokLaporan() {
   }, [kesehatanRecords]);
 
   function latestFor(records, branchId, period) {
-    return records.find((r) => r.branch_id === branchId && r.period === period) || null;
+    const matches = records.filter((r) => r.branch_id === branchId && r.period === period);
+    if (!matches.length) return null;
+    return [...matches].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))[0];
   }
   function formatDate(v) {
     if (!v) return "\u2014";
@@ -77,13 +79,16 @@ export default function StokLaporan() {
       const rec = latestFor(serviceRecords, b.id, servicePeriod);
       if (!rec) return { branch: b, rec: null };
       const status = serviceStatusInfo(rec.data.ratio || 0);
-      return { branch: b, rec, status };
+      return { branch: b, rec, status, isBaru: !!rec.data.cabang_baru };
     });
     const audited = rows.filter((r) => r.rec);
     if (!audited.length) { setError("Belum ada data Service Ratio pada periode ini."); return; }
+    const scorable = audited.filter((r) => !r.isBaru);
+    const countBaru = audited.filter((r) => r.isBaru).length;
 
+    const BARU_COLOR = "#F4B740";
     const grouped = { Terkendali: 0, Monitoring: 0, "Perlu Perhatian": 0 };
-    audited.forEach((r) => { grouped[r.status.lbl] = (grouped[r.status.lbl] || 0) + 1; });
+    scorable.forEach((r) => { grouped[r.status.lbl] = (grouped[r.status.lbl] || 0) + 1; });
     const colorMap = { Terkendali: "#1a9e6e", Monitoring: "#b07212", "Perlu Perhatian": "#a32020" };
     const total = scopeBranches.length;
 
@@ -92,15 +97,18 @@ export default function StokLaporan() {
       if (!row.rec) return { cells: [String(i + 1), b.name, null, null, null, null, null, null], badge: null };
       const d = row.rec.data;
       return {
-        cells: [String(i + 1), b.name, String(d.laptop ?? "\u2014"), String(d.aksesoris ?? "\u2014"), String(d.user ?? "\u2014"), String(d.stok_service ?? "\u2014"), String(d.total_unit_cabang ?? "\u2014"), formatRatioPct(d.ratio || 0)],
-        badge: { label: row.status.lbl, color: colorMap[row.status.lbl] },
+        cells: [String(i + 1), row.isBaru ? `\u2b50 ${b.name} (CABANG BARU)` : b.name, String(d.laptop ?? "\u2014"), String(d.aksesoris ?? "\u2014"), String(d.user ?? "\u2014"), String(d.stok_service ?? "\u2014"), String(d.total_unit_cabang ?? "\u2014"), formatRatioPct(d.ratio || 0)],
+        badge: row.isBaru ? { label: "CABANG BARU", color: BARU_COLOR } : { label: row.status.lbl, color: colorMap[row.status.lbl] },
       };
     });
 
-    const donutSegments = Object.entries(grouped).filter(([, c]) => c > 0).map(([label, count]) => ({ label, count, pct: Math.round((count / audited.length) * 100), color: colorMap[label] }));
+    const donutSegments = [
+      ...Object.entries(grouped).filter(([, c]) => c > 0).map(([label, count]) => ({ label, count, pct: Math.round((count / scorable.length) * 100), color: colorMap[label] })),
+      ...(countBaru > 0 ? [{ label: "Cabang Baru", count: countBaru, pct: Math.round((countBaru / audited.length) * 100), color: BARU_COLOR }] : []),
+    ];
 
     let top = null, low = null;
-    audited.forEach((r) => {
+    scorable.forEach((r) => {
       const ratio = r.rec.data.ratio || 0;
       if (!top || ratio < top.ratio) top = { ...r, ratio }; // ratio terbaik = paling kecil
       if (!low || ratio > low.ratio) low = { ...r, ratio };
@@ -113,9 +121,10 @@ export default function StokLaporan() {
       printedAtLabel,
       summaryCards: [
         { icon: "building", label: "TOTAL CABANG", value: String(total), sub: "Cabang", color: "#2A1F52" },
-        { icon: "shieldCheck", label: "TERKENDALI", value: String(grouped.Terkendali), sub: `Cabang (${Math.round((grouped.Terkendali / audited.length) * 100)}%)`, color: "#1a9e6e" },
-        { icon: "alertCircle", label: "MONITORING", value: String(grouped.Monitoring), sub: `Cabang (${Math.round((grouped.Monitoring / audited.length) * 100)}%)`, color: "#b07212" },
-        { icon: "alertTriangle", label: "PERLU PERHATIAN", value: String(grouped["Perlu Perhatian"]), sub: `Cabang (${Math.round((grouped["Perlu Perhatian"] / audited.length) * 100)}%)`, color: "#a32020" },
+        { icon: "shieldCheck", label: "TERKENDALI", value: String(grouped.Terkendali), sub: `Cabang (${scorable.length ? Math.round((grouped.Terkendali / scorable.length) * 100) : 0}%)`, color: "#1a9e6e" },
+        { icon: "alertCircle", label: "MONITORING", value: String(grouped.Monitoring), sub: `Cabang (${scorable.length ? Math.round((grouped.Monitoring / scorable.length) * 100) : 0}%)`, color: "#b07212" },
+        { icon: "alertTriangle", label: "PERLU PERHATIAN", value: String(grouped["Perlu Perhatian"]), sub: `Cabang (${scorable.length ? Math.round((grouped["Perlu Perhatian"] / scorable.length) * 100) : 0}%)`, color: "#a32020" },
+        ...(countBaru > 0 ? [{ icon: "building", label: "CABANG BARU", value: String(countBaru), sub: "Belum masuk itungan indikator", color: BARU_COLOR }] : []),
       ],
       tableHeaders: ["No", "Cabang", "Laptop", "Aksesoris", "User Service", "Stok Service", "Total Unit/Cabang", "% Ratio"],
       tableRows,
@@ -125,6 +134,7 @@ export default function StokLaporan() {
         { icon: "shieldCheck", color: "#1a9e6e", title: "TERKENDALI", desc: "% Ratio Service \u2264 0,22%" },
         { icon: "alertCircle", color: "#b07212", title: "MONITORING", desc: "% Ratio Service 0,22% s.d. 0,33%" },
         { icon: "alertTriangle", color: "#a32020", title: "PERLU PERHATIAN", desc: "% Ratio Service \u2265 0,33%" },
+        ...(countBaru > 0 ? [{ icon: "building", color: BARU_COLOR, title: "CABANG BARU", desc: "Cabang baru dibuka, belum ikut dihitung ke indikator" }] : []),
       ],
       summaryList: [
         { icon: "shieldCheck", label: "Cabang Sudah Diaudit", value: `${audited.length} / ${total}` },
@@ -135,6 +145,7 @@ export default function StokLaporan() {
         "Laporan ini merupakan ringkasan Service Ratio seluruh cabang pada periode yang dipilih.",
         "% Ratio Service dihitung dari Stok Service dibagi Total Unit per Cabang. Makin kecil ratio, makin baik.",
         `Harap lakukan tindak lanjut untuk cabang dengan indikator "Perlu Perhatian".`,
+        ...(countBaru > 0 ? [`${countBaru} cabang ditandai "CABANG BARU" \u2014 datanya belum ikut dihitung ke persentase distribusi indikator di atas.`] : []),
       ],
       pageLabel: "Halaman 1 dari 1",
     });
@@ -156,7 +167,7 @@ export default function StokLaporan() {
         return {
           Cabang: b.name, Periode: periodeLabel(servicePeriod), "Tanggal Audit": formatDate(d.audit_date),
           Laptop: d.laptop, Aksesoris: d.aksesoris, "User Service": d.user, "Stok Service": d.stok_service,
-          "Total Unit/Cabang": d.total_unit_cabang, "% Ratio": formatRatioPct(d.ratio || 0), Indikator: status.lbl,
+          "Total Unit/Cabang": d.total_unit_cabang, "% Ratio": formatRatioPct(d.ratio || 0), Indikator: d.cabang_baru ? "Cabang Baru" : status.lbl,
           Auditor: d.auditor_name || "\u2014",
         };
       });
@@ -184,13 +195,16 @@ export default function StokLaporan() {
       if (!rec) return { branch: b, rec: null };
       if (rec.data.tidak_visit) return { branch: b, rec, tidakVisit: true };
       const status = kesehatanStatusInfo(rec.data.kesehatan_pct || 0);
-      return { branch: b, rec, status };
+      return { branch: b, rec, status, isBaru: !!rec.data.cabang_baru };
     });
     const audited = rows.filter((r) => r.rec && !r.tidakVisit);
     if (!audited.length) { setError("Belum ada data Kesehatan Stok pada periode ini."); return; }
+    const scorable = audited.filter((r) => !r.isBaru);
+    const countBaru = audited.filter((r) => r.isBaru).length;
 
+    const BARU_COLOR = "#F4B740";
     const grouped = { Terkendali: 0, Waspada: 0, Monitoring: 0, "Perlu Perhatian": 0 };
-    audited.forEach((r) => { grouped[r.status.lbl] = (grouped[r.status.lbl] || 0) + 1; });
+    scorable.forEach((r) => { grouped[r.status.lbl] = (grouped[r.status.lbl] || 0) + 1; });
     const colorMap = { Terkendali: "#1a9e6e", Waspada: "#2f9e9e", Monitoring: "#b07212", "Perlu Perhatian": "#a32020" };
     const total = scopeBranches.length;
 
@@ -200,15 +214,18 @@ export default function StokLaporan() {
       if (row.tidakVisit) return { cells: [String(i + 1), b.name, "Tidak Visit", "\u2014", "\u2014", "\u2014", "\u2014"], badge: { label: "Tidak Visit", color: "#888" } };
       const d = row.rec.data;
       return {
-        cells: [String(i + 1), b.name, String(d.temuan_count ?? "\u2014"), String(d.bonus_count ?? "\u2014"), d.untung_rugi >= 0 ? `Rp ${d.untung_rugi.toLocaleString("id-ID")}` : `-Rp ${Math.abs(d.untung_rugi).toLocaleString("id-ID")}`, String(d.skor_total ?? "\u2014"), formatKesehatanPct(d.kesehatan_pct || 0)],
-        badge: { label: row.status.lbl, color: colorMap[row.status.lbl] },
+        cells: [String(i + 1), row.isBaru ? `\u2b50 ${b.name} (CABANG BARU)` : b.name, String(d.temuan_count ?? "\u2014"), String(d.bonus_count ?? "\u2014"), d.untung_rugi >= 0 ? `Rp ${d.untung_rugi.toLocaleString("id-ID")}` : `-Rp ${Math.abs(d.untung_rugi).toLocaleString("id-ID")}`, String(d.skor_total ?? "\u2014"), formatKesehatanPct(d.kesehatan_pct || 0)],
+        badge: row.isBaru ? { label: "CABANG BARU", color: BARU_COLOR } : { label: row.status.lbl, color: colorMap[row.status.lbl] },
       };
     });
 
-    const donutSegments = Object.entries(grouped).filter(([, c]) => c > 0).map(([label, count]) => ({ label, count, pct: Math.round((count / audited.length) * 100), color: colorMap[label] }));
+    const donutSegments = [
+      ...Object.entries(grouped).filter(([, c]) => c > 0).map(([label, count]) => ({ label, count, pct: Math.round((count / scorable.length) * 100), color: colorMap[label] })),
+      ...(countBaru > 0 ? [{ label: "Cabang Baru", count: countBaru, pct: Math.round((countBaru / audited.length) * 100), color: BARU_COLOR }] : []),
+    ];
 
     let top = null, low = null;
-    audited.forEach((r) => {
+    scorable.forEach((r) => {
       const pct = r.rec.data.kesehatan_pct || 0;
       if (!top || pct > top.pct) top = { ...r, pct };
       if (!low || pct < low.pct) low = { ...r, pct };
@@ -224,6 +241,7 @@ export default function StokLaporan() {
         { icon: "shieldCheck", label: "TERKENDALI", value: String(grouped.Terkendali), sub: "Cabang", color: "#1a9e6e" },
         { icon: "alertCircle", label: "MONITORING", value: String(grouped.Monitoring), sub: "Cabang", color: "#b07212" },
         { icon: "alertTriangle", label: "PERLU PERHATIAN", value: String(grouped["Perlu Perhatian"]), sub: "Cabang", color: "#a32020" },
+        ...(countBaru > 0 ? [{ icon: "building", label: "CABANG BARU", value: String(countBaru), sub: "Belum masuk itungan indikator", color: BARU_COLOR }] : []),
       ],
       tableHeaders: ["No", "Cabang", "Temuan", "Bonus Tdk Ada", "Untung/Rugi", "Skor Total", "% Kesehatan"],
       tableRows,
@@ -234,6 +252,7 @@ export default function StokLaporan() {
         { icon: "alertCircle", color: "#2f9e9e", title: "WASPADA", desc: "70\u201384% \u2014 temuan ringan" },
         { icon: "alertCircle", color: "#b07212", title: "MONITORING", desc: "50\u201369% \u2014 temuan signifikan" },
         { icon: "alertTriangle", color: "#a32020", title: "PERLU PERHATIAN", desc: "< 50% \u2014 risiko tinggi" },
+        ...(countBaru > 0 ? [{ icon: "building", color: BARU_COLOR, title: "CABANG BARU", desc: "Cabang baru dibuka, belum ikut dihitung ke indikator" }] : []),
       ],
       summaryList: [
         { icon: "shieldCheck", label: "Cabang Sudah Diaudit", value: `${audited.length} / ${total}` },
@@ -244,6 +263,7 @@ export default function StokLaporan() {
         "Laporan ini merupakan ringkasan Kesehatan Stok seluruh cabang pada periode yang dipilih.",
         "% Kesehatan Barang = MAX(0, 1 \u2212 Skor Total/100). Skor Total = Skor Temuan + (Skor Rugi \u00d7 5).",
         `Harap lakukan tindak lanjut untuk cabang dengan indikator "Perlu Perhatian".`,
+        ...(countBaru > 0 ? [`${countBaru} cabang ditandai "CABANG BARU" \u2014 datanya belum ikut dihitung ke persentase distribusi indikator di atas.`] : []),
       ],
       pageLabel: "Halaman 1 dari 1",
     });
@@ -267,7 +287,7 @@ export default function StokLaporan() {
           Cabang: b.name, Periode: periodeLabel(kesehatanPeriod), "Tanggal Audit": formatDate(d.audit_date),
           "Total Barang Plus Minus/Tertukar": d.temuan_count, "Total Bonus Fisik Tidak Ada": d.bonus_count,
           "Untung/Rugi": d.untung_rugi, "Skor Temuan": d.skor_temuan, "Skor Rugi": d.skor_rugi, "Skor Total": d.skor_total,
-          "% Kesehatan Barang": formatKesehatanPct(d.kesehatan_pct || 0), Indikator: status.lbl, Auditor: d.auditor_name || "\u2014",
+          "% Kesehatan Barang": formatKesehatanPct(d.kesehatan_pct || 0), Indikator: d.cabang_baru ? "Cabang Baru" : status.lbl, Auditor: d.auditor_name || "\u2014",
         };
       });
       const wb = XLSX.utils.book_new();
