@@ -33,7 +33,7 @@ function countStokTemuan(stokRecord) {
 }
 
 function keuanganSisa(entry) {
-  if (!entry) return null;
+  if (!entry || entry.tidak_visit) return null;
   if (entry.sisa_saldo !== null && entry.sisa_saldo !== undefined && entry.sisa_saldo !== "") {
     return parseFloat(entry.sisa_saldo) || 0;
   }

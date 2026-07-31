@@ -9,7 +9,7 @@ import {
 
 function emptyChecklist() {
   const state = {};
-  CATS.forEach((c) => c.items.forEach((_, i) => { state[c.id + "_" + i] = false; }));
+  CATS.forEach((c) => c.items.forEach((_, i) => { state[c.id + "_" + i] = true; }));
   return state;
 }
 
@@ -130,6 +130,21 @@ export default function SopAuditCabang({ profile }) {
     setChecklist((prev) => {
       const next = { ...prev, [id]: !prev[id] };
       if (next[id]) setNotes((n) => ({ ...n, [id]: "" }));
+      return next;
+    });
+    setSaved(false);
+  }
+
+  function checkAllInCategory(cat) {
+    if (!canEdit) return;
+    setChecklist((prev) => {
+      const next = { ...prev };
+      cat.items.forEach((_, i) => { next[cat.id + "_" + i] = true; });
+      return next;
+    });
+    setNotes((prev) => {
+      const next = { ...prev };
+      cat.items.forEach((_, i) => { delete next[cat.id + "_" + i]; });
       return next;
     });
     setSaved(false);
@@ -553,6 +568,15 @@ export default function SopAuditCabang({ profile }) {
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <span style={{ fontSize: 13, fontWeight: 600, color: done === c.items.length ? "#1a9e6e" : "var(--text-secondary)" }}>{done}/{c.items.length}</span>
+                      {canEdit && done < c.items.length && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); checkAllInCategory(c); }}
+                          className="btn-ghost"
+                          style={{ fontSize: 11, padding: "4px 10px", color: "#1a9e6e", borderColor: "rgba(26,158,110,0.4)" }}
+                        >
+                          &#10003; Centang Semua
+                        </button>
+                      )}
                       <span style={{ transform: isOpen ? "rotate(180deg)" : "none", transition: "transform .15s", fontSize: 11, color: "var(--text-faint)" }}>&#9660;</span>
                     </div>
                   </div>
