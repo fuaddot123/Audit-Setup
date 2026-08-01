@@ -56,6 +56,14 @@ function resolveEntry(moduleKey, branchId, grouped, choices) {
 
 // ── Kalkulasi Kepatuhan SOP gabungan (4 sumber) — sama persis formula di SopKepatuhan.js ──
 const BASELINE = 150;
+// Sama persis dengan pola threshold di components/sop/SopKepatuhan.js
+function kategoriInfo(pct) {
+  const v = pct * 100;
+  if (v >= 90) return { lbl: "Sangat Baik", color: "1a9e6e" };
+  if (v >= 80) return { lbl: "Baik", color: "2f9e46" };
+  if (v >= 70) return { lbl: "Cukup", color: "b07212" };
+  return { lbl: "Perlu Perbaikan", color: "a32020" };
+}
 function countSopTemuan(sopRecord) {
   if (!sopRecord) return 0;
   const checks = sopRecord.data?.checks || {};
@@ -154,9 +162,14 @@ export default function LaporanBulanan({ profile }) {
       const prevPeriod = addMonths(period, -1);
       setProgress("Mengambil data\u2026");
 
+      // 6 bulan terakhir (termasuk bulan yang lagi di-generate) — buat chart tren
+      const trendPeriods = [];
+      for (let i = 5; i >= 0; i--) trendPeriods.push(addMonths(period, -i));
+
       const [
         brRes, sopCurRes, sopPrevRes, svcCurRes, svcPrevRes,
-        kesCurRes, kesPrevRes, keuCurRes, keuPrevRes, invCurRes, kpiRes, profRes, keuSettingsRes,
+        kesCurRes, kesPrevRes, keuCurRes, keuPrevRes, invCurRes, invPrevRes, kpiRes, profRes, keuSettingsRes,
+        kesTrendRes, svcTrendRes, keuTrendRes, sopTrendRes, invTrendRes,
       ] = await Promise.all([
         supabase.from("branches").select("*").order("name"),
         supabase.from("audit_generic").select("*").eq("module", "sop").eq("period", period),
@@ -168,11 +181,72 @@ export default function LaporanBulanan({ profile }) {
         supabase.from("audit_keuangan").select("*").eq("period", period),
         supabase.from("audit_keuangan").select("*").eq("period", prevPeriod),
         supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("period", period),
+        supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("period", prevPeriod),
         supabase.from("audit_kpi").select("*").eq("period", period),
         supabase.from("profiles").select("*"),
         supabase.from("settings_keuangan").select("*").eq("id", 1).maybeSingle(),
+        supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").in("period", trendPeriods),
+        supabase.from("audit_generic").select("*").eq("module", "stok_service").in("period", trendPeriods),
+        supabase.from("audit_keuangan").select("*").in("period", trendPeriods),
+        supabase.from("audit_generic").select("*").eq("module", "sop").in("period", trendPeriods),
+        supabase.from("audit_generic").select("*").eq("module", "inventaris").in("period", trendPeriods),
       ]);
       const keuSettings = keuSettingsRes.data || { terkendali: 70, efisien: 95, monitoring: 105 };
+
+      // ── Rata-rata company-wide per bulan (6 bulan terakhir) — buat chart tren ──
+      // Cabang Baru & Tidak Visit dikecualikan dari rata-rata, konsisten sama aturan di tempat lain.
+      function monthlyAvg(records, valueKey, isJsonb) {
+        return trendPeriods.map((p) => {
+          const inMonth = records.filter((r) => r.period === p);
+          const valid = inMonth.filter((r) => {
+            const d = isJsonb ? r.data : r;
+            return d && !d.tidak_visit && !d.cabang_baru;
+          });
+          if (!valid.length) return null;
+          const sum = valid.reduce((s, r) => s + (Number((isJsonb ? r.data : r)[valueKey]) || 0), 0);
+          return sum / valid.length;
+        });
+      }
+      const kesTrend = monthlyAvg(kesTrendRes.data || [], "kesehatan_pct", true);
+      const svcTrend = monthlyAvg(svcTrendRes.data || [], "ratio", true);
+      const keuTrend = (() => {
+        // Audit Keuangan nggak nyimpen "posisi" langsung, jadi dihitung dari field mentah dulu per baris.
+        return trendPeriods.map((p) => {
+          const inMonth = (keuTrendRes.data || []).filter((r) => r.period === p && !r.tidak_visit && !r.cabang_baru);
+          if (!inMonth.length) return null;
+          const vals = inMonth.map((r) => computeKeuStatus(r, keuSettings)?.posisi || 0);
+          return vals.reduce((s, v) => s + v, 0) / vals.length;
+        });
+      })();
+
+      // Kepatuhan SOP gabungan — 4 sumber sekaligus, per bulan
+      const kepatuhanTrend = (() => {
+        const kesByKey = {}, keuByKey = {}, invByKey = {};
+        (kesTrendRes.data || []).forEach((r) => { kesByKey[`${r.branch_id}|${r.period}`] = r; });
+        (keuTrendRes.data || []).forEach((r) => { keuByKey[`${r.branch_id}|${r.period}`] = r; });
+        (invTrendRes.data || []).forEach((r) => { invByKey[`${r.branch_id}|${r.period}`] = r; });
+
+        return trendPeriods.map((p) => {
+          const sopThisMonth = (sopTrendRes.data || []).filter((r) => r.period === p);
+          const pctList = [];
+          sopThisMonth.forEach((sopRec) => {
+            if (sopRec.data?.tidak_visit || sopRec.data?.cabang_baru) return;
+            const key = `${sopRec.branch_id}|${p}`;
+            const stokRec = kesByKey[key];
+            const keuRec = keuByKey[key];
+            const invRec = invByKey[key];
+            const keuSisa = keuRec ? keuanganSisa(keuRec) : null;
+            const sopTemuan = countSopTemuan(sopRec);
+            const stokTemuan = countStokTemuan(stokRec);
+            const keuanganTemuan = keuSisa !== null && keuSisa < 0 ? 1 : 0;
+            const asetTemuan = invRec && !invRec.data?.tidak_visit ? countRusak(invRec.data?.categories) : 0;
+            const total = sopTemuan + stokTemuan + keuanganTemuan + asetTemuan;
+            pctList.push(Math.max(0, 1 - total / BASELINE));
+          });
+          if (!pctList.length) return null;
+          return pctList.reduce((s, v) => s + v, 0) / pctList.length;
+        });
+      })();
 
       const allBr = brRes.data || [];
       if (!allBr.length) throw new Error("Belum ada data cabang.");
@@ -188,7 +262,7 @@ export default function LaporanBulanan({ profile }) {
       };
       const groupedPrev = {
         sop: groupByBranch(sopPrevRes.data), svc: groupByBranch(svcPrevRes.data), kes: groupByBranch(kesPrevRes.data),
-        keu: groupByBranch(keuPrevRes.data),
+        keu: groupByBranch(keuPrevRes.data), inv: groupByBranch(invPrevRes.data),
       };
 
       // ── Deteksi cabang yang punya lebih dari 1 audit bulan ini di modul manapun ──
@@ -233,6 +307,7 @@ export default function LaporanBulanan({ profile }) {
         const keuCur = find(groupedCur.keu, "keu", b.id);
         const keuPrev = resolveEntry("keu", b.id, groupedPrev.keu, {});
         const invCur = find(groupedCur.inv, "inv", b.id);
+        const invPrev = resolveEntry("inv", b.id, groupedPrev.inv, {});
 
         const tidakVisitSOP = sopCur?.data?.tidak_visit;
         const sopScore = sopCur && !tidakVisitSOP ? calcWeightedFromRecord(sopCur.data) : null;
@@ -296,17 +371,22 @@ export default function LaporanBulanan({ profile }) {
         const keuCurDetail = keuDetail(keuCur);
         const keuPrevDetail = keuDetail(keuPrev);
 
-        // Kepatuhan gabungan
-        let kepatuhan = null;
-        let totalTemuanBranch = null;
-        if (sopCur && !tidakVisitSOP) {
-          const sopTemuan = countSopTemuan(sopCur);
-          const stokTemuan = countStokTemuan(kesCur);
-          const keuanganTemuan = sisa !== null && sisa < 0 ? 1 : 0;
-          const asetTemuan = invCur && !invCur.data?.tidak_visit ? countRusak(invCur.data?.categories) : 0;
-          totalTemuanBranch = sopTemuan + stokTemuan + keuanganTemuan + asetTemuan;
-          kepatuhan = Math.max(0, 1 - totalTemuanBranch / BASELINE);
+        // Kepatuhan gabungan — sekarang dan bulan lalu
+        function kepDetail(sopRec, stokRec, keuSisa, invRec) {
+          if (!sopRec) return { hasData: false, tidakVisit: false };
+          if (sopRec.data?.tidak_visit) return { hasData: true, tidakVisit: true };
+          const sopTemuan = countSopTemuan(sopRec);
+          const stokTemuan = countStokTemuan(stokRec);
+          const keuanganTemuan = keuSisa !== null && keuSisa < 0 ? 1 : 0;
+          const asetTemuan = invRec && !invRec.data?.tidak_visit ? countRusak(invRec.data?.categories) : 0;
+          const totalTemuan = sopTemuan + stokTemuan + keuanganTemuan + asetTemuan;
+          const pct = Math.max(0, 1 - totalTemuan / BASELINE);
+          return { hasData: true, tidakVisit: false, cabangBaru: !!sopRec.data?.cabang_baru, sopTemuan, stokTemuan, keuanganTemuan, asetTemuan, totalTemuan, pct };
         }
+        const kepCurDetail = kepDetail(sopCur, kesCur, sisa, invCur);
+        const kepPrevDetail = kepDetail(sopPrev, kesPrev, sisaPrev, invPrev);
+        const kepatuhan = kepCurDetail.hasData && !kepCurDetail.tidakVisit ? kepCurDetail.pct : null;
+        const totalTemuanBranch = kepCurDetail.hasData && !kepCurDetail.tidakVisit ? kepCurDetail.totalTemuan : null;
 
         // Temuan (foto+catatan) buat slide per-cabang
         const findings = [];
@@ -327,7 +407,7 @@ export default function LaporanBulanan({ profile }) {
           svcRatio, svcRatioPrev, svcCurDetail, svcPrevDetail, kesPct, kesPctPrev, kesCurDetail, kesPrevDetail, sisa, sisaPrev, keuCurDetail, keuPrevDetail,
           totalTemuanBranch,
           pengeluaran: keuCur ? parseFloat(keuCur.pengeluaran) || 0 : 0,
-          kepatuhan, findings,
+          kepatuhan, kepCurDetail, kepPrevDetail, findings,
         };
       });
 
@@ -400,6 +480,45 @@ export default function LaporanBulanan({ profile }) {
         slide.addText(periodeLabel(period), { x: 9.5, y: 0, w: 3.4, h: 0.55, fontSize: 11, color: GOLD, align: "right", valign: "middle", margin: 0 });
       }
 
+      function shortMonth(p) {
+        const [y, m] = p.split("-");
+        const names = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Ags", "Sep", "Okt", "Nov", "Des"];
+        return names[parseInt(m, 10) - 1] + " " + y.slice(2);
+      }
+
+      // Chart tren garis 6 bulan terakhir — dipakai bareng di slide Kesehatan Stok, Service Ratio, Audit Keuangan.
+      // trendArr: array 6 nilai (fraksi 0-1) sejajar sama trendPeriods, null kalau bulan itu nggak ada data.
+      function addTrendChart(s, x, y, w, h, trendArr, decimals) {
+        const points = trendPeriods.map((p, i) => ({ label: shortMonth(p), value: trendArr[i] })).filter((pt) => pt.value !== null);
+        if (points.length < 2) {
+          s.addText("Data histori belum cukup buat nampilin tren.", { x, y, w, h, fontSize: 9, color: "999999", align: "center", valign: "middle" });
+          return;
+        }
+        s.addChart(pptx.ChartType.line, [{
+          name: "Rata-rata",
+          labels: points.map((pt) => pt.label),
+          values: points.map((pt) => Number((pt.value * 100).toFixed(decimals))),
+        }], {
+          x, y, w, h,
+          chartColors: [PURPLE],
+          lineSize: 2.25,
+          lineDataSymbol: "circle",
+          lineDataSymbolSize: 6,
+          showLegend: false,
+          showTitle: false,
+          showValue: true,
+          dataLabelPosition: "t",
+          dataLabelColor: "444444",
+          dataLabelFontFace: "Arial",
+          dataLabelFontSize: 7,
+          catAxisLabelFontSize: 7,
+          catAxisLabelColor: "666666",
+          valAxisHidden: true,
+          valGridLine: { style: "none" },
+          catGridLine: { style: "none" },
+        });
+      }
+
       // ── 1. Cover ──
       {
         const s = pptx.addSlide();
@@ -460,7 +579,7 @@ export default function LaporanBulanan({ profile }) {
           s.addShape(pptx.ShapeType.roundRect, { x: x + 0.42, y: 1.42, w: w - 0.42, h: 0.5, rectRadius: 0.08, fill: { color: PURPLE } });
           s.addShape(pptx.ShapeType.ellipse, { x, y: 1.3, w: 0.72, h: 0.72, fill: { color: WHITE }, line: { color: PURPLE, width: 1.75 } });
           s.addText(icon, { x, y: 1.3, w: 0.72, h: 0.72, fontSize: 22, align: "center", valign: "middle", margin: 0 });
-          s.addText(title, { x: x + 0.55, y: 1.42, w: w - 0.6, h: 0.5, fontSize: 13.5, bold: true, color: WHITE, valign: "middle", margin: 0 });
+          s.addText(title, { x: x + 0.85, y: 1.42, w: w - 0.95, h: 0.5, fontSize: 13.5, bold: true, color: WHITE, valign: "middle", margin: 0 });
 
           // Card putih berisi list item
           const cardTop = 2.05;
@@ -632,16 +751,15 @@ export default function LaporanBulanan({ profile }) {
         s.addText(kesNow !== null ? `${Math.round(kesNow * 100)}%` : "\u2014", { x: cardX + 2.25, y: 1.4, w: 1.8, h: 0.6, fontSize: 26, bold: true, color: PURPLE, align: "center", margin: 0 });
 
         const trendUp = kesPrevAvg !== null && kesNow !== null && kesNow >= kesPrevAvg;
-        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 2.25, w: cardW, h: 0.95, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
-        s.addText("PERBANDINGAN", { x: cardX + 0.15, y: 2.32, w: 2.6, h: 0.25, fontSize: 7.5, bold: true, color: GREY, margin: 0 });
-        s.addText(trendUp ? "MEMBAIK" : "MENURUN", { x: cardX + 0.15, y: 2.55, w: 2.6, h: 0.35, fontSize: 15, bold: true, color: trendUp ? GREEN : RED, margin: 0 });
-        s.addText(kesPrevAvg !== null && kesNow !== null ? `${Math.round(kesPrevAvg * 100)}% \u2192 ${Math.round(kesNow * 100)}%` : "\u2014", { x: cardX + 0.15, y: 2.9, w: 2.6, h: 0.25, fontSize: 9, color: "555555", margin: 0 });
+        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 2.25, w: cardW, h: 1.65, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
+        s.addText("TREN 6 BULAN TERAKHIR", { x: cardX + 0.15, y: 2.32, w: 2.6, h: 0.25, fontSize: 8.5, bold: true, color: PURPLE, margin: 0 });
         if (kesPrevAvg !== null && kesNow !== null) {
-          s.addText(`${trendUp ? "\u25B2" : "\u25BC"} ${Math.abs(Math.round((kesNow - kesPrevAvg) * 100))} poin`, { x: cardX + 2.75, y: 2.5, w: 1.3, h: 0.5, fontSize: 17, bold: true, color: trendUp ? GREEN : RED, align: "right", margin: 0 });
+          s.addText(`${trendUp ? "\u25B2" : "\u25BC"} ${Math.abs(Math.round((kesNow - kesPrevAvg) * 100))} poin`, { x: cardX + 2.35, y: 2.28, w: 1.65, h: 0.28, fontSize: 10, bold: true, color: trendUp ? GREEN : RED, align: "right", margin: 0 });
         }
+        addTrendChart(s, cardX + 0.05, 2.6, cardW - 0.1, 1.25, kesTrend, 0);
 
-        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 3.35, w: cardW, h: 1.85, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
-        s.addText("RINGKASAN", { x: cardX + 0.15, y: 3.42, w: 3.8, h: 0.3, fontSize: 11, bold: true, color: PURPLE, margin: 0 });
+        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 4.0, w: cardW, h: 1.4, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
+        s.addText("RINGKASAN", { x: cardX + 0.15, y: 4.07, w: 3.8, h: 0.3, fontSize: 11, bold: true, color: PURPLE, margin: 0 });
         const kesBermasalahBranches = rows.filter((r) => r.kesPct !== null && r.kesPct < 0.7).map((r) => r.branch.name);
         const ringkasanLines = [
           kesPrevAvg !== null && kesNow !== null
@@ -651,10 +769,10 @@ export default function LaporanBulanan({ profile }) {
             ? `Perlu monitoring & tindak lanjut pada cabang: ${kesBermasalahBranches.join(", ")}.`
             : "Semua cabang berada di atas ambang aman bulan ini.",
         ];
-        s.addText(ringkasanLines.map((t) => ({ text: t, options: { bullet: { code: "2022" }, breakLine: true, paraSpaceAfter: 6 } })), { x: cardX + 0.15, y: 3.75, w: 3.85, h: 1.4, fontSize: 10.5, color: "444444", valign: "top", margin: 0 });
+        s.addText(ringkasanLines.map((t) => ({ text: t, options: { bullet: { code: "2022" }, breakLine: true, paraSpaceAfter: 5 } })), { x: cardX + 0.15, y: 4.38, w: 3.85, h: 0.95, fontSize: 9.5, color: "444444", valign: "top", margin: 0 });
 
-        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 5.35, w: cardW, h: 1.95, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
-        s.addText("KETERANGAN INDIKATOR", { x: cardX + 0.15, y: 5.42, w: 3.8, h: 0.25, fontSize: 9.5, bold: true, color: PURPLE, margin: 0 });
+        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 5.5, w: cardW, h: 1.75, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
+        s.addText("KETERANGAN INDIKATOR", { x: cardX + 0.15, y: 5.57, w: 3.8, h: 0.25, fontSize: 9.5, bold: true, color: PURPLE, margin: 0 });
         const legendItems = [
           { c: GREEN, l: "Terkendali", r: "\u226585%", d: "Kondisi sangat baik" },
           { c: "2f9e9e", l: "Waspada", r: "70-84%", d: "Temuan ringan, masih toleran" },
@@ -662,11 +780,11 @@ export default function LaporanBulanan({ profile }) {
           { c: RED, l: "Perlu Perhatian", r: "<50%", d: "Risiko tinggi, tindak lanjut" },
         ];
         legendItems.forEach((it, i) => {
-          const yy = 5.72 + i * 0.36;
+          const yy = 5.88 + i * 0.34;
           s.addShape(pptx.ShapeType.ellipse, { x: cardX + 0.18, y: yy + 0.04, w: 0.11, h: 0.11, fill: { color: it.c } });
-          s.addText(it.l, { x: cardX + 0.4, y: yy, w: 1.15, h: 0.3, fontSize: 8.5, bold: true, color: "222222", margin: 0 });
-          s.addText(it.r, { x: cardX + 1.55, y: yy, w: 0.75, h: 0.3, fontSize: 8, color: "666666", margin: 0 });
-          s.addText(it.d, { x: cardX + 2.3, y: yy, w: 1.7, h: 0.3, fontSize: 7.5, color: "777777", margin: 0 });
+          s.addText(it.l, { x: cardX + 0.4, y: yy, w: 1.15, h: 0.3, fontSize: 8.3, bold: true, color: "222222", margin: 0 });
+          s.addText(it.r, { x: cardX + 1.55, y: yy, w: 0.75, h: 0.3, fontSize: 7.8, color: "666666", margin: 0 });
+          s.addText(it.d, { x: cardX + 2.3, y: yy, w: 1.7, h: 0.3, fontSize: 7.3, color: "777777", margin: 0 });
         });
       }
 
@@ -750,16 +868,15 @@ export default function LaporanBulanan({ profile }) {
 
         // Buat Service Ratio, makin KECIL makin bagus — kebalik dari Kesehatan Stok.
         const svcTrendGood = svcPrevAvg !== null && svcNow !== null && svcNow <= svcPrevAvg;
-        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 2.25, w: cardW, h: 0.95, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
-        s.addText("PERBANDINGAN", { x: cardX + 0.15, y: 2.32, w: 2.6, h: 0.25, fontSize: 7.5, bold: true, color: GREY, margin: 0 });
-        s.addText(svcTrendGood ? "MEMBAIK" : "MENINGKAT", { x: cardX + 0.15, y: 2.55, w: 2.6, h: 0.35, fontSize: 15, bold: true, color: svcTrendGood ? GREEN : RED, margin: 0 });
-        s.addText(svcPrevAvg !== null && svcNow !== null ? `${(svcPrevAvg * 100).toFixed(2)}% \u2192 ${(svcNow * 100).toFixed(2)}%` : "\u2014", { x: cardX + 0.15, y: 2.9, w: 2.6, h: 0.25, fontSize: 9, color: "555555", margin: 0 });
+        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 2.25, w: cardW, h: 1.65, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
+        s.addText("TREN 6 BULAN TERAKHIR", { x: cardX + 0.15, y: 2.32, w: 2.6, h: 0.25, fontSize: 8.5, bold: true, color: PURPLE, margin: 0 });
         if (svcPrevAvg !== null && svcNow !== null) {
-          s.addText(`${svcTrendGood ? "\u25BC" : "\u25B2"} ${Math.abs((svcNow - svcPrevAvg) * 100).toFixed(2)}%`, { x: cardX + 2.6, y: 2.5, w: 1.45, h: 0.5, fontSize: 15, bold: true, color: svcTrendGood ? GREEN : RED, align: "right", margin: 0 });
+          s.addText(`${svcTrendGood ? "\u25BC" : "\u25B2"} ${Math.abs((svcNow - svcPrevAvg) * 100).toFixed(2)}%`, { x: cardX + 2.35, y: 2.28, w: 1.65, h: 0.28, fontSize: 10, bold: true, color: svcTrendGood ? GREEN : RED, align: "right", margin: 0 });
         }
+        addTrendChart(s, cardX + 0.05, 2.6, cardW - 0.1, 1.25, svcTrend, 2);
 
-        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 3.35, w: cardW, h: 1.85, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
-        s.addText("RINGKASAN", { x: cardX + 0.15, y: 3.42, w: 3.8, h: 0.3, fontSize: 11, bold: true, color: PURPLE, margin: 0 });
+        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 4.0, w: cardW, h: 1.4, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
+        s.addText("RINGKASAN", { x: cardX + 0.15, y: 4.07, w: 3.8, h: 0.3, fontSize: 11, bold: true, color: PURPLE, margin: 0 });
         const svcBermasalahBranches = rows.filter((r) => r.svcRatio !== null && r.svcRatio >= 0.0033).map((r) => r.branch.name);
         const svcRingkasanLines = [
           svcPrevAvg !== null && svcNow !== null
@@ -769,17 +886,17 @@ export default function LaporanBulanan({ profile }) {
             ? `Perlu monitoring & tindak lanjut pada cabang: ${svcBermasalahBranches.join(", ")}.`
             : "Semua cabang berada di atas ambang aman bulan ini.",
         ];
-        s.addText(svcRingkasanLines.map((t) => ({ text: t, options: { bullet: { code: "2022" }, breakLine: true, paraSpaceAfter: 6 } })), { x: cardX + 0.15, y: 3.75, w: 3.85, h: 1.4, fontSize: 10.5, color: "444444", valign: "top", margin: 0 });
+        s.addText(svcRingkasanLines.map((t) => ({ text: t, options: { bullet: { code: "2022" }, breakLine: true, paraSpaceAfter: 5 } })), { x: cardX + 0.15, y: 4.38, w: 3.85, h: 0.95, fontSize: 9.5, color: "444444", valign: "top", margin: 0 });
 
-        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 5.35, w: cardW, h: 1.5, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
-        s.addText("KETERANGAN INDIKATOR", { x: cardX + 0.15, y: 5.42, w: 3.8, h: 0.25, fontSize: 9.5, bold: true, color: PURPLE, margin: 0 });
+        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 5.5, w: cardW, h: 1.3, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
+        s.addText("KETERANGAN INDIKATOR", { x: cardX + 0.15, y: 5.57, w: 3.8, h: 0.25, fontSize: 9.5, bold: true, color: PURPLE, margin: 0 });
         const svcLegendItems = [
           { c: GREEN, l: "Terkendali", r: "\u22640,22%", d: "Rasio service sehat" },
           { c: AMBER, l: "Monitoring", r: "0,22-0,33%", d: "Perlu dipantau berkala" },
           { c: RED, l: "Perlu Perhatian", r: "\u22650,33%", d: "Perlu tindak lanjut" },
         ];
         svcLegendItems.forEach((it, i) => {
-          const yy = 5.72 + i * 0.36;
+          const yy = 5.88 + i * 0.34;
           s.addShape(pptx.ShapeType.ellipse, { x: cardX + 0.18, y: yy + 0.04, w: 0.11, h: 0.11, fill: { color: it.c } });
           s.addText(it.l, { x: cardX + 0.4, y: yy, w: 1.15, h: 0.3, fontSize: 8.5, bold: true, color: "222222", margin: 0 });
           s.addText(it.r, { x: cardX + 1.55, y: yy, w: 0.85, h: 0.3, fontSize: 8, color: "666666", margin: 0 });
@@ -864,13 +981,13 @@ export default function LaporanBulanan({ profile }) {
         s.addText("TOTAL PENGELUARAN BULAN INI", { x: cardX + 0.15, y: 1.05, w: 3.85, h: 0.3, fontSize: 8, bold: true, color: GREY, margin: 0 });
         s.addText(`Rp${totalKasKeluar.toLocaleString("id-ID")}`, { x: cardX + 0.15, y: 1.35, w: 3.85, h: 0.6, fontSize: 21, bold: true, color: PURPLE, margin: 0 });
 
-        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 2.25, w: cardW, h: 0.95, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
-        s.addText("CABANG SALDO MINUS", { x: cardX + 0.15, y: 2.32, w: 2.6, h: 0.25, fontSize: 7.5, bold: true, color: GREY, margin: 0 });
-        s.addText(String(negBalanceNow), { x: cardX + 0.15, y: 2.55, w: 2.6, h: 0.5, fontSize: 24, bold: true, color: negBalanceNow > 0 ? RED : GREEN, margin: 0 });
-        s.addText(negBalancePrev !== null ? `Bulan lalu: ${negBalancePrev} cabang` : "\u2014", { x: cardX + 2.4, y: 2.75, w: 1.6, h: 0.3, fontSize: 9, color: "555555", align: "right", margin: 0 });
+        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 2.25, w: cardW, h: 1.65, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
+        s.addText("TREN POSISI KAS 6 BULAN", { x: cardX + 0.15, y: 2.32, w: 2.6, h: 0.25, fontSize: 8.5, bold: true, color: PURPLE, margin: 0 });
+        s.addText(`${negBalanceNow} cabang minus`, { x: cardX + 2.15, y: 2.28, w: 1.85, h: 0.28, fontSize: 9.5, bold: true, color: negBalanceNow > 0 ? RED : GREEN, align: "right", margin: 0 });
+        addTrendChart(s, cardX + 0.05, 2.6, cardW - 0.1, 1.25, keuTrend, 1);
 
-        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 3.35, w: cardW, h: 1.85, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
-        s.addText("RINGKASAN", { x: cardX + 0.15, y: 3.42, w: 3.8, h: 0.3, fontSize: 11, bold: true, color: PURPLE, margin: 0 });
+        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 4.0, w: cardW, h: 1.4, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
+        s.addText("RINGKASAN", { x: cardX + 0.15, y: 4.07, w: 3.8, h: 0.3, fontSize: 11, bold: true, color: PURPLE, margin: 0 });
         const keuNegRows = rows.filter((r) => r.sisa !== null && r.sisa < 0).map((r) => r.branch.name);
         const keuRingkasanLines = [
           `Total pengeluaran kas kecil seluruh cabang bulan ini: Rp${totalKasKeluar.toLocaleString("id-ID")}.`,
@@ -878,17 +995,17 @@ export default function LaporanBulanan({ profile }) {
             ? `Cabang saldo minus: ${keuNegRows.join(", ")}.`
             : "Tidak ada cabang dengan saldo minus bulan ini.",
         ];
-        s.addText(keuRingkasanLines.map((t) => ({ text: t, options: { bullet: { code: "2022" }, breakLine: true, paraSpaceAfter: 6 } })), { x: cardX + 0.15, y: 3.75, w: 3.85, h: 1.4, fontSize: 10.5, color: "444444", valign: "top", margin: 0 });
+        s.addText(keuRingkasanLines.map((t) => ({ text: t, options: { bullet: { code: "2022" }, breakLine: true, paraSpaceAfter: 5 } })), { x: cardX + 0.15, y: 4.38, w: 3.85, h: 0.95, fontSize: 9.5, color: "444444", valign: "top", margin: 0 });
 
-        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 5.35, w: cardW, h: 1.75, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
-        s.addText("KETERANGAN INDIKATOR", { x: cardX + 0.15, y: 5.42, w: 3.8, h: 0.25, fontSize: 9.5, bold: true, color: PURPLE, margin: 0 });
+        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 5.5, w: cardW, h: 1.6, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
+        s.addText("KETERANGAN INDIKATOR", { x: cardX + 0.15, y: 5.57, w: 3.8, h: 0.25, fontSize: 9.5, bold: true, color: PURPLE, margin: 0 });
         const keuLegendItems = [
           { c: GREEN, l: "Terkendali / Efisien", r: `\u2264${keuSettings.efisien}%`, d: "Posisi kas aman" },
           { c: AMBER, l: "Monitoring", r: `${keuSettings.efisien}-${keuSettings.monitoring}%`, d: "Perlu dipantau" },
           { c: RED, l: "Tindak Lanjut / Pengecekan", r: `>${keuSettings.monitoring}%`, d: "Perlu tindak lanjut" },
         ];
         keuLegendItems.forEach((it, i) => {
-          const yy = 5.72 + i * 0.42;
+          const yy = 5.88 + i * 0.4;
           s.addShape(pptx.ShapeType.ellipse, { x: cardX + 0.18, y: yy + 0.04, w: 0.11, h: 0.11, fill: { color: it.c } });
           s.addText(it.l, { x: cardX + 0.4, y: yy, w: 1.55, h: 0.3, fontSize: 8.3, bold: true, color: "222222", margin: 0 });
           s.addText(it.r, { x: cardX + 1.95, y: yy, w: 0.9, h: 0.3, fontSize: 8, color: "666666", margin: 0 });
@@ -899,18 +1016,115 @@ export default function LaporanBulanan({ profile }) {
       // ── 7. Kepatuhan SOP (gabungan) ──
       {
         const s = pptx.addSlide();
-        addHeader(s, "Kepatuhan SOP");
-        s.addText(kepatuhanAvg !== null ? `${Math.round(kepatuhanAvg * 100)}%` : "\u2014", { x: 0.6, y: 1.1, w: 4, h: 1.3, fontSize: 60, bold: true, color: PURPLE, margin: 0 });
-        s.addText("% Skor Kepatuhan (gabungan Operasional, Stok, Keuangan, Aset)", { x: 0.6, y: 2.35, w: 4.3, h: 0.6, fontSize: 11, color: GREY, margin: 0 });
-        s.addText(`${totalTemuanKepatuhan}`, { x: 0.6, y: 3.1, w: 2, h: 0.8, fontSize: 30, bold: true, color: RED, margin: 0 });
-        s.addText("Total temuan bulan ini", { x: 0.6, y: 3.75, w: 3, h: 0.4, fontSize: 11, color: GREY, margin: 0 });
+        s.addShape(pptx.ShapeType.rect, { x: 0, y: 0, w: 13.33, h: 0.85, fill: { color: PURPLE } });
+        s.addShape(pptx.ShapeType.rect, { x: 0, y: 0.85, w: 13.33, h: 0.04, fill: { color: GOLD } });
+        s.addText("KEPATUHAN SOP CABANG", { x: 0.35, y: 0.08, w: 9, h: 0.42, fontSize: 20, bold: true, color: WHITE, margin: 0 });
+        s.addText(`${periodeLabel(prevPeriod)} & ${periodeLabel(period)}`, { x: 0.35, y: 0.48, w: 9, h: 0.32, fontSize: 12, color: "E4DCFF", margin: 0 });
+        s.addText("KLA COMPUTER", { x: 9.8, y: 0.25, w: 3.2, h: 0.4, fontSize: 15, bold: true, color: GOLD, align: "right", margin: 0 });
 
-        const kepRows = [...kepatuhanRows].sort((a, b) => a.kepatuhan - b.kepatuhan).slice(0, 8);
-        s.addTable(
-          [[{ text: "Cabang", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11 } }, { text: "% Skor", options: { bold: true, fill: { color: PURPLE }, color: WHITE, fontSize: 11, align: "center" } }]]
-            .concat(kepRows.map((r) => ([{ text: r.branch.name, options: { fontSize: 11 } }, { text: `${Math.round(r.kepatuhan * 100)}%`, options: { fontSize: 11, align: "center", bold: true, color: r.kepatuhan * 100 < 70 ? RED : "333333" } }]))),
-          { x: 5.4, y: 1.1, w: 7.3, colW: [4.5, 2.8], border: { type: "solid", color: "E5E5E5", pt: 0.5 }, autoPage: false }
-        );
+        const kepRowsAll = branches.map((b) => rows.find((r) => r.branch.id === b.id)).filter(Boolean);
+
+        const kepTh = [
+          { text: "No", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 7, align: "center" } },
+          { text: "Cabang", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 7 } },
+          { text: "SOP", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 7, align: "center" } },
+          { text: "Stok", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 7, align: "center" } },
+          { text: "Keu.", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 7, align: "center" } },
+          { text: "Aset", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 7, align: "center" } },
+          { text: "Total", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 7, align: "center" } },
+          { text: "% Skor", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 7, align: "center" } },
+        ];
+        function kepTableRows(detailKey) {
+          const body = kepRowsAll.map((r, i) => {
+            const d = r[detailKey];
+            if (!d || !d.hasData || d.tidakVisit) {
+              return [
+                { text: String(i + 1), options: { fontSize: 6.8, align: "center" } },
+                { text: r.branch.name, options: { fontSize: 6.8, bold: true } },
+                { text: "TIDAK VISIT", options: { colspan: 6, fontSize: 6.8, bold: true, align: "center", fill: { color: "DDE6F7" }, color: PURPLE } },
+              ];
+            }
+            const isBaru = d.cabangBaru;
+            const info = kategoriInfo(d.pct);
+            return [
+              { text: String(i + 1), options: { fontSize: 6.8, align: "center" } },
+              { text: isBaru ? `\u2b50 ${r.branch.name}` : r.branch.name, options: { fontSize: 6.6, bold: true } },
+              { text: String(d.sopTemuan), options: { fontSize: 6.8, align: "center" } },
+              { text: String(d.stokTemuan), options: { fontSize: 6.8, align: "center" } },
+              { text: String(d.keuanganTemuan), options: { fontSize: 6.8, align: "center" } },
+              { text: String(d.asetTemuan), options: { fontSize: 6.8, align: "center" } },
+              { text: String(d.totalTemuan), options: { fontSize: 6.8, align: "center", bold: true } },
+              isBaru
+                ? { text: "BARU", options: { fontSize: 6, align: "center", bold: true, color: WHITE, fill: { color: "F4B740" } } }
+                : { text: `${Math.round(d.pct * 100)}%`, options: { fontSize: 7, align: "center", bold: true, color: WHITE, fill: { color: info.color } } },
+            ];
+          });
+          const valid = kepRowsAll.map((r) => r[detailKey]).filter((d) => d && d.hasData && !d.tidakVisit && !d.cabangBaru);
+          const avgPct = valid.length ? valid.reduce((s2, d) => s2 + d.pct, 0) / valid.length : 0;
+          const totalTemuanAll = kepRowsAll.map((r) => r[detailKey]).filter((d) => d && d.hasData && !d.tidakVisit).reduce((s2, d) => s2 + d.totalTemuan, 0);
+          body.push([
+            { text: "TOTAL / RATA-RATA", options: { colspan: 6, fontSize: 7, bold: true, fill: { color: PURPLE }, color: WHITE } },
+            { text: String(totalTemuanAll), options: { fontSize: 7, bold: true, align: "center", fill: { color: PURPLE }, color: WHITE } },
+            { text: `${Math.round(avgPct * 100)}%`, options: { fontSize: 7, bold: true, align: "center", fill: { color: PURPLE }, color: WHITE } },
+          ]);
+          return body;
+        }
+
+        // Posisi tabel kedua dihitung dinamis, sama kayak Slide 4, 5, 6.
+        const kepTableStartY = 1.25;
+        const kepRowH = 0.175;
+        const kepTable1RowCount = kepRowsAll.length + 2;
+        const kepTable1Height = kepTable1RowCount * kepRowH;
+        const kepTitle2Y = kepTableStartY + kepTable1Height + 0.18;
+        const kepTable2Y = kepTitle2Y + 0.27;
+
+        s.addText(`BULAN LALU \u2014 ${periodeLabel(prevPeriod)}`, { x: 0.3, y: 0.98, w: 8.2, h: 0.25, fontSize: 11, bold: true, color: PURPLE, margin: 0 });
+        s.addTable([kepTh].concat(kepTableRows("kepPrevDetail")), { x: 0.3, y: kepTableStartY, w: 8.2, colW: [0.35, 2.7, 0.85, 0.85, 0.85, 0.75, 0.85, 1.0], border: { type: "solid", color: "E5E5E5", pt: 0.5 }, autoPage: false, margin: [1, 3, 1, 3] });
+
+        s.addText(`BULAN INI \u2014 ${periodeLabel(period)}`, { x: 0.3, y: kepTitle2Y, w: 8.2, h: 0.25, fontSize: 11, bold: true, color: PURPLE, margin: 0 });
+        s.addTable([kepTh].concat(kepTableRows("kepCurDetail")), { x: 0.3, y: kepTable2Y, w: 8.2, colW: [0.35, 2.7, 0.85, 0.85, 0.85, 0.75, 0.85, 1.0], border: { type: "solid", color: "E5E5E5", pt: 0.5 }, autoPage: false, margin: [1, 3, 1, 3] });
+
+        // ── Kartu kanan ──
+        const cardX = 8.85, cardW = 4.15;
+        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 0.98, w: cardW, h: 1.15, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
+        s.addText("SKOR KEPATUHAN BULAN INI", { x: cardX + 0.15, y: 1.05, w: 3.85, h: 0.3, fontSize: 8, bold: true, color: GREY, margin: 0 });
+        s.addText(kepatuhanAvg !== null ? `${Math.round(kepatuhanAvg * 100)}%` : "\u2014", { x: cardX + 0.15, y: 1.32, w: 2.4, h: 0.7, fontSize: 30, bold: true, color: PURPLE, margin: 0 });
+        s.addText(`${totalTemuanKepatuhan}\nTemuan`, { x: cardX + 2.5, y: 1.05, w: 1.5, h: 1.0, fontSize: 9.5, bold: true, color: RED, align: "right", margin: 0 });
+
+        const kepTrendUp = kepatuhanTrend[4] !== null && kepatuhanTrend[5] !== null && kepatuhanTrend[5] >= kepatuhanTrend[4];
+        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 2.25, w: cardW, h: 1.65, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
+        s.addText("TREN 6 BULAN TERAKHIR", { x: cardX + 0.15, y: 2.32, w: 2.6, h: 0.25, fontSize: 8.5, bold: true, color: PURPLE, margin: 0 });
+        if (kepatuhanTrend[4] !== null && kepatuhanTrend[5] !== null) {
+          s.addText(`${kepTrendUp ? "\u25B2" : "\u25BC"} ${Math.abs(Math.round((kepatuhanTrend[5] - kepatuhanTrend[4]) * 100))} poin`, { x: cardX + 2.35, y: 2.28, w: 1.65, h: 0.28, fontSize: 10, bold: true, color: kepTrendUp ? GREEN : RED, align: "right", margin: 0 });
+        }
+        addTrendChart(s, cardX + 0.05, 2.6, cardW - 0.1, 1.25, kepatuhanTrend, 0);
+
+        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 4.0, w: cardW, h: 1.4, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
+        s.addText("RINGKASAN", { x: cardX + 0.15, y: 4.07, w: 3.8, h: 0.3, fontSize: 11, bold: true, color: PURPLE, margin: 0 });
+        const kepBermasalahBranches = rows.filter((r) => r.kepatuhan !== null && r.kepatuhan < 0.7).map((r) => r.branch.name);
+        const kepRingkasanLines = [
+          `Skor Kepatuhan SOP gabungan company-wide: ${kepatuhanAvg !== null ? Math.round(kepatuhanAvg * 100) + "%" : "belum ada data"}, total ${totalTemuanKepatuhan} temuan.`,
+          kepBermasalahBranches.length
+            ? `Perlu tindak lanjut pada cabang: ${kepBermasalahBranches.join(", ")}.`
+            : "Semua cabang berada di atas ambang aman bulan ini.",
+        ];
+        s.addText(kepRingkasanLines.map((t) => ({ text: t, options: { bullet: { code: "2022" }, breakLine: true, paraSpaceAfter: 5 } })), { x: cardX + 0.15, y: 4.38, w: 3.85, h: 0.95, fontSize: 9.5, color: "444444", valign: "top", margin: 0 });
+
+        s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 5.5, w: cardW, h: 1.75, rectRadius: 0.06, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
+        s.addText("KETERANGAN INDIKATOR", { x: cardX + 0.15, y: 5.57, w: 3.8, h: 0.25, fontSize: 9.5, bold: true, color: PURPLE, margin: 0 });
+        const kepLegendItems = [
+          { c: "1a9e6e", l: "Sangat Baik", r: "\u226590%", d: "Kepatuhan sangat baik" },
+          { c: "2f9e46", l: "Baik", r: "80-89%", d: "Kepatuhan baik" },
+          { c: "b07212", l: "Cukup", r: "70-79%", d: "Perlu ditingkatkan" },
+          { c: "a32020", l: "Perlu Perbaikan", r: "<70%", d: "Risiko tinggi" },
+        ];
+        kepLegendItems.forEach((it, i) => {
+          const yy = 5.88 + i * 0.34;
+          s.addShape(pptx.ShapeType.ellipse, { x: cardX + 0.18, y: yy + 0.04, w: 0.11, h: 0.11, fill: { color: it.c } });
+          s.addText(it.l, { x: cardX + 0.4, y: yy, w: 1.3, h: 0.3, fontSize: 8.3, bold: true, color: "222222", margin: 0 });
+          s.addText(it.r, { x: cardX + 1.75, y: yy, w: 0.7, h: 0.3, fontSize: 7.8, color: "666666", margin: 0 });
+          s.addText(it.d, { x: cardX + 2.45, y: yy, w: 1.55, h: 0.3, fontSize: 7.3, color: "777777", margin: 0 });
+        });
       }
 
       // ── 8..N. Temuan per cabang (cuma yang ada temuan) ──
