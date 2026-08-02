@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import { CATS, nowPeriode, periodeLabel, addMonthsToPeriod } from "../../lib/sopConfig";
-import { countRusak } from "../AuditInventaris";
+import { CATS, CONDITION_ITEMS, nowPeriode, periodeLabel, addMonthsToPeriod } from "../../lib/sopConfig";
+import { INVENTARIS_CATEGORIES } from "../AuditInventaris";
 import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
 import { sortBranches } from "../../lib/branchOrder";
 
@@ -31,6 +31,16 @@ function countStokTemuan(stokRecord) {
   if (!stokRecord || stokRecord.data?.tidak_visit) return 0;
   const d = stokRecord.data || {};
   return Number(d.temuan_count) || 0;
+}
+
+// Kategori Inventaris yang konsepnya tumpang tindih sama item 🔧 "Kondisi Aset/Fasilitas"
+// di checklist SOP (Penerangan ~ lampu ruangan, Furniture & Fixture ~ backdrop/closet,
+// Listrik & Utilitas ~ air/saluran) — dikecualikan di sini biar nggak ke-hitung dobel
+// sama kondisiTemuan. Modul Inventaris aslinya (form, PDF Berita Acara) TIDAK berubah.
+const OVERLAP_INVENTARIS_CATS = ["Penerangan", "Furniture & Fixture", "Listrik & Utilitas"];
+function countRusakNonOverlap(inventarisData) {
+  if (!inventarisData) return 0;
+  return INVENTARIS_CATEGORIES.filter((c) => !OVERLAP_INVENTARIS_CATS.includes(c) && inventarisData[c]?.status === "Rusak").length;
 }
 
 function keuanganSisa(entry) {
@@ -103,7 +113,10 @@ export default function SopKepatuhan() {
       const stokTemuan = countStokTemuan(stokRec);
       const sisa = keuanganSisa(keuEntry);
       const keuanganTemuan = sisa !== null && sisa < 0 ? 1 : 0;
-      const asetTemuan = invRec && !invRec.data?.tidak_visit ? countRusak(invRec.data?.categories) : 0;
+      const invTemuan = invRec && !invRec.data?.tidak_visit ? countRusakNonOverlap(invRec.data?.categories) : 0;
+      // Item checklist SOP yang ditandai "Kondisi Aset/Fasilitas" (🔧) — kalau gagal, ikut nambah temuan Aset di sini.
+      const kondisiTemuan = [...CONDITION_ITEMS].filter((key) => !sopRec.data?.checks?.[key]).length;
+      const asetTemuan = invTemuan + kondisiTemuan;
 
       const totalTemuan = sopTemuan + stokTemuan + keuanganTemuan + asetTemuan;
       const pct = Math.max(0, 1 - totalTemuan / BASELINE);

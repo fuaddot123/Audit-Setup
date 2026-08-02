@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
-import { calcWeightedFromRecord, CATS, nowPeriode, periodeLabel, addMonthsToPeriod } from "../lib/sopConfig";
+import { calcWeightedFromRecord, CATS, CONDITION_ITEMS, nowPeriode, periodeLabel, addMonthsToPeriod } from "../lib/sopConfig";
 import { kesehatanStatusInfo, serviceStatusInfo } from "../lib/stokConfig";
-import { countRusak } from "./AuditInventaris";
+import { INVENTARIS_CATEGORIES } from "./AuditInventaris";
 import BranchMultiSelect from "./BranchMultiSelect";
 import { sortBranches } from "../lib/branchOrder";
 
@@ -76,6 +76,15 @@ function countStokTemuan(stokRecord) {
   if (!stokRecord || stokRecord.data?.tidak_visit) return 0;
   return Number(stokRecord.data?.temuan_count) || 0;
 }
+// Kategori Inventaris yang konsepnya tumpang tindih sama item 🔧 "Kondisi Aset/Fasilitas"
+// di checklist SOP — dikecualikan di sini biar nggak ke-hitung dobel sama kondisiTemuan.
+// Modul Inventaris aslinya TIDAK berubah.
+const OVERLAP_INVENTARIS_CATS = ["Penerangan", "Furniture & Fixture", "Listrik & Utilitas"];
+function countRusakNonOverlap(inventarisData) {
+  if (!inventarisData) return 0;
+  return INVENTARIS_CATEGORIES.filter((c) => !OVERLAP_INVENTARIS_CATS.includes(c) && inventarisData[c]?.status === "Rusak").length;
+}
+
 function keuanganSisa(entry) {
   if (!entry || entry.tidak_visit) return null;
   if (entry.sisa_saldo !== null && entry.sisa_saldo !== undefined && entry.sisa_saldo !== "") {
@@ -240,7 +249,9 @@ export default function LaporanBulanan({ profile }) {
             const sopTemuan = countSopTemuan(sopRec);
             const stokTemuan = countStokTemuan(stokRec);
             const keuanganTemuan = keuSisa !== null && keuSisa < 0 ? 1 : 0;
-            const asetTemuan = invRec && !invRec.data?.tidak_visit ? countRusak(invRec.data?.categories) : 0;
+            const invTemuan = invRec && !invRec.data?.tidak_visit ? countRusakNonOverlap(invRec.data?.categories) : 0;
+            const kondisiTemuan = [...CONDITION_ITEMS].filter((key2) => !sopRec.data?.checks?.[key2]).length;
+            const asetTemuan = invTemuan + kondisiTemuan;
             const total = sopTemuan + stokTemuan + keuanganTemuan + asetTemuan;
             pctList.push(Math.max(0, 1 - total / BASELINE));
           });
@@ -379,7 +390,9 @@ export default function LaporanBulanan({ profile }) {
           const sopTemuan = countSopTemuan(sopRec);
           const stokTemuan = countStokTemuan(stokRec);
           const keuanganTemuan = keuSisa !== null && keuSisa < 0 ? 1 : 0;
-          const asetTemuan = invRec && !invRec.data?.tidak_visit ? countRusak(invRec.data?.categories) : 0;
+          const invTemuan = invRec && !invRec.data?.tidak_visit ? countRusakNonOverlap(invRec.data?.categories) : 0;
+          const kondisiTemuan = [...CONDITION_ITEMS].filter((key) => !sopRec.data?.checks?.[key]).length;
+          const asetTemuan = invTemuan + kondisiTemuan;
           const totalTemuan = sopTemuan + stokTemuan + keuanganTemuan + asetTemuan;
           const pct = Math.max(0, 1 - totalTemuan / BASELINE);
           return { hasData: true, tidakVisit: false, cabangBaru: !!sopRec.data?.cabang_baru, sopTemuan, stokTemuan, keuanganTemuan, asetTemuan, totalTemuan, pct };
