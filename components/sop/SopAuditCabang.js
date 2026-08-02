@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { sortBranches } from "../../lib/branchOrder";
 import {
-  CATS, TOTAL_ITEMS, TIER_WEIGHTS, TIER1_CATS, TIER3_CATS, ALERT_THRESHOLD,
+  CATS, TOTAL_ITEMS, TIER_WEIGHTS, TIER1_CATS, TIER3_CATS, ALERT_THRESHOLD, CONDITION_ITEMS,
   calcWeightedScore, calcWeightedFromRecord, scoreColor, periodFromDate, todayInputValue, periodeLabel,
   nowPeriode, addMonthsToPeriod,
 } from "../../lib/sopConfig";
@@ -485,7 +485,7 @@ export default function SopAuditCabang({ profile }) {
                   >
                     <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-faint)" }}>Audit {i + 1}</span>
                     <span style={{ fontSize: 11.5, fontWeight: 600 }}>{shortDate(e.data?.audit_date)}</span>
-                    {e.data?.cabang_baru && <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>\u2b50 Baru</span>}
+                    {e.data?.cabang_baru && <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>⭐ Baru</span>}
                     {isTV ? (
                       <span style={{ fontSize: 11, fontWeight: 700, color: "#888" }}>Tidak Visit</span>
                     ) : (
@@ -597,7 +597,14 @@ export default function SopAuditCabang({ profile }) {
                               }}>
                                 {checked && <span style={{ color: "#fff", fontSize: 12, lineHeight: 1 }}>&#10003;</span>}
                               </div>
-                              <div style={{ fontSize: 13, color: checked ? "var(--text-faint)" : "var(--text-primary)", textDecoration: checked ? "line-through" : "none" }}>{txt}</div>
+                              <div style={{ fontSize: 13, color: checked ? "var(--text-faint)" : "var(--text-primary)", textDecoration: checked ? "line-through" : "none" }}>
+                                {txt}
+                                {CONDITION_ITEMS.has(id) && (
+                                  <span style={{ marginLeft: 7, fontSize: 9.5, fontWeight: 700, color: "#d97706", background: "#d9770622", padding: "1.5px 7px", borderRadius: 20, whiteSpace: "nowrap" }}>
+                                    &#128295; Kondisi Aset/Fasilitas
+                                  </span>
+                                )}
+                              </div>
                             </div>
                             {!checked && (
                               <>

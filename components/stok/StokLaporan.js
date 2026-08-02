@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { sortBranches } from "../../lib/branchOrder";
 import {
   serviceStatusInfo, formatRatioPct, kesehatanStatusInfo, formatKesehatanPct,
   nowPeriode, periodeLabel,
@@ -32,9 +33,10 @@ export default function StokLaporan() {
         supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").order("updated_at", { ascending: false }),
       ]);
       if (brRes.error) throw brRes.error;
-      setBranches(brRes.data || []);
-      setServiceBranchIds((brRes.data || []).map((b) => b.id));
-      setKesehatanBranchIds((brRes.data || []).map((b) => b.id));
+      const sortedBr = sortBranches(brRes.data || []);
+      setBranches(sortedBr);
+      setServiceBranchIds(sortedBr.map((b) => b.id));
+      setKesehatanBranchIds(sortedBr.map((b) => b.id));
       setServiceRecords(svcRes.data || []);
       setKesehatanRecords(kshRes.data || []);
     } catch (err) {

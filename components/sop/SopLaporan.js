@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../lib/supabaseClient";
+import { sortBranches } from "../../lib/branchOrder";
 import {
   CATS, TOTAL_ITEMS, ALERT_THRESHOLD, calcWeightedFromRecord, calcTierScores,
   scoreInfo, scoreColor, formatRupiah, nowPeriode, periodeLabel,
@@ -32,8 +33,9 @@ export default function SopLaporan() {
       ]);
       if (brRes.error) throw brRes.error;
       if (sopRes.error) throw sopRes.error;
-      setBranches(brRes.data || []);
-      setPdfBranchIds((brRes.data || []).map((b) => b.id));
+      const sortedBr = sortBranches(brRes.data || []);
+      setBranches(sortedBr);
+      setPdfBranchIds(sortedBr.map((b) => b.id));
       setSopRecords(sopRes.data || []);
       setRankingRows(rankRes.data || []);
       setTargetRows(tgtRes.data || []);

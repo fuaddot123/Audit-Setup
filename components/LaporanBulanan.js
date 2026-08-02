@@ -4,6 +4,7 @@ import { calcWeightedFromRecord, CATS, nowPeriode, periodeLabel, addMonthsToPeri
 import { kesehatanStatusInfo, serviceStatusInfo } from "../lib/stokConfig";
 import { countRusak } from "./AuditInventaris";
 import BranchMultiSelect from "./BranchMultiSelect";
+import { sortBranches } from "../lib/branchOrder";
 
 // ── Warna & style ──
 const PURPLE = "2A1F52";
@@ -139,7 +140,7 @@ export default function LaporanBulanan({ profile }) {
   const [selectedBranchIds, setSelectedBranchIds] = useState(null); // null = semua cabang
 
   useEffect(() => {
-    supabase.from("branches").select("*").order("name").then(({ data }) => setAllBranches(data || []));
+    supabase.from("branches").select("*").order("name").then(({ data }) => setAllBranches(sortBranches(data || [])));
   }, []);
 
   function addMonths(p, d) { return addMonthsToPeriod(p, d); }
@@ -248,7 +249,7 @@ export default function LaporanBulanan({ profile }) {
         });
       })();
 
-      const allBr = brRes.data || [];
+      const allBr = sortBranches(brRes.data || []);
       if (!allBr.length) throw new Error("Belum ada data cabang.");
       const branches = (!selectedBranchIds || selectedBranchIds.length === 0 || selectedBranchIds.length === allBr.length)
         ? allBr
@@ -477,6 +478,8 @@ export default function LaporanBulanan({ profile }) {
 
       function addLogo(slide, x, y) {
         slide.addText("KLA", { x, y, w: 1.6, h: 0.3, align: "right", fontSize: 15, bold: true, color: GOLD, margin: 0 });
+        slide.addShape(pptx.ShapeType.line, { x: x + 1.36, y: y - 0.12, w: 0.16, h: 0.12, line: { color: GOLD, width: 1.75 }, flipV: true });
+        slide.addShape(pptx.ShapeType.triangle, { x: x + 1.46, y: y - 0.155, w: 0.075, h: 0.075, fill: { color: GOLD }, rotate: 45 });
         slide.addText("COMPUTER", { x, y: y + 0.27, w: 1.6, h: 0.2, align: "right", fontSize: 7.5, bold: true, color: WHITE, charSpacing: 1, margin: 0 });
       }
 
@@ -534,6 +537,8 @@ export default function LaporanBulanan({ profile }) {
 
         // Logo pojok kanan atas
         s.addText("KLA", { x: 10.9, y: 0.35, w: 2.1, h: 0.4, align: "right", fontSize: 20, bold: true, color: GOLD, margin: 0 });
+        s.addShape(pptx.ShapeType.line, { x: 12.72, y: 0.2, w: 0.21, h: 0.16, line: { color: GOLD, width: 2.25 }, flipV: true });
+        s.addShape(pptx.ShapeType.triangle, { x: 12.85, y: 0.15, w: 0.1, h: 0.1, fill: { color: GOLD }, rotate: 45 });
         s.addText("COMPUTER", { x: 10.9, y: 0.72, w: 2.1, h: 0.25, align: "right", fontSize: 9, bold: true, color: WHITE, charSpacing: 1, margin: 0 });
 
         s.addText("K L A   C O M P U T E R", { x: 0, y: 2.15, w: 13.33, h: 0.4, align: "center", fontSize: 15, color: GOLD, bold: true, charSpacing: 3, margin: 0 });
@@ -578,7 +583,7 @@ export default function LaporanBulanan({ profile }) {
         s.addText("AUDIT INTERNAL", { x: 0.4, y: 0.6, w: 6, h: 0.32, fontSize: 13, bold: true, color: GOLD, margin: 0 });
         s.addShape(pptx.ShapeType.roundRect, { x: 7.3, y: 0.38, w: 2.55, h: 0.42, rectRadius: 0.21, fill: { color: "3D2A72" }, line: { color: GOLD, width: 1 } });
         s.addText(`\u{1F4C5}  Periode Audit: ${periodeLabel(period)}`, { x: 7.3, y: 0.38, w: 2.55, h: 0.42, fontSize: 10.5, bold: true, color: WHITE, align: "center", valign: "middle", margin: 0 });
-        addLogo(s, 12.9, 0.36);
+        addLogo(s, 11.6, 0.36);
 
         function scopeColumn(x, w, icon, title, items) {
           // Ribbon judul dengan ikon lingkaran nempel di kiri
@@ -630,7 +635,7 @@ export default function LaporanBulanan({ profile }) {
           { text: "     |     ", options: { fontSize: 12, color: "8A7BC2" } },
           { text: `\u{1F3EA} Total Cabang di Audit: ${branches.length} Cabang`, options: { fontSize: 12, color: "E4DCFF", bold: true } },
         ], { x: 0.4, y: 0.72, w: 9, h: 0.35, margin: 0 });
-        addLogo(s, 12.9, 0.36);
+        addLogo(s, 11.6, 0.36);
 
         // ── Kiri: Summary Audit ──
         s.addShape(pptx.ShapeType.ellipse, { x: 0.4, y: 1.45, w: 0.55, h: 0.55, fill: { color: PURPLE } });
@@ -682,7 +687,7 @@ export default function LaporanBulanan({ profile }) {
         s.addShape(pptx.ShapeType.rect, { x: 0, y: 0.85, w: 13.33, h: 0.04, fill: { color: GOLD } });
         s.addText("KESEHATAN STOK CABANG", { x: 0.35, y: 0.08, w: 9, h: 0.42, fontSize: 20, bold: true, color: WHITE, margin: 0 });
         s.addText(`${periodeLabel(prevPeriod)} & ${periodeLabel(period)}`, { x: 0.35, y: 0.48, w: 9, h: 0.32, fontSize: 12, color: "E4DCFF", margin: 0 });
-        addLogo(s, 12.9, 0.22);
+        addLogo(s, 11.6, 0.22);
 
         const kesRowsPrevAll = branches.map((b) => rows.find((r) => r.branch.id === b.id)).filter(Boolean);
         const kesRowsNowAll = kesRowsPrevAll;
@@ -799,7 +804,7 @@ export default function LaporanBulanan({ profile }) {
         s.addShape(pptx.ShapeType.rect, { x: 0, y: 0.85, w: 13.33, h: 0.04, fill: { color: GOLD } });
         s.addText("SERVICE RATIO CABANG", { x: 0.35, y: 0.08, w: 9, h: 0.42, fontSize: 20, bold: true, color: WHITE, margin: 0 });
         s.addText(`${periodeLabel(prevPeriod)} & ${periodeLabel(period)}`, { x: 0.35, y: 0.48, w: 9, h: 0.32, fontSize: 12, color: "E4DCFF", margin: 0 });
-        addLogo(s, 12.9, 0.22);
+        addLogo(s, 11.6, 0.22);
 
         const svcRowsAll = branches.map((b) => rows.find((r) => r.branch.id === b.id)).filter(Boolean);
 
@@ -915,7 +920,7 @@ export default function LaporanBulanan({ profile }) {
         s.addShape(pptx.ShapeType.rect, { x: 0, y: 0.85, w: 13.33, h: 0.04, fill: { color: GOLD } });
         s.addText("AUDIT KEUANGAN CABANG", { x: 0.35, y: 0.08, w: 9, h: 0.42, fontSize: 20, bold: true, color: WHITE, margin: 0 });
         s.addText(`${periodeLabel(prevPeriod)} & ${periodeLabel(period)}`, { x: 0.35, y: 0.48, w: 9, h: 0.32, fontSize: 12, color: "E4DCFF", margin: 0 });
-        addLogo(s, 12.9, 0.22);
+        addLogo(s, 11.6, 0.22);
 
         const keuColorMap = { good: "#1a9e6e", warn: "#b07212", bad: "#a32020" };
         const keuRowsAll = branches.map((b) => rows.find((r) => r.branch.id === b.id)).filter(Boolean);
@@ -1024,7 +1029,7 @@ export default function LaporanBulanan({ profile }) {
         s.addShape(pptx.ShapeType.rect, { x: 0, y: 0.85, w: 13.33, h: 0.04, fill: { color: GOLD } });
         s.addText("KEPATUHAN SOP CABANG", { x: 0.35, y: 0.08, w: 9, h: 0.42, fontSize: 20, bold: true, color: WHITE, margin: 0 });
         s.addText(`${periodeLabel(prevPeriod)} & ${periodeLabel(period)}`, { x: 0.35, y: 0.48, w: 9, h: 0.32, fontSize: 12, color: "E4DCFF", margin: 0 });
-        addLogo(s, 12.9, 0.22);
+        addLogo(s, 11.6, 0.22);
 
         const kepRowsAll = branches.map((b) => rows.find((r) => r.branch.id === b.id)).filter(Boolean);
 
@@ -1221,7 +1226,7 @@ export default function LaporanBulanan({ profile }) {
           { text: "     |     ", options: { fontSize: 12, color: "8A7BC2" } },
           { text: `\u{1F3EA}  Total Cabang Diaudit: ${branches.length} Cabang`, options: { fontSize: 12, color: "E4DCFF", bold: true } },
         ], { x: 0.4, y: 0.72, w: 9, h: 0.35, margin: 0 });
-        addLogo(s, 12.9, 0.36);
+        addLogo(s, 11.6, 0.36);
 
         function ribbon(x, w, icon, title) {
           s.addShape(pptx.ShapeType.roundRect, { x: x + 0.42, y: 1.32, w: w - 0.42, h: 0.44, rectRadius: 0.07, fill: { color: PURPLE } });

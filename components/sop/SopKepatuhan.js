@@ -3,6 +3,7 @@ import { supabase } from "../../lib/supabaseClient";
 import { CATS, nowPeriode, periodeLabel, addMonthsToPeriod } from "../../lib/sopConfig";
 import { countRusak } from "../AuditInventaris";
 import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
+import { sortBranches } from "../../lib/branchOrder";
 
 const BASELINE = 150; // baseline temuan per cabang, sesuai formula yang disepakati
 
@@ -64,7 +65,7 @@ export default function SopKepatuhan() {
         supabase.from("audit_generic").select("*").eq("module", "inventaris"),
       ]);
       if (brRes.error) throw brRes.error;
-      setBranches(brRes.data || []);
+      setBranches(sortBranches(brRes.data || []));
       setSopRecords(sopRes.data || []);
       setStokRecords(stokRes.data || []);
       setKeuanganEntries(keuRes.data || []);

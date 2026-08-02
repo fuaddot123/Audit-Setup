@@ -63,8 +63,22 @@ export default function Timeline() {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(EMPTY_FORM);
   const [saving, setSaving] = useState(false);
+  const [holidays, setHolidays] = useState({}); // { "2026-08-17": "Hari Kemerdekaan Republik Indonesia", ... }
 
   useEffect(() => { loadAll(); }, []);
+  useEffect(() => { loadHolidays(current.year); }, [current.year]);
+
+  async function loadHolidays(year) {
+    try {
+      const res = await fetch(`https://api-hari-libur.vercel.app/api?year=${year}`);
+      const json = await res.json();
+      const map = {};
+      (json.data || []).forEach((h) => { map[h.date] = h.description; });
+      setHolidays((prev) => ({ ...prev, ...map }));
+    } catch (err) {
+      // Kalau API-nya lagi down, kalender tetap jalan normal — cuma tanpa tanda tanggal merah otomatis.
+    }
+  }
 
   async function loadAll() {
     setLoading(true);
@@ -215,13 +229,18 @@ export default function Timeline() {
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(7,1fr)" }}>
                   {week.map((d, di) => {
                     const inMonth = d.getMonth() === current.month;
+                    const iso = fmtISO(d);
+                    const holidayName = holidays[iso];
+                    const isRed = di >= 5 || !!holidayName;
                     return (
                       <div
                         key={di}
                         onClick={() => openAdd(d)}
-                        style={{ padding: "8px 10px 2px", fontSize: 12.5, color: inMonth ? (di >= 5 ? "var(--danger-text)" : "var(--text-secondary)") : "var(--text-faint)", borderRight: di < 6 ? "1px solid var(--border)" : "none", cursor: "pointer", fontStyle: inMonth ? "normal" : "italic" }}
+                        title={holidayName || ""}
+                        style={{ padding: "8px 10px 2px", fontSize: 12.5, color: inMonth ? (isRed ? "var(--danger-text)" : "var(--text-secondary)") : "var(--text-faint)", borderRight: di < 6 ? "1px solid var(--border)" : "none", cursor: "pointer", fontStyle: inMonth ? "normal" : "italic", display: "flex", alignItems: "center", gap: 5 }}
                       >
                         {d.getDate()}
+                        {inMonth && holidayName && <span style={{ width: 5, height: 5, borderRadius: "50%", background: "var(--danger-text)", flexShrink: 0 }} />}
                       </div>
                     );
                   })}
@@ -262,6 +281,33 @@ export default function Timeline() {
           })}
         </div>
         <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 10 }}>Klik tanggal kosong buat tambah jadwal baru, atau klik blok warna buat edit/hapus.</div>
+
+        {(() => {
+          const monthHolidays = Object.entries(holidays)
+            .filter(([date]) => { const d = toDate(date); return d.getFullYear() === current.year && d.getMonth() === current.month; })
+            .sort(([a], [b]) => a.localeCompare(b));
+          return (
+            <div style={{ marginTop: 16, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 20px" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: monthHolidays.length ? 10 : 0 }}>
+                <span style={{ width: 8, height: 8, borderRadius: "50%", background: "var(--danger-text)" }} />
+                <div style={{ fontWeight: 600, fontSize: 13.5 }}>Hari Libur Nasional {MONTH_NAMES[current.month]} {current.year}</div>
+                <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--text-faint)" }}>{monthHolidays.length} tanggal merah</span>
+              </div>
+              {monthHolidays.length > 0 ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  {monthHolidays.map(([date, desc]) => (
+                    <div key={date} style={{ display: "flex", gap: 10, fontSize: 12.5 }}>
+                      <div className="mono" style={{ color: "var(--danger-text)", fontWeight: 600, minWidth: 90 }}>{toDate(date).toLocaleDateString("id-ID", { weekday: "short", day: "2-digit", month: "short" })}</div>
+                      <div style={{ color: "var(--text-secondary)" }}>{desc}</div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12.5, color: "var(--text-faint)" }}>Tidak ada hari libur nasional bulan ini.</div>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {showModal && (

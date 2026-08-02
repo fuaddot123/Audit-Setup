@@ -388,7 +388,7 @@ export default function StokKesehatan({ profile }) {
                         <span style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)" }}>Audit {i + 1}</span>
                         <span style={{ fontSize: 12, fontWeight: 600 }}>{shortDate(e.data?.audit_date)}</span>
                         {e.data?.cabang_baru && (
-                          <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>\u2b50 Baru</span>
+                          <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>⭐ Baru</span>
                         )}
                         {tidakVisit ? (
                           <span style={{ fontSize: 11, fontWeight: 700, color: "#888" }}>Tidak Visit</span>
