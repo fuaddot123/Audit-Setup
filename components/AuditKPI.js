@@ -361,9 +361,11 @@ export default function AuditKPI({ profile }) {
             <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Kinerja tiap auditor, per bulan</div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <select className="input" style={{ width: 180 }} value={exportPeriod} onChange={(e) => setExportPeriod(e.target.value)}>
-              {exportPeriodOptions.map((p) => <option key={p} value={p}>{periodeLabel(p)}</option>)}
-            </select>
+            <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+              <button className="btn-ghost" onClick={() => setExportPeriod(addMonthsToPeriod(exportPeriod, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
+              <div style={{ minWidth: 130, textAlign: "center", fontWeight: 600, fontSize: 13.5 }}>{periodeLabel(exportPeriod)}</div>
+              <button className="btn-ghost" onClick={() => setExportPeriod(addMonthsToPeriod(exportPeriod, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
+            </div>
             <button className="btn" onClick={exportPdfLaporan}>Cetak PDF Laporan</button>
             <button className="btn-ghost" disabled={exportBusy} onClick={exportExcelLaporan}>{exportBusy ? "..." : "Download Excel"}</button>
           </div>
