@@ -144,7 +144,15 @@ export default function AuditKeuangan({ profile }) {
       const { data: st } = await supabase.from("settings_keuangan").select("*").eq("id", 1).single();
       if (st) setSettings(st);
 
-      const { data: entries, error: enErr } = await supabase.from("audit_keuangan").select("*");
+      // Auditor biasa cuma boleh liat/pake data audit yang dia submit sendiri — TAPI cuma
+      // berlaku mulai Agustus 2026 ke depan. Data Jan-Jul 2026 (sebelum kebijakan ini) tetep
+      // kebuka bareng buat semua auditor, nggak diisolasi retroaktif.
+      const ISOLATION_START_PERIOD = "2026-08";
+      let entriesQuery = supabase.from("audit_keuangan").select("*");
+      if (profile?.role === "auditor") {
+        entriesQuery = entriesQuery.or(`period.lt.${ISOLATION_START_PERIOD},submitted_by.eq.${profile.id}`);
+      }
+      const { data: entries, error: enErr } = await entriesQuery;
       if (enErr) throw enErr;
       const grouped = {};
       (entries || []).forEach((e) => {

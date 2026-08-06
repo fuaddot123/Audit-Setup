@@ -2,13 +2,20 @@ import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { calcWeightedFromRecord, scoreColor, nowPeriode, periodeLabel, addMonthsToPeriod } from "../../lib/sopConfig";
 
-export default function SopRanking() {
+export default function SopRanking({ profile }) {
   const [branches, setBranches] = useState([]);
   const [records, setRecords] = useState([]);
   const [period, setPeriod] = useState(nowPeriode());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [expandedId, setExpandedId] = useState(null);
+
+  // Isolasi per-auditor mulai Agustus 2026 ke depan — sebelum itu (Jan-Jul 2026) ranking
+  // tetep gabungan semua auditor kayak biasa. Buat auditor biasa liat periode >= cutoff,
+  // "Ranking Cabang" berubah jadi versi PERSONAL (cuma cabang yang dia audit sendiri) — bukan
+  // ranking company-wide, makanya judul & keterangannya ikut berubah biar jujur/nggak nyesatin.
+  const ISOLATION_START_PERIOD = "2026-08";
+  const isPersonalView = profile?.role === "auditor" && period >= ISOLATION_START_PERIOD;
 
   useEffect(() => { loadAll(); }, []);
 
@@ -18,7 +25,13 @@ export default function SopRanking() {
     try {
       const [brRes, recRes] = await Promise.all([
         supabase.from("branches").select("*").order("name"),
-        supabase.from("audit_generic").select("*").eq("module", "sop"),
+        (() => {
+          let q = supabase.from("audit_generic").select("*").eq("module", "sop");
+          if (profile?.role === "auditor") {
+            q = q.or(`period.lt.${ISOLATION_START_PERIOD},submitted_by.eq.${profile.id}`);
+          }
+          return q;
+        })(),
       ]);
       if (brRes.error) throw brRes.error;
       setBranches(brRes.data || []);
@@ -32,7 +45,8 @@ export default function SopRanking() {
 
   const rows = useMemo(() => {
     const list = branches.map((b) => {
-      const matches = records.filter((r) => r.branch_id === b.id && r.period === period);
+      let matches = records.filter((r) => r.branch_id === b.id && r.period === period);
+      if (isPersonalView) matches = matches.filter((r) => r.submitted_by === profile.id);
       const rec = matches.length
         ? [...matches].sort((a, b2) => (b2.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))[0]
         : null;
@@ -41,7 +55,7 @@ export default function SopRanking() {
       return { branch: b, rec, score };
     }).filter(Boolean);
     return list.sort((a, b) => b.score - a.score);
-  }, [branches, records, period]);
+  }, [branches, records, period, isPersonalView, profile?.id]);
 
   if (loading) return <div style={{ padding: 40, color: "var(--text-secondary)" }}>Memuat\u2026</div>;
 
@@ -53,8 +67,13 @@ export default function SopRanking() {
     <div style={{ flex: 1 }}>
       <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Ranking Cabang</div>
-          <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Diurutkan dari skor Audit SOP tertinggi</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>{isPersonalView ? "Ranking Cabang (Data Saya)" : "Ranking Cabang"}</div>
+            {isPersonalView && (
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: "#F4B740", background: "#F4B74022", padding: "2px 8px", borderRadius: 20 }}>PERSONAL</span>
+            )}
+          </div>
+          <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>{isPersonalView ? "Diurutkan dari skor Audit SOP tertinggi \u2014 cabang yang kamu audit sendiri" : "Diurutkan dari skor Audit SOP tertinggi"}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px" }}>
           <button className="btn-ghost" onClick={() => setPeriod(addMonthsToPeriod(period, -1))} style={{ padding: "6px 10px" }}>{"<"}</button>
@@ -90,7 +109,9 @@ export default function SopRanking() {
 
             {notAudited > 0 && (
               <div style={{ fontSize: 12, color: "var(--text-faint)", marginTop: 14 }}>
-                {notAudited} cabang belum diaudit / Tidak Visit / Cabang Baru periode ini, tidak masuk ranking.
+                {isPersonalView
+                  ? `${notAudited} cabang belum kamu audit sendiri / Tidak Visit / Cabang Baru periode ini, tidak masuk ranking ini.`
+                  : `${notAudited} cabang belum diaudit / Tidak Visit / Cabang Baru periode ini, tidak masuk ranking.`}
               </div>
             )}
           </>

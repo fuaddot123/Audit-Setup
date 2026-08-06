@@ -3,7 +3,7 @@ import { supabase } from "../lib/supabaseClient";
 import { sortBranches } from "../lib/branchOrder";
 import {
   INVENTARIS_CATEGORIES, freshInventaris, normalizeInventaris, countRusak,
-  uploadInventarisMedia, InventarisChecklist,
+  uploadInventarisMedia, InventarisChecklist, deleteMediaFromStorage, deleteMediaListFromStorage,
 } from "./AuditInventaris";
 
 function nowPeriode() {
@@ -44,6 +44,8 @@ function kategoriInfo(pct) {
 
 export default function BeritaAcara({ profile }) {
   const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
+  // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua kayak biasa).
+  const ISOLATION_START_PERIOD = "2026-08";
 
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
@@ -84,7 +86,11 @@ export default function BeritaAcara({ profile }) {
     setLoadingBranches(true);
     const { data, error: err } = await supabase.from("branches").select("*").order("name");
     if (!err) setBranches(sortBranches(data || []));
-    const { data: recs, error: recErr } = await supabase.from("berita_acara").select("*");
+    let recQuery = supabase.from("berita_acara").select("*");
+    if (profile?.role === "auditor") {
+      recQuery = recQuery.or(`period.lt.${ISOLATION_START_PERIOD},submitted_by.eq.${profile.id}`);
+    }
+    const { data: recs, error: recErr } = await recQuery;
     if (!recErr) {
       const sorted = [...(recs || [])].sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""));
       const map = {};
@@ -142,12 +148,16 @@ export default function BeritaAcara({ profile }) {
     setLoadingRecord(true);
     const period = viewPeriod;
     const prevPeriod = addMonthsToPeriod(period, -1);
-    const [beRes, invRes, bePrevRes, invPrevRes] = await Promise.all([
-      supabase.from("berita_acara").select("*").eq("branch_id", b.id).eq("period", period),
-      supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", period),
-      supabase.from("berita_acara").select("*").eq("branch_id", b.id).eq("period", prevPeriod),
-      supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", prevPeriod),
-    ]);
+    const isolate = profile?.role === "auditor";
+    let beQuery = supabase.from("berita_acara").select("*").eq("branch_id", b.id).eq("period", period);
+    if (isolate && period >= ISOLATION_START_PERIOD) beQuery = beQuery.eq("submitted_by", profile.id);
+    let invQuery = supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", period);
+    if (isolate && period >= ISOLATION_START_PERIOD) invQuery = invQuery.eq("submitted_by", profile.id);
+    let bePrevQuery = supabase.from("berita_acara").select("*").eq("branch_id", b.id).eq("period", prevPeriod);
+    if (isolate && prevPeriod >= ISOLATION_START_PERIOD) bePrevQuery = bePrevQuery.eq("submitted_by", profile.id);
+    let invPrevQuery = supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", prevPeriod);
+    if (isolate && prevPeriod >= ISOLATION_START_PERIOD) invPrevQuery = invPrevQuery.eq("submitted_by", profile.id);
+    const [beRes, invRes, bePrevRes, invPrevRes] = await Promise.all([beQuery, invQuery, bePrevQuery, invPrevQuery]);
     const entries = !beRes.error
       ? [...(beRes.data || [])].sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""))
       : [];
@@ -242,7 +252,8 @@ export default function BeritaAcara({ profile }) {
   function removeInventarisMedia(cat, mediaIdx) {
     setInventaris((prev) => {
       const photos = [...(prev[cat].photos || [])];
-      photos.splice(mediaIdx, 1);
+      const [removed] = photos.splice(mediaIdx, 1);
+      deleteMediaFromStorage(removed?.url); // hapus filenya juga di Storage, nggak cuma dari state
       return { ...prev, [cat]: { ...prev[cat], photos } };
     });
     setSaved(false);
@@ -330,6 +341,10 @@ export default function BeritaAcara({ profile }) {
       if (selectedInventarisEntryId) {
         await supabase.from("audit_generic").delete().eq("id", selectedInventarisEntryId);
       }
+      // Kumpulin semua foto/video Inventaris di record ini (dari semua kategori), hapus dari Storage
+      // juga — biar nggak nyisain file orphan pas audit-nya udah kehapus dari database.
+      const allMedia = INVENTARIS_CATEGORIES.flatMap((cat) => inventaris[cat]?.photos || []);
+      deleteMediaListFromStorage(allMedia);
       const remaining = entriesThisPeriod.filter((e) => e.id !== selectedEntryId);
       setEntriesThisPeriod(remaining);
       if (remaining.length) {
@@ -420,7 +435,7 @@ export default function BeritaAcara({ profile }) {
         ? `<div class="inv-photos">${photos.map((p) => `<img src="${esc(p.url)}" class="inv-thumb" />`).join("")}</div>`
         : "";
       return `<tr>
-        <td style="font-weight:600;">${esc(cat)}</td>
+        <td style="font-weight:600;text-transform:uppercase;">${esc(cat)}</td>
         <td class="${isBad ? "status-bad" : "status-ok"}">${isBad ? "RUSAK" : "BERFUNGSI"}</td>
         <td>${esc(row.keterangan) || "-"}${photosHtml}</td>
       </tr>`;
@@ -440,7 +455,7 @@ export default function BeritaAcara({ profile }) {
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Berita Acara ${esc(selectedBranch.name)}</title>
     <style>
       * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-      @page { size: A4; margin: 6mm; }
+      @page { size: A4; margin: 4mm; }
       body { font-family: Arial, Helvetica, sans-serif; color: #232323; font-size: 10.5px; margin: 0; }
       .page { border: 3px solid #2A1F52; border-radius: 10px; padding: 8mm 9mm; }
 
@@ -492,12 +507,9 @@ export default function BeritaAcara({ profile }) {
       .status-bad { color: #c0392b; font-weight: 800; }
 
       .footer-row { display: grid; grid-template-columns: 1fr 1fr 1.5fr; gap: 10px; margin-top: 9px; page-break-inside: avoid; break-inside: avoid; }
-      .sign-box { border: 1px solid #e4dff2; border-radius: 9px; padding: 7px; text-align: center; }
-      .sign-badge { width: 20px; height: 20px; border-radius: 50%; background: #F4B740; display: flex; align-items: center; justify-content: center; margin: 0 auto 3px; }
-      .sign-badge svg { width: 11px; height: 11px; }
+      .sign-box { border: 1px solid #e4dff2; border-radius: 9px; padding: 7px; text-align: center; display: flex; flex-direction: column; min-height: 78px; }
       .sign-box .t { font-size: 8px; font-weight: 800; color: #2A1F52; letter-spacing: 0.05em; }
-      .sign-box .role { font-size: 6.8px; color: #999; margin-bottom: 11px; }
-      .sign-box .line { border-top: 1px solid #ccc; padding-top: 3px; margin-top: 3px; }
+      .sign-box .line { border-top: 1px solid #ccc; padding-top: 3px; margin-top: auto; }
       .sign-box .name { font-weight: 700; font-size: 8.3px; }
       .catatan-box { border: 1px solid #e4dff2; border-radius: 9px; padding: 7px 10px; }
       .catatan-box .hd { display: flex; align-items: center; gap: 5px; margin-bottom: 3px; }
@@ -505,12 +517,78 @@ export default function BeritaAcara({ profile }) {
       .catatan-box p { font-size: 7.3px; color: #555; line-height: 1.3; margin: 0 0 4px; }
       .catatan-box .tgl { font-size: 7.3px; color: #2A1F52; font-weight: 700; }
 
-      .brand-footer { margin-top: 9px; background: #2A1F52; border-radius: 7px; padding: 7px 12px; display: flex; justify-content: space-between; align-items: center; }
+      .brand-footer { margin-top: 6px; background: #2A1F52; border-radius: 7px; padding: 5px 10px; display: flex; justify-content: space-between; align-items: center; }
       .brand-footer .left .name { color: #fff; font-weight: 800; font-size: 8.3px; }
       .brand-footer .left .tag { color: #cfc7e6; font-size: 6.6px; margin-top: 1px; }
       .brand-footer .right { display: flex; align-items: center; gap: 9px; }
       .brand-footer .right .item { display: flex; align-items: center; gap: 3px; color: #cfc7e6; font-size: 6.6px; }
       .brand-footer .right svg { width: 9px; height: 9px; }
+
+      /* ── Mode kompak: kepake kalau kontennya kepanjangan, biar tetep muat 1 halaman.
+         SENGAJA cuma nyentuh padding/margin/gap/ukuran gambar — TIDAK PERNAH font-size,
+         biar teks tetep gampang dibaca berapapun banyaknya data. Ke-4 level ini nempel
+         bertahap (compact-1 dulu, lanjut compact-2 dst kalau masih kepanjangan). ── */
+      #pdfZoom.compact-1 .page { padding: 6mm 7mm; }
+      #pdfZoom.compact-1 .hdr { padding-bottom: 6px; margin-bottom: 7px; }
+      #pdfZoom.compact-1 .info-bar { gap: 6px; margin-bottom: 7px; }
+      #pdfZoom.compact-1 .info-card { padding: 5px 7px; gap: 4px; }
+      #pdfZoom.compact-1 .sect-title { padding: 4px 11px; margin-bottom: 6px; }
+      #pdfZoom.compact-1 .summary-row { gap: 7px; margin-bottom: 6px; }
+      #pdfZoom.compact-1 .summary-card { padding: 6px; gap: 6px; }
+      #pdfZoom.compact-1 .tables-row { gap: 7px; margin-bottom: 6px; }
+      #pdfZoom.compact-1 table.data th { padding: 2.4px 5px; }
+      #pdfZoom.compact-1 table.data td { padding: 1.6px 5px; }
+      #pdfZoom.compact-1 table.data td, #pdfZoom.compact-1 table.data th { line-height: 1.15; }
+      #pdfZoom.compact-1 .inv-thumb { width: 24px; height: 24px; }
+      #pdfZoom.compact-1 .footer-row { gap: 7px; margin-top: 6px; }
+      #pdfZoom.compact-1 .sign-box, #pdfZoom.compact-1 .catatan-box { padding: 5px 7px; }
+      #pdfZoom.compact-1 .sign-box { min-height: 62px; }
+      #pdfZoom.compact-1 .brand-footer { margin-top: 6px; padding: 5px 10px; }
+
+      #pdfZoom.compact-2 .page { padding: 5mm 6mm; }
+      #pdfZoom.compact-2 .hdr { padding-bottom: 5px; margin-bottom: 5px; }
+      #pdfZoom.compact-2 .info-bar { gap: 5px; margin-bottom: 5px; }
+      #pdfZoom.compact-2 .info-card { padding: 4px 6px; gap: 3px; }
+      #pdfZoom.compact-2 .sect-title { padding: 3px 9px; margin-bottom: 5px; }
+      #pdfZoom.compact-2 .summary-row { gap: 5px; margin-bottom: 5px; }
+      #pdfZoom.compact-2 .summary-card { padding: 5px; gap: 5px; }
+      #pdfZoom.compact-2 .tables-row { gap: 5px; margin-bottom: 5px; }
+      #pdfZoom.compact-2 table.data th { padding: 2px 4px; }
+      #pdfZoom.compact-2 table.data td { padding: 1.2px 4px; }
+      #pdfZoom.compact-2 table.data td, #pdfZoom.compact-2 table.data th { line-height: 1.05; }
+      #pdfZoom.compact-2 .inv-thumb { width: 20px; height: 20px; }
+      #pdfZoom.compact-2 .footer-row { gap: 5px; margin-top: 5px; }
+      #pdfZoom.compact-2 .sign-box, #pdfZoom.compact-2 .catatan-box { padding: 4px 6px; }
+      #pdfZoom.compact-2 .sign-box { min-height: 50px; }
+      #pdfZoom.compact-2 .brand-footer { margin-top: 5px; padding: 4px 8px; }
+
+      #pdfZoom.compact-3 .info-row { gap: 4px; }
+      #pdfZoom.compact-3 .legend { padding-left: 6px; }
+      #pdfZoom.compact-3 .legend-row { gap: 3px; }
+      #pdfZoom.compact-3 table.data th { padding: 1.6px 3px; }
+      #pdfZoom.compact-3 table.data td { padding: 1px 3px; }
+      #pdfZoom.compact-3 table.data td, #pdfZoom.compact-3 table.data th { line-height: 1; }
+      #pdfZoom.compact-3 table.data tr.kat-row td { padding: 1.4px 3px; }
+      #pdfZoom.compact-3 .inv-photos { gap: 2px; margin-top: 2px; }
+      #pdfZoom.compact-3 .inv-thumb { width: 16px; height: 16px; }
+      #pdfZoom.compact-3 .catatan-box p { margin: 0 0 2px; }
+      #pdfZoom.compact-3 .sign-box { min-height: 40px; } /* batas minimal, tetep kepake buat ttd */
+
+      #pdfZoom.compact-4 .page { padding: 3mm 4mm; }
+      #pdfZoom.compact-4 table.data tr.kat-row td { padding: 0.8px 3px; }
+      #pdfZoom.compact-4 table.data td, #pdfZoom.compact-4 table.data th { line-height: 0.95; padding-top: 0.6px; padding-bottom: 0.6px; }
+      #pdfZoom.compact-4 .inv-thumb { width: 13px; height: 13px; }
+      #pdfZoom.compact-4 .footer-row { gap: 4px; margin-top: 4px; }
+
+      /* ── Pilihan TERAKHIR, cuma kepake kalau compact-1..4 masih belum cukup juga.
+         Font tabel diturunin PELAN-PELAN (0.5px per level), bukan langsung jauh —
+         biar masih kebaca, bukan dipaksa kekecilan sekali turun. ── */
+      #pdfZoom.compact-5 table.data { font-size: 7.5px; }
+      #pdfZoom.compact-5 table.data th { font-size: 6.5px; }
+      #pdfZoom.compact-6 table.data { font-size: 7px; }
+      #pdfZoom.compact-6 table.data th { font-size: 6px; }
+      #pdfZoom.compact-7 table.data { font-size: 6.5px; }
+      #pdfZoom.compact-7 table.data th { font-size: 5.5px; }
     </style></head><body><div id="pdfZoom">
       <div class="page">
 
@@ -590,15 +668,11 @@ export default function BeritaAcara({ profile }) {
 
         <div class="footer-row">
           <div class="sign-box">
-            <div class="sign-badge">${ICON.checklist.replace(/#fff/g, "#2A1F52")}</div>
             <div class="t">MENGETAHUI</div>
-            <div class="role">STORE MANAGER<br>${esc(selectedBranch.name.toUpperCase())}</div>
             <div class="line"><div class="name">${esc(storeManagerName || storeLeaderName || "\u2014")}</div></div>
           </div>
           <div class="sign-box">
-            <div class="sign-badge">${ICON.person.replace(/#fff/g, "#2A1F52")}</div>
             <div class="t">PELAKSANA</div>
-            <div class="role">STAFF AUDIT</div>
             <div class="line"><div class="name">${esc(profile?.full_name || "\u2014")}</div></div>
           </div>
           <div class="catatan-box">
@@ -624,24 +698,18 @@ export default function BeritaAcara({ profile }) {
       <script>
         function fitToPage() {
           const zoomEl = document.getElementById("pdfZoom");
-          const targetHeight = 1000; // ruang aman cetak A4, sengaja dikonservatifkan (antisipasi margin printer/browser)
-
-          zoomEl.style.zoom = 1;
-          const naturalHeight = zoomEl.scrollHeight;
-          let zoom = targetHeight / naturalHeight;
-          zoom = Math.min(zoom, 1.05);
-          zoom = Math.max(zoom, 0.55); // batas bawah biar teks jangan sampai nggak kebaca
-          zoomEl.style.zoom = zoom;
-
-          // Cek ulang sekali lagi — kalau masih meleset dikit, koreksi lagi.
-          setTimeout(() => {
-            const afterHeight = zoomEl.getBoundingClientRect().height;
-            if (afterHeight > targetHeight + 4) {
-              const corrected = Math.max((targetHeight / afterHeight) * zoom, 0.5);
-              zoomEl.style.zoom = corrected;
-            }
-            setTimeout(() => window.print(), 250);
-          }, 100);
+          const targetHeight = 960; // ruang aman cetak A4 — diketatin dikit lagi (sempet ada kasus footer brand kepental sendirian ke halaman 2)
+          // Bukan zoom lagi (itu ngecilin font juga) — nempelin class compact-1..4 bertahap,
+          // yang cuma nyusutin padding/margin/gap/ukuran foto. Font-size nggak disentuh sama sekali.
+          const steps = ["compact-1", "compact-2", "compact-3", "compact-4", "compact-5", "compact-6", "compact-7"];
+          let i = 0;
+          while (zoomEl.scrollHeight > targetHeight && i < steps.length) {
+            zoomEl.classList.add(steps[i]);
+            i++;
+          }
+          // Kalau abis compact-4 masih kepanjangan juga, biarin lanjut ke halaman 2 —
+          // daripada maksa muat 1 halaman dengan cara ngecilin font.
+          setTimeout(() => window.print(), 250);
         }
         function waitForImages() {
           const imgs = Array.from(document.querySelectorAll("img"));
@@ -786,7 +854,9 @@ export default function BeritaAcara({ profile }) {
                       <div
                         key={e.id}
                         onClick={async () => {
-                          const { data: iv } = await supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", selectedBranch.id).eq("period", viewPeriod);
+                          let ivQuery = supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", selectedBranch.id).eq("period", viewPeriod);
+                          if (profile?.role === "auditor" && viewPeriod >= ISOLATION_START_PERIOD) ivQuery = ivQuery.eq("submitted_by", profile.id);
+                          const { data: iv } = await ivQuery;
                           const pairedInv = (iv || []).find((r) => r.data?.audit_date === e.audit_date) || null;
                           applyEntryToForm(e, pairedInv);
                         }}

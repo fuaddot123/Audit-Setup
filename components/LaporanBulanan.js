@@ -17,9 +17,10 @@ const GREY = "888888";
 const WHITE = "FFFFFF";
 
 function kondisiSOP(score) {
-  if (score >= 85) return { lbl: "Baik", color: GREEN };
-  if (score >= 70) return { lbl: "Perlu Perhatian", color: AMBER };
-  return { lbl: "Berisiko Tinggi", color: RED };
+  if (score >= 90) return { lbl: "Sangat Baik", color: "1a9e6e" };
+  if (score >= 80) return { lbl: "Baik", color: "2f9e46" };
+  if (score >= 70) return { lbl: "Cukup", color: AMBER };
+  return { lbl: "Perlu Perbaikan", color: RED };
 }
 
 // Definisi modul yang bisa multi-audit per bulan — dipakai buat deteksi & resolusi "audit mana yang dipakai"
@@ -33,6 +34,17 @@ const MODULE_DEFS = [
 function dateOfEntry(moduleKey, entry) {
   if (!entry) return null;
   return moduleKey === "keu" ? entry.audit_date : entry.data?.audit_date;
+}
+// Bandingin 2 record audit buat nentuin mana yang "lebih baru" — audit_date duluan,
+// kalau sama baru fallback ke created_at. INI HARUS SAMA PERSIS sama tie-break di
+// resolveEntry() (dipakai kartu skor bulan ini), biar grafik tren & kartu skor nggak
+// pernah pilih audit yang beda pas 1 cabang ada >1 audit di tanggal yang sama.
+function isNewerAudit(candidate, existing, dateOf) {
+  if (!existing) return true;
+  const dc = dateOf(candidate) || "";
+  const de = dateOf(existing) || "";
+  if (dc !== de) return dc > de;
+  return (candidate.created_at || "") > (existing.created_at || "");
 }
 function groupByBranch(arr) {
   const map = {};
@@ -48,12 +60,12 @@ function resolveEntry(moduleKey, branchId, grouped, choices) {
   const entries = grouped[branchId];
   if (!entries || !entries.length) return null;
   if (entries.length === 1) return entries[0];
-  const chosenDate = choices[`${branchId}|${moduleKey}`];
-  if (chosenDate) {
-    const match = entries.find((e) => dateOfEntry(moduleKey, e) === chosenDate);
+  const chosenId = choices[`${branchId}|${moduleKey}`];
+  if (chosenId) {
+    const match = entries.find((e) => String(e.id) === String(chosenId));
     if (match) return match;
   }
-  return [...entries].sort((a, b) => (dateOfEntry(moduleKey, b) || "").localeCompare(dateOfEntry(moduleKey, a) || ""))[0];
+  return [...entries].sort((a, b) => (dateOfEntry(moduleKey, b) || "").localeCompare(dateOfEntry(moduleKey, a) || "") || (b.created_at || "").localeCompare(a.created_at || ""))[0];
 }
 
 // ── Kalkulasi Kepatuhan SOP gabungan (4 sumber) — sama persis formula di SopKepatuhan.js ──
@@ -215,17 +227,29 @@ export default function LaporanBulanan({ profile }) {
       // ── Rata-rata company-wide per bulan (6 bulan terakhir) — buat chart tren ──
       // Cabang Baru & Tidak Visit dikecualikan dari rata-rata, konsisten sama aturan di tempat lain.
       // Cuma cabang yang lolos filter BranchMultiSelect yang ikut dihitung, biar konsisten sama tabel & kartu ringkasan.
-      function monthlyAvg(records, valueKey, isJsonb) {
+      function monthlyAvg(records, valueKey, isJsonb, moduleKey) {
         return trendPeriods.map((p) => {
           const inMonth = records.filter((r) => r.period === p && selectedBranchIdSet.has(r.branch_id));
           // Resolve ke audit paling baru per cabang dulu (bisa ada >1 audit per cabang per bulan),
           // baru dirata-ratain — sebelumnya semua audit ke-hitung, bikin beda tipis sama kartu ringkasan.
           const byBranch = {};
+          const dateOf = (rec) => (isJsonb ? rec.data?.audit_date : rec.audit_date) || "";
           inMonth.forEach((r) => {
             const key = r.branch_id;
-            const dateOf = (rec) => (isJsonb ? rec.data?.audit_date : rec.audit_date) || "";
-            if (!byBranch[key] || dateOf(r) > dateOf(byBranch[key])) byBranch[key] = r;
+            if (isNewerAudit(r, byBranch[key], dateOf)) byBranch[key] = r;
           });
+          // Buat bulan yang lagi digenerate, hormatin pilihan manual di panel multi-audit,
+          // biar sama persis kayak kartu skor.
+          if (moduleKey && p === period) {
+            Object.keys(byBranch).forEach((branchId) => {
+              const chosenId = choices[`${branchId}|${moduleKey}`];
+              if (!chosenId) return;
+              // String() di kedua sisi — branchId dari Object.keys() SELALU string,
+              // r.branch_id asli bisa number. Tanpa ini pilihan manual gagal senyap.
+              const match = inMonth.find((r) => String(r.branch_id) === String(branchId) && String(r.id) === String(chosenId));
+              if (match) byBranch[branchId] = match;
+            });
+          }
           const valid = Object.values(byBranch).filter((r) => {
             const d = isJsonb ? r.data : r;
             return d && !d.tidak_visit && !d.cabang_baru;
@@ -235,16 +259,25 @@ export default function LaporanBulanan({ profile }) {
           return sum / valid.length;
         });
       }
-      const kesTrend = monthlyAvg(kesTrendRes.data || [], "kesehatan_pct", true);
-      const svcTrend = monthlyAvg(svcTrendRes.data || [], "ratio", true);
+      const kesTrend = monthlyAvg(kesTrendRes.data || [], "kesehatan_pct", true, "kes");
+      const svcTrend = monthlyAvg(svcTrendRes.data || [], "ratio", true, "svc");
       const keuTrend = (() => {
         // Audit Keuangan nggak nyimpen "posisi" langsung, jadi dihitung dari field mentah dulu per baris.
         return trendPeriods.map((p) => {
           const inMonth = (keuTrendRes.data || []).filter((r) => r.period === p && selectedBranchIdSet.has(r.branch_id));
           const byBranch = {};
           inMonth.forEach((r) => {
-            if (!byBranch[r.branch_id] || (r.audit_date || "") > (byBranch[r.branch_id].audit_date || "")) byBranch[r.branch_id] = r;
+            if (isNewerAudit(r, byBranch[r.branch_id], (rec) => rec.audit_date)) byBranch[r.branch_id] = r;
           });
+          // Buat bulan yang lagi digenerate, hormatin pilihan manual di panel multi-audit.
+          if (p === period) {
+            Object.keys(byBranch).forEach((branchId) => {
+              const chosenId = choices[`${branchId}|keu`];
+              if (!chosenId) return;
+              const match = inMonth.find((r) => String(r.branch_id) === String(branchId) && String(r.id) === String(chosenId));
+              if (match) byBranch[branchId] = match;
+            });
+          }
           const valid = Object.values(byBranch).filter((r) => !r.tidak_visit && !r.cabang_baru);
           if (!valid.length) return null;
           const vals = valid.map((r) => computeKeuStatus(r, keuSettings)?.posisi || 0);
@@ -254,20 +287,33 @@ export default function LaporanBulanan({ profile }) {
 
       // Kepatuhan SOP gabungan — 4 sumber sekaligus, per bulan
       const kepatuhanTrend = (() => {
+        if (typeof window !== "undefined") window.__kepDebugTrend = []; // reset tiap generate
         // Semua sumber di-resolve ke audit paling baru per cabang+bulan dulu (bisa ada >1 audit),
         // baru digabung — sebelumnya numpuk semua audit, bikin beda tipis sama kartu ringkasan.
-        function latestByBranchPeriodKey(records, dateOf) {
+        function latestByBranchPeriodKey(records, dateOf, moduleKey) {
           const map = {};
           records.filter((r) => selectedBranchIdSet.has(r.branch_id)).forEach((r) => {
             const key = `${r.branch_id}|${r.period}`;
-            if (!map[key] || dateOf(r) > dateOf(map[key])) map[key] = r;
+            if (isNewerAudit(r, map[key], dateOf)) map[key] = r;
           });
+          // Buat bulan yang lagi digenerate (period ini), hormatin pilihan manual di panel
+          // multi-audit — biar sama persis kayak kartu skor, bukan asal ambil yang terbaru.
+          if (moduleKey) {
+            Object.keys(map).forEach((key) => {
+              const [branchId, p] = key.split("|");
+              if (p !== period) return;
+              const chosenId = choices[`${branchId}|${moduleKey}`];
+              if (!chosenId) return;
+              const match = records.find((r) => String(r.branch_id) === String(branchId) && r.period === p && String(r.id) === String(chosenId));
+              if (match) map[key] = match;
+            });
+          }
           return map;
         }
-        const sopByKey = latestByBranchPeriodKey(sopTrendRes.data || [], (r) => r.data?.audit_date || "");
-        const kesByKey = latestByBranchPeriodKey(kesTrendRes.data || [], (r) => r.data?.audit_date || "");
-        const keuByKey = latestByBranchPeriodKey(keuTrendRes.data || [], (r) => r.audit_date || "");
-        const invByKey = latestByBranchPeriodKey(invTrendRes.data || [], (r) => r.data?.audit_date || "");
+        const sopByKey = latestByBranchPeriodKey(sopTrendRes.data || [], (r) => r.data?.audit_date || "", "sop");
+        const kesByKey = latestByBranchPeriodKey(kesTrendRes.data || [], (r) => r.data?.audit_date || "", "kes");
+        const keuByKey = latestByBranchPeriodKey(keuTrendRes.data || [], (r) => r.audit_date || "", "keu");
+        const invByKey = latestByBranchPeriodKey(invTrendRes.data || [], (r) => r.data?.audit_date || "", "inv");
 
         return trendPeriods.map((p) => {
           const sopThisMonth = Object.entries(sopByKey).filter(([key]) => key.endsWith(`|${p}`)).map(([, r]) => r);
@@ -287,6 +333,14 @@ export default function LaporanBulanan({ profile }) {
             const asetTemuan = invTemuan + kondisiTemuan;
             const total = sopTemuan + stokTemuan + keuanganTemuan + asetTemuan;
             pctList.push(Math.max(0, 1 - total / BASELINE));
+            // ── DEBUG SEMENTARA: rekam detail cabang ini kalau ini bulan yang lagi digenerate ──
+            if (p === period) {
+              window.__kepDebugTrend = window.__kepDebugTrend || [];
+              window.__kepDebugTrend.push({
+                branch_id: sopRec.branch_id, sopTemuan, stokTemuan, keuanganTemuan, asetTemuan, total,
+                pct: Math.round(Math.max(0, 1 - total / BASELINE) * 100),
+              });
+            }
           });
           if (!pctList.length) return null;
           return pctList.reduce((s, v) => s + v, 0) / pctList.length;
@@ -317,8 +371,12 @@ export default function LaporanBulanan({ profile }) {
           needsChoice.push({
             branchId, branchName: branch?.name || branchId, moduleKey: m.key, moduleLabel: m.label,
             options: [...entries]
-              .sort((a, b) => (dateOfEntry(m.key, b) || "").localeCompare(dateOfEntry(m.key, a) || ""))
-              .map((e, i, arr) => ({ date: dateOfEntry(m.key, e), label: `Audit ${arr.length - i} (${dateOfEntry(m.key, e) || "?"})` })),
+              .sort((a, b) => (dateOfEntry(m.key, b) || "").localeCompare(dateOfEntry(m.key, a) || "") || (b.created_at || "").localeCompare(a.created_at || ""))
+              .map((e, i, arr) => {
+                const d = dateOfEntry(m.key, e) || "?";
+                const submitted = e.created_at ? new Date(e.created_at).toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" }) : null;
+                return { id: String(e.id), date: d, label: `Audit ${arr.length - i} (${d}${submitted ? `, disimpan ${submitted}` : ""})` };
+              }),
           });
         });
       });
@@ -452,10 +510,12 @@ export default function LaporanBulanan({ profile }) {
       });
 
       // ── Ringkasan company-wide ──
-      const auditedRows = rows.filter((r) => r.sopScore !== null);
+      // Cabang Baru dikecualikan, konsisten sama aturan di Ranking Cabang & rata-rata 4 modul lain.
+      const auditedRows = rows.filter((r) => r.sopScore !== null && !r.sopCur?.data?.cabang_baru);
+      const kondisiSangatBaik = auditedRows.filter((r) => kondisiSOP(r.sopScore).lbl === "Sangat Baik").length;
       const kondisiBaik = auditedRows.filter((r) => kondisiSOP(r.sopScore).lbl === "Baik").length;
-      const kondisiPerhatian = auditedRows.filter((r) => kondisiSOP(r.sopScore).lbl === "Perlu Perhatian").length;
-      const kondisiBerisiko = auditedRows.filter((r) => kondisiSOP(r.sopScore).lbl === "Berisiko Tinggi").length;
+      const kondisiPerhatian = auditedRows.filter((r) => kondisiSOP(r.sopScore).lbl === "Cukup").length;
+      const kondisiBerisiko = auditedRows.filter((r) => kondisiSOP(r.sopScore).lbl === "Perlu Perbaikan").length;
 
       // Temuan domain: kategori dengan gagal terbanyak company-wide (dipakai di slide rekomendasi)
       const catFailCount = {};
@@ -504,7 +564,39 @@ export default function LaporanBulanan({ profile }) {
 
       const kepatuhanRows = rows.filter((r) => r.kepatuhan !== null && !r.kepCurDetail?.cabangBaru);
       const kepatuhanAvg = kepatuhanRows.length ? kepatuhanRows.reduce((s, r) => s + r.kepatuhan, 0) / kepatuhanRows.length : null;
-      const totalTemuanKepatuhan = rows.filter((r) => r.kepatuhan !== null).reduce((s, r) => s + Math.round((1 - r.kepatuhan) * BASELINE), 0);
+
+      const totalTemuanKepatuhan = rows.filter((r) => r.kepatuhan !== null && !r.kepCurDetail?.cabangBaru).reduce((s, r) => s + Math.round((1 - r.kepatuhan) * BASELINE), 0);
+
+      // ── DEBUG SEMENTARA: bandingin cabang & temuan yang dipake KARTU vs GRAFIK TREN buat bulan ini ──
+      if (typeof window !== "undefined") {
+        const kartuDebug = kepatuhanRows.map((r) => ({
+          branch_id: r.branch.id, branch_name: r.branch.name,
+          totalTemuan: r.kepCurDetail.totalTemuan, pct: Math.round(r.kepatuhan * 100),
+        }));
+        const trendDebug = (window.__kepDebugTrend || []).map((d) => ({
+          ...d, branch_name: branches.find((b) => b.id === d.branch_id)?.name || "?",
+        }));
+        console.log("=== DEBUG KEPATUHAN: KARTU (Skor Bulan Ini) ===");
+        console.table(kartuDebug);
+        console.log(`KARTU -> ${kartuDebug.length} cabang, total temuan ${kartuDebug.reduce((s, r) => s + r.totalTemuan, 0)}, avg ${kepatuhanAvg !== null ? Math.round(kepatuhanAvg * 100) : "-"}%`);
+        console.log("=== DEBUG KEPATUHAN: GRAFIK TREN (titik bulan ini) ===");
+        console.table(trendDebug);
+        const trendAvg = kepatuhanTrend[kepatuhanTrend.length - 1];
+        console.log(`TREN -> ${trendDebug.length} cabang, total temuan ${trendDebug.reduce((s, r) => s + r.total, 0)}, avg ${trendAvg !== null ? Math.round(trendAvg * 100) : "-"}%`);
+        const kartuIds = new Set(kartuDebug.map((r) => r.branch_id));
+        const trendIds = new Set(trendDebug.map((r) => r.branch_id));
+        const onlyInKartu = kartuDebug.filter((r) => !trendIds.has(r.branch_id));
+        const onlyInTrend = trendDebug.filter((r) => !kartuIds.has(r.branch_id));
+        if (onlyInKartu.length || onlyInTrend.length) {
+          console.warn("BEDA CABANG antara kartu & tren:", { onlyInKartu, onlyInTrend });
+        }
+        kartuDebug.forEach((k) => {
+          const t = trendDebug.find((r) => r.branch_id === k.branch_id);
+          if (t && t.totalTemuan !== k.totalTemuan && t.total !== k.totalTemuan) {
+            console.warn(`BEDA TEMUAN di cabang ${k.branch_name}: kartu=${k.totalTemuan}, tren=${t.total}`);
+          }
+        });
+      }
 
       const rankedSOP = [...auditedRows].filter((r) => !r.sopCur?.data?.cabang_baru).sort((a, b) => b.sopScore - a.sopScore);
 
@@ -543,6 +635,14 @@ export default function LaporanBulanan({ profile }) {
         const br = (b >> 16) & 255, bg = (b >> 8) & 255, bb = b & 255;
         const r = Math.round(ar + (br - ar) * t), g = Math.round(ag + (bg - ag) * t), bl = Math.round(ab + (bb - ab) * t);
         return [r, g, bl].map((n) => n.toString(16).padStart(2, "0")).join("").toUpperCase();
+      }
+
+      // Bullet dengan bagian depan ditebalin (buat angka/jumlah) + sisa kalimat normal.
+      function boldBullet(boldPart, restPart, color) {
+        return [
+          { text: boldPart, options: { bullet: { code: "2022" }, bold: true, color: color || PURPLE } },
+          { text: restPart, options: { breakLine: true, paraSpaceAfter: 8 } },
+        ];
       }
 
       function textBar(pct) {
@@ -594,36 +694,40 @@ export default function LaporanBulanan({ profile }) {
         const vals = points.map((pt) => Number((pt.value * 100).toFixed(decimals)));
         const vMin = Math.min(...vals), vMax = Math.max(...vals);
         const pad = Math.max((vMax - vMin) * 0.25, decimals > 0 ? 0.5 : 3);
-        s.addChart(pptx.ChartType.line, [{
-          name: "Rata-rata",
-          labels: points.map((pt) => pt.label),
-          values: vals,
-        }], {
-          x, y, w, h,
-          chartColors: [PURPLE],
-          lineSize: 2.5,
-          lineDataSymbol: "circle",
-          lineDataSymbolSize: 7,
-          lineDataSymbolLineColor: PURPLE,
-          lineDataSymbolLineSize: 1.5,
-          showLegend: false,
-          showTitle: false,
-          showValue: true,
-          dataLabelPosition: "t",
-          dataLabelColor: PURPLE,
-          dataLabelFontFace: "Arial",
-          dataLabelFontSize: 10,
-          dataLabelFontBold: true,
-          dataLabelFormatCode: decimals > 0 ? "0." + "0".repeat(decimals) : "0",
-          catAxisLabelFontSize: 9,
-          catAxisLabelColor: "666666",
-          valAxisHidden: false,
-          valAxisLabelFontSize: 8,
-          valAxisLabelColor: "999999",
-          valAxisMinVal: Math.max(0, Math.floor(vMin - pad)),
-          valAxisMaxVal: Math.ceil(vMax + pad),
-          valGridLine: { color: "EEEEEE", style: "solid", size: 0.75 },
+        const axisMin = Math.max(0, Math.floor(vMin - pad));
+        const axisMax = Math.ceil(vMax + pad);
+        const cx = x + 0.05, cy = y + 0.05, cw = w - 0.1, ch = h - 0.1;
+        const labels = points.map((pt) => pt.label);
+        const fmtCode = decimals > 0 ? "0." + "0".repeat(decimals) : "0";
+
+        // Kartu gelap di belakang chart, biar match gaya area-fill ungu gelap kayak di dashboard.
+        s.addShape(pptx.ShapeType.roundRect, { x, y, w, h, rectRadius: 0.05, fill: { color: "1A1530" } });
+
+        // Layer 1: area buat gradient fill + sumbu (tanpa label, biar nggak dobel sama layer 2)
+        s.addChart(pptx.ChartType.area, [{ name: "a", labels, values: vals }], {
+          x: cx, y: cy, w: cw, h: ch,
+          chartColors: ["8B5CF6"], chartColorsOpacity: 40,
+          showLegend: false, showTitle: false, showValue: false,
+          catAxisLabelFontSize: 8, catAxisLabelColor: "9D94C0", catAxisLineColor: "3A2F5A",
+          valAxisLabelFontSize: 7, valAxisLabelColor: "9D94C0", valAxisLineColor: "3A2F5A",
+          valAxisMinVal: axisMin, valAxisMaxVal: axisMax,
+          valGridLine: { color: "342A52", style: "dash", size: 0.75 },
           catGridLine: { style: "none" },
+          chartArea: { fill: { color: "1A1530" } }, plotArea: { fill: { color: "1A1530" } },
+        });
+        // Layer 2: line transparan cuma buat titik lingkaran + label angka (numpuk pas di atas layer 1)
+        s.addChart(pptx.ChartType.line, [{ name: "b", labels, values: vals }], {
+          x: cx, y: cy, w: cw, h: ch,
+          chartColors: ["8B5CF6"],
+          lineSize: 2, lineDataSymbol: "circle", lineDataSymbolSize: 7,
+          lineDataSymbolLineColor: "FFFFFF", lineDataSymbolLineSize: 1.75,
+          showLegend: false, showTitle: false, showValue: true,
+          dataLabelPosition: "t", dataLabelColor: "FFFFFF", dataLabelFontFace: "Arial",
+          dataLabelFontSize: 9, dataLabelFontBold: true, dataLabelFormatCode: fmtCode,
+          catAxisHidden: true, valAxisHidden: true,
+          valAxisMinVal: axisMin, valAxisMaxVal: axisMax,
+          catGridLine: { style: "none" }, valGridLine: { style: "none" },
+          chartArea: { fill: { type: "none" } }, plotArea: { fill: { type: "none" } },
         });
       }
 
@@ -746,20 +850,38 @@ export default function LaporanBulanan({ profile }) {
         s.addShape(pptx.ShapeType.line, { x: 1.05, y: 1.98, w: 1.6, h: 0, line: { color: PURPLE, width: 1.5 } });
 
         const summaryCards = [
-          { icon: "\u{1F3E0}", label: "Total Cabang di Audit", value: `${auditedRows.length} Cabang`, bg: "EDE9FB", fg: PURPLE },
-          { icon: "\u{1F44D}", label: "Cabang Kondisi Baik", value: `${kondisiBaik} Cabang`, bg: "E3F6EC", fg: GREEN },
-          { icon: "\u26A0", label: "Cabang Perlu Perhatian", value: `${kondisiPerhatian} Cabang`, bg: "FDF0DC", fg: AMBER },
-          { icon: "\u26D4", label: "Cabang Berisiko Tinggi", value: `${kondisiBerisiko} Cabang`, bg: "FBE4E4", fg: RED },
+          { icon: "\u{1F3E0}", label: "Cabang dengan Data SOP", value: `${auditedRows.length} Cabang`, bg: "EDE9FB", fg: PURPLE },
+          { icon: "\u{1F31F}", label: "Sangat Baik (\u226590%)", value: `${kondisiSangatBaik} Cabang`, bg: "E3F6EC", fg: "1a9e6e" },
+          { icon: "\u{1F44D}", label: "Baik (80-89%)", value: `${kondisiBaik} Cabang`, bg: "E9F6E9", fg: "2f9e46" },
+          { icon: "\u26A0", label: "Cukup (70-79%)", value: `${kondisiPerhatian} Cabang`, bg: "FDF0DC", fg: AMBER },
+          { icon: "\u26D4", label: "Perlu Perbaikan (<70%)", value: `${kondisiBerisiko} Cabang`, bg: "FBE4E4", fg: RED },
         ];
         summaryCards.forEach((c, i) => {
-          const yy = 2.25 + i * 1.15;
-          s.addShape(pptx.ShapeType.roundRect, { x: 0.4, y: yy, w: 5.4, h: 0.98, rectRadius: 0.08, fill: { color: "FBFAFF" }, line: { color: "E9E4F5", width: 1 } });
-          s.addShape(pptx.ShapeType.rect, { x: 0.4, y: yy, w: 0.06, h: 0.98, fill: { color: c.fg } });
-          s.addShape(pptx.ShapeType.roundRect, { x: 0.65, y: yy + 0.19, w: 0.6, h: 0.6, rectRadius: 0.1, fill: { color: c.bg } });
-          s.addText(c.icon, { x: 0.65, y: yy + 0.19, w: 0.6, h: 0.6, fontSize: 18, align: "center", valign: "middle", margin: 0 });
-          s.addText(c.label, { x: 1.5, y: yy + 0.14, w: 4.1, h: 0.32, fontSize: 11.5, color: "444444", margin: 0 });
-          s.addText(c.value, { x: 1.5, y: yy + 0.44, w: 4.1, h: 0.45, fontSize: 19, bold: true, color: c.fg, margin: 0 });
+          const yy = 2.15 + i * 0.86;
+          s.addShape(pptx.ShapeType.roundRect, { x: 0.4, y: yy, w: 5.4, h: 0.75, rectRadius: 0.08, fill: { color: "FBFAFF" }, line: { color: "E9E4F5", width: 1 } });
+          s.addShape(pptx.ShapeType.rect, { x: 0.4, y: yy, w: 0.06, h: 0.75, fill: { color: c.fg } });
+          s.addShape(pptx.ShapeType.roundRect, { x: 0.62, y: yy + 0.14, w: 0.47, h: 0.47, rectRadius: 0.1, fill: { color: c.bg } });
+          s.addText(c.icon, { x: 0.62, y: yy + 0.14, w: 0.47, h: 0.47, fontSize: 15, align: "center", valign: "middle", margin: 0 });
+          s.addText(c.label, { x: 1.32, y: yy + 0.09, w: 4.3, h: 0.28, fontSize: 10, color: "444444", margin: 0 });
+          s.addText(c.value, { x: 1.32, y: yy + 0.35, w: 4.3, h: 0.38, fontSize: 16, bold: true, color: c.fg, margin: 0 });
         });
+
+        // Keterangan cabang yang DIKECUALIKAN dari "Cabang dengan Data SOP" di atas —
+        // biar kelihatan kemana sisa cabangnya (nggak cuma "hilang" tanpa penjelasan).
+        const belumAdaDataCount = rows.filter((r) => !r.sopCur).length;
+        const tidakVisitSOPCount = rows.filter((r) => r.tidakVisitSOP).length;
+        const cabangBaruSOPCount = rows.filter((r) => r.sopCur && !r.tidakVisitSOP && r.sopCur?.data?.cabang_baru).length;
+        const exclNoteParts = [];
+        if (cabangBaruSOPCount) exclNoteParts.push(`\u2b50 ${cabangBaruSOPCount} Cabang Baru`);
+        if (tidakVisitSOPCount) exclNoteParts.push(`\u{1F6AB} ${tidakVisitSOPCount} Tidak Visit`);
+        if (belumAdaDataCount) exclNoteParts.push(`\u23F3 ${belumAdaDataCount} Belum Ada Data`);
+        if (exclNoteParts.length) {
+          const noteY = 2.15 + summaryCards.length * 0.86 + 0.06;
+          s.addText(
+            `${exclNoteParts.join("   \u00b7   ")}  \u2014 di luar ${auditedRows.length} cabang di atas (total ${branches.length} cabang)`,
+            { x: 0.4, y: noteY, w: 5.4, h: 0.4, fontSize: 9.5, italic: true, color: "888888", margin: 0 }
+          );
+        }
 
         // ── Kanan: Temuan Terbanyak ──
         s.addShape(pptx.ShapeType.ellipse, { x: 6.9, y: 1.45, w: 0.55, h: 0.55, fill: { color: PURPLE } });
@@ -875,14 +997,14 @@ export default function LaporanBulanan({ profile }) {
         s.addText("RINGKASAN", { x: cardX + 0.2, y: 5.13, w: 4, h: 0.32, fontSize: 13, bold: true, color: PURPLE, margin: 0 });
         const kesBermasalahBranches = rows.filter((r) => r.kesPct !== null && r.kesPct < 0.7).map((r) => r.branch.name);
         const ringkasanLines = [
-          kesPrevAvg !== null && kesNow !== null
-            ? `Rata-rata kesehatan stok cabang ${trendUp ? "membaik" : "menurun"} dari ${Math.round(kesPrevAvg * 100)}% menjadi ${Math.round(kesNow * 100)}%.`
-            : "Data pembanding bulan lalu belum lengkap.",
-          kesBermasalahBranches.length
-            ? `Perlu monitoring & tindak lanjut pada cabang: ${kesBermasalahBranches.join(", ")}.`
-            : "Semua cabang berada di atas ambang aman bulan ini.",
+          ...(kesPrevAvg !== null && kesNow !== null
+            ? boldBullet(`${Math.round(kesPrevAvg * 100)}% \u2192 ${Math.round(kesNow * 100)}%`, ` \u2014 ${trendUp ? "membaik" : "menurun"}`, trendUp ? GREEN : RED)
+            : boldBullet("\u2014", " Data pembanding bulan lalu belum lengkap.")),
+          ...(kesBermasalahBranches.length
+            ? boldBullet(`${kesBermasalahBranches.length} cabang`, ` perlu tindak lanjut: ${kesBermasalahBranches.join(", ")}`, RED)
+            : boldBullet("0 cabang", " bermasalah \u2014 semua di atas ambang aman.", GREEN)),
         ];
-        s.addText(ringkasanLines.map((t) => ({ text: t, options: { bullet: { code: "2022" }, breakLine: true, paraSpaceAfter: 8 } })), { x: cardX + 0.2, y: 5.5, w: 2.9, h: 1.55, fontSize: 10.5, color: "444444", valign: "top", margin: 0 });
+        s.addText(ringkasanLines, { x: cardX + 0.2, y: 5.5, w: 2.65, h: 1.55, fontSize: 10.5, color: "444444", valign: "top", margin: 0 });
 
         const kesValid = kesTrend.map((v, i) => ({ v, p: trendPeriods[i] })).filter((o) => o.v !== null);
         if (kesValid.length) {
@@ -909,7 +1031,7 @@ export default function LaporanBulanan({ profile }) {
         s.addText("KETERANGAN INDIKATOR", { x: cardX2 + 0.2, y: 1.3, w: 5, h: 0.3, fontSize: 13, bold: true, color: PURPLE, margin: 0 });
         const legendItems = [
           { c: GREEN, icon: "\u{1F6E1}\u{FE0F}", l: "Terkendali", r: "\u226585%", d: "Kondisi sangat baik" },
-          { c: "2f9e9e", icon: "\u{1F514}", l: "Waspada", r: "70-84%", d: "Temuan ringan, masih toleran" },
+          { c: "2f9e9e", icon: "\u{1F514}", l: "Terpantau", r: "70-84%", d: "Temuan ringan, masih toleran" },
           { c: AMBER, icon: "\u{1F50D}", l: "Monitoring", r: "50-69%", d: "Perlu tindakan korektif" },
           { c: RED, icon: "\u26A0\uFE0F", l: "Perlu Perhatian", r: "<50%", d: "Risiko tinggi, tindak lanjut" },
         ];
@@ -1021,14 +1143,14 @@ export default function LaporanBulanan({ profile }) {
         s.addText("RINGKASAN", { x: cardX + 0.2, y: 5.13, w: 4, h: 0.32, fontSize: 13, bold: true, color: PURPLE, margin: 0 });
         const svcBermasalahBranches = rows.filter((r) => r.svcRatio !== null && r.svcRatio >= 0.0033).map((r) => r.branch.name);
         const svcRingkasanLines = [
-          svcPrevAvg !== null && svcNow !== null
-            ? `Rata-rata Service Ratio ${svcTrendGood ? "membaik" : "meningkat"} dari ${(svcPrevAvg * 100).toFixed(2)}% menjadi ${(svcNow * 100).toFixed(2)}%.`
-            : "Data pembanding bulan lalu belum lengkap.",
-          svcBermasalahBranches.length
-            ? `Perlu monitoring & tindak lanjut pada cabang: ${svcBermasalahBranches.join(", ")}.`
-            : "Semua cabang berada di atas ambang aman bulan ini.",
+          ...(svcPrevAvg !== null && svcNow !== null
+            ? boldBullet(`${(svcPrevAvg * 100).toFixed(2)}% \u2192 ${(svcNow * 100).toFixed(2)}%`, ` \u2014 ${svcTrendGood ? "membaik" : "meningkat"}`, svcTrendGood ? GREEN : RED)
+            : boldBullet("\u2014", " Data pembanding bulan lalu belum lengkap.")),
+          ...(svcBermasalahBranches.length
+            ? boldBullet(`${svcBermasalahBranches.length} cabang`, ` perlu tindak lanjut: ${svcBermasalahBranches.join(", ")}`, RED)
+            : boldBullet("0 cabang", " bermasalah \u2014 semua di atas ambang aman.", GREEN)),
         ];
-        s.addText(svcRingkasanLines.map((t) => ({ text: t, options: { bullet: { code: "2022" }, breakLine: true, paraSpaceAfter: 8 } })), { x: cardX + 0.2, y: 5.5, w: 2.9, h: 1.55, fontSize: 10.5, color: "444444", valign: "top", margin: 0 });
+        s.addText(svcRingkasanLines, { x: cardX + 0.2, y: 5.5, w: 2.65, h: 1.55, fontSize: 10.5, color: "444444", valign: "top", margin: 0 });
 
         const svcValid = svcTrend.map((v, i) => ({ v, p: trendPeriods[i] })).filter((o) => o.v !== null);
         if (svcValid.length) {
@@ -1164,12 +1286,12 @@ export default function LaporanBulanan({ profile }) {
         s.addText("RINGKASAN", { x: cardX + 0.2, y: 5.13, w: 4, h: 0.32, fontSize: 13, bold: true, color: PURPLE, margin: 0 });
         const keuNegRows = rows.filter((r) => r.sisa !== null && r.sisa < 0).map((r) => r.branch.name);
         const keuRingkasanLines = [
-          `Total pengeluaran kas kecil seluruh cabang bulan ini: Rp${totalKasKeluar.toLocaleString("id-ID")}.`,
-          keuNegRows.length
-            ? `Cabang saldo minus: ${keuNegRows.join(", ")}.`
-            : "Tidak ada cabang dengan saldo minus bulan ini.",
+          ...boldBullet(`Rp${totalKasKeluar.toLocaleString("id-ID")}`, " total pengeluaran kas kecil bulan ini"),
+          ...(keuNegRows.length
+            ? boldBullet(`${keuNegRows.length} cabang`, ` saldo minus: ${keuNegRows.join(", ")}`, RED)
+            : boldBullet("0 cabang", " saldo minus bulan ini.", GREEN)),
         ];
-        s.addText(keuRingkasanLines.map((t) => ({ text: t, options: { bullet: { code: "2022" }, breakLine: true, paraSpaceAfter: 8 } })), { x: cardX + 0.2, y: 5.5, w: 2.9, h: 1.55, fontSize: 10.5, color: "444444", valign: "top", margin: 0 });
+        s.addText(keuRingkasanLines, { x: cardX + 0.2, y: 5.5, w: 2.65, h: 1.55, fontSize: 10.5, color: "444444", valign: "top", margin: 0 });
 
         const keuValid = keuTrend.map((v, i) => ({ v, p: trendPeriods[i] })).filter((o) => o.v !== null);
         if (keuValid.length) {
@@ -1251,7 +1373,7 @@ export default function LaporanBulanan({ profile }) {
           });
           const valid = kepRowsAll.map((r) => r[detailKey]).filter((d) => d && d.hasData && !d.tidakVisit && !d.cabangBaru);
           const avgPct = valid.length ? valid.reduce((s2, d) => s2 + d.pct, 0) / valid.length : 0;
-          const totalTemuanAll = kepRowsAll.map((r) => r[detailKey]).filter((d) => d && d.hasData && !d.tidakVisit).reduce((s2, d) => s2 + d.totalTemuan, 0);
+          const totalTemuanAll = kepRowsAll.map((r) => r[detailKey]).filter((d) => d && d.hasData && !d.tidakVisit && !d.cabangBaru).reduce((s2, d) => s2 + d.totalTemuan, 0);
           body.push([
             { text: "TOTAL / RATA-RATA", options: { colspan: 6, fontSize: 10.5, bold: true, fill: { color: PURPLE }, color: WHITE } },
             { text: String(totalTemuanAll), options: { fontSize: 10.5, bold: true, align: "center", fill: { color: PURPLE }, color: WHITE } },
@@ -1300,12 +1422,12 @@ export default function LaporanBulanan({ profile }) {
         s.addText("RINGKASAN", { x: cardX + 0.2, y: 5.13, w: 4, h: 0.32, fontSize: 13, bold: true, color: PURPLE, margin: 0 });
         const kepBermasalahBranches = rows.filter((r) => r.kepatuhan !== null && r.kepatuhan < 0.7).map((r) => r.branch.name);
         const kepRingkasanLines = [
-          `Skor Kepatuhan SOP gabungan company-wide: ${kepatuhanAvg !== null ? Math.round(kepatuhanAvg * 100) + "%" : "belum ada data"}, total ${totalTemuanKepatuhan} temuan.`,
-          kepBermasalahBranches.length
-            ? `Perlu tindak lanjut pada cabang: ${kepBermasalahBranches.join(", ")}.`
-            : "Semua cabang berada di atas ambang aman bulan ini.",
+          ...boldBullet(kepatuhanAvg !== null ? `${Math.round(kepatuhanAvg * 100)}%` : "\u2014", ` skor kepatuhan company-wide, ${totalTemuanKepatuhan} temuan`),
+          ...(kepBermasalahBranches.length
+            ? boldBullet(`${kepBermasalahBranches.length} cabang`, ` perlu tindak lanjut: ${kepBermasalahBranches.join(", ")}`, RED)
+            : boldBullet("0 cabang", " bermasalah \u2014 semua di atas ambang aman.", GREEN)),
         ];
-        s.addText(kepRingkasanLines.map((t) => ({ text: t, options: { bullet: { code: "2022" }, breakLine: true, paraSpaceAfter: 8 } })), { x: cardX + 0.2, y: 5.5, w: 2.9, h: 1.55, fontSize: 10.5, color: "444444", valign: "top", margin: 0 });
+        s.addText(kepRingkasanLines, { x: cardX + 0.2, y: 5.5, w: 2.65, h: 1.55, fontSize: 10.5, color: "444444", valign: "top", margin: 0 });
 
         const kepValid = kepatuhanTrend.map((v, i) => ({ v, p: trendPeriods[i] })).filter((o) => o.v !== null);
         if (kepValid.length) {
@@ -1348,7 +1470,12 @@ export default function LaporanBulanan({ profile }) {
       }
 
       // ── 8..N. Temuan per cabang (cuma yang ada temuan) ──
-      const branchesWithFindings = rows.filter((r) => r.findings.length > 0);
+      // Temuan tanpa dokumentasi foto di-skip dari slide ini, biar nggak numpuk jadi banyak
+      // slide buat temuan yang nggak ada bukti visualnya. Detail teksnya tetap ada di
+      // laporan lain (kartu Ringkasan tiap modul), cuma nggak dapet slide sendiri di sini.
+      const branchesWithFindings = rows
+        .map((r) => ({ ...r, findings: r.findings.filter((f) => f.media && f.media.length > 0) }))
+        .filter((r) => r.findings.length > 0);
       branchesWithFindings.forEach((r) => {
         const findingsAll = r.findings;
         const chunks = [];
@@ -1432,8 +1559,9 @@ export default function LaporanBulanan({ profile }) {
         addLogo(s, 11.3, 0.32);
 
         function rankingStatusInfo(score) {
-          if (score >= 90) return { lbl: "Sangat Baik", color: GREEN, bg: "E3F6EC", icon: "\u2713" };
-          if (score >= 70) return { lbl: "Baik", color: "b07212", bg: "FDF3E0", icon: "\u25D1" };
+          if (score >= 90) return { lbl: "Sangat Baik", color: "1a9e6e", bg: "E3F6EC", icon: "\u2713" };
+          if (score >= 80) return { lbl: "Baik", color: "2f9e46", bg: "E9F6E9", icon: "\u2713" };
+          if (score >= 70) return { lbl: "Cukup", color: "b07212", bg: "FDF3E0", icon: "\u25D1" };
           return { lbl: "Perlu Perbaikan", color: RED, bg: "FBE4E4", icon: "\u2717" };
         }
         const medals = ["\uD83D\uDC51", "\uD83E\uDD48", "\uD83E\uDD49", "\uD83C\uDFC5", "\uD83C\uDFC5"];
@@ -1470,15 +1598,16 @@ export default function LaporanBulanan({ profile }) {
         s.addShape(pptx.ShapeType.rect, { x: 6.05, y: barBotY + 0.12, w: 0.014, h: 0.48, fill: { color: "6b5f96" } });
         s.addText("KETERANGAN INDIKATOR", { x: 6.25, y: barBotY + 0.06, w: 3, h: 0.25, fontSize: 8.5, bold: true, color: "CFC7E6", margin: 0 });
         const legendKeys = [
-          { icon: "\u2713", c: GREEN, l: "\u226590%", d: "Sangat Baik" },
-          { icon: "\u25D1", c: GOLD, l: "70-89%", d: "Baik" },
+          { icon: "\u2713", c: "1a9e6e", l: "\u226590%", d: "Sangat Baik" },
+          { icon: "\u2713", c: "2f9e46", l: "80-89%", d: "Baik" },
+          { icon: "\u25D1", c: GOLD, l: "70-79%", d: "Cukup" },
           { icon: "\u2717", c: "e05555", l: "<70%", d: "Perlu Perbaikan" },
         ];
         legendKeys.forEach((it, i) => {
-          const lx = 6.25 + i * 2.05;
+          const lx = 6.15 + i * 1.62;
           s.addShape(pptx.ShapeType.ellipse, { x: lx, y: barBotY + 0.35, w: 0.24, h: 0.24, fill: { color: it.c } });
           s.addText(it.icon, { x: lx, y: barBotY + 0.35, w: 0.24, h: 0.24, fontSize: 8, align: "center", valign: "middle", color: WHITE, margin: 0 });
-          s.addText(`${it.l}  ${it.d}`, { x: lx + 0.3, y: barBotY + 0.34, w: 1.8, h: 0.28, fontSize: 9, bold: true, color: WHITE, valign: "middle", margin: 0 });
+          s.addText(`${it.l} ${it.d}`, { x: lx + 0.28, y: barBotY + 0.34, w: 1.4, h: 0.28, fontSize: 7.8, bold: true, color: WHITE, valign: "middle", margin: 0 });
         });
       }
 
@@ -1589,20 +1718,23 @@ export default function LaporanBulanan({ profile }) {
 
         s.addText("KONDISI UMUM", { x: lx + 0.2, y: 2.08, w: lw - 0.4, h: 0.25, fontSize: 10, bold: true, color: PURPLE, margin: 0 });
         const kondisiUmum = [
-          `Audit telah dilaksanakan pada ${branches.length} cabang sesuai ruang lingkup audit.`,
-          `${kondisiBaik} dari ${auditedRows.length} cabang menunjukkan pengelolaan stok & inventaris yang cukup baik.`,
-          `Tingkat kepatuhan SOP operasional tercatat ${kepatuhanAvg !== null ? Math.round(kepatuhanAvg * 100) + "%" : "belum lengkap datanya"}.`,
+          { b: `${branches.length} cabang`, r: " diaudit sesuai ruang lingkup audit." },
+          { b: `${kondisiSangatBaik + kondisiBaik}/${auditedRows.length} cabang`, r: " kondisi baik (stok & inventaris)." },
+          { b: kepatuhanAvg !== null ? `${Math.round(kepatuhanAvg * 100)}%` : "\u2014", r: " kepatuhan SOP operasional." },
         ];
-        kondisiUmum.forEach((t, i) => {
+        kondisiUmum.forEach((item, i) => {
           const yy = 2.36 + i * 0.42;
           s.addText("\u2713", { x: lx + 0.2, y: yy, w: 0.25, h: 0.36, fontSize: 10, bold: true, color: PURPLE, margin: 0 });
-          s.addText(t, { x: lx + 0.48, y: yy - 0.03, w: lw - 0.7, h: 0.42, fontSize: 9.8, color: "333333", valign: "top", margin: 0 });
+          s.addText([
+            { text: item.b, options: { bold: true, color: PURPLE } },
+            { text: item.r, options: {} },
+          ], { x: lx + 0.48, y: yy - 0.03, w: lw - 0.7, h: 0.42, fontSize: 9.8, color: "333333", valign: "top", margin: 0 });
         });
 
         s.addText("HASIL AUDIT", { x: lx + 0.2, y: 3.72, w: lw - 0.4, h: 0.25, fontSize: 10, bold: true, color: PURPLE, margin: 0 });
         const hasilAudit = [
           { c: PURPLE, n: branches.length, l: "Cabang Diaudit" },
-          { c: GREEN, n: kondisiBaik, l: "Cabang Kondisi Baik" },
+          { c: GREEN, n: kondisiSangatBaik + kondisiBaik, l: "Cabang Kondisi Baik" },
           { c: AMBER, n: kondisiPerhatian, l: "Cabang Perlu Perhatian" },
           { c: RED, n: kondisiBerisiko, l: "Cabang Risiko Tinggi" },
         ];
@@ -1634,15 +1766,15 @@ export default function LaporanBulanan({ profile }) {
           {
             bg: "E9F7EF", c: GREEN, icon: "\u{1F4C5}", t: "JANGKA PENDEK (0-30 HARI)",
             items: [
-              stokBermasalah.length ? `Menyelesaikan selisih stok di cabang: ${stokBermasalah.slice(0, 3).join(", ")}${stokBermasalah.length > 3 ? ", dst." : "."}` : "Menyelesaikan seluruh selisih stok yang tercatat.",
-              keuBermasalah.length ? `Menindaklanjuti saldo kas kecil minus di cabang: ${keuBermasalah.slice(0, 3).join(", ")}${keuBermasalah.length > 3 ? ", dst." : "."}` : "Memastikan seluruh saldo kas kecil dalam kondisi aman.",
+              stokBermasalah.length ? `${stokBermasalah.length} cabang perlu selesaikan selisih stok: ${stokBermasalah.slice(0, 3).join(", ")}${stokBermasalah.length > 3 ? ", dst." : "."}` : "Menyelesaikan seluruh selisih stok yang tercatat.",
+              keuBermasalah.length ? `${keuBermasalah.length} cabang perlu tindak lanjut kas kecil minus: ${keuBermasalah.slice(0, 3).join(", ")}${keuBermasalah.length > 3 ? ", dst." : "."}` : "Memastikan seluruh saldo kas kecil dalam kondisi aman.",
               "Melakukan penataan ulang area display & pricetag yang belum lengkap.",
             ],
           },
           {
             bg: "FDF3E0", c: AMBER, icon: "\u{1F5D3}\uFE0F", t: "JANGKA MENENGAH (1-3 BULAN)",
             items: [
-              kondisiBerisiko > 0 ? `Monitoring intensif pada ${kondisiBerisiko} cabang berisiko tinggi.` : "Menjaga konsistensi cabang yang sudah berada dalam kondisi baik.",
+              kondisiBerisiko > 0 ? `${kondisiBerisiko} cabang berisiko tinggi perlu monitoring intensif.` : "Menjaga konsistensi cabang yang sudah berada dalam kondisi baik.",
               "Melakukan stock opname berkala di seluruh cabang.",
               top5Domain.length ? `Melaksanakan refresh SOP untuk kategori "${top5Domain[0]}" ke seluruh tim toko.` : "Melaksanakan refresh SOP ke seluruh tim toko.",
             ],
@@ -1782,7 +1914,7 @@ export default function LaporanBulanan({ profile }) {
           </div>
 
           {error && <div style={{ background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 16 }}>{error}</div>}
-          {done && !generating && <div style={{ background: "var(--success-bg)", border: "1px solid rgba(26,158,110,0.35)", color: "var(--success-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 16 }}>\u2713 Laporan berhasil dibuat & didownload.</div>}
+          {done && !generating && <div style={{ background: "var(--success-bg)", border: "1px solid rgba(26,158,110,0.35)", color: "var(--success-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13, marginBottom: 16 }}>&#10003; Laporan berhasil dibuat & didownload.</div>}
 
           {showPicker ? (
             <div>
@@ -1801,10 +1933,10 @@ export default function LaporanBulanan({ profile }) {
                       <select
                         className="input"
                         style={{ width: 220 }}
-                        value={multiAuditChoices[key] || p.options[0]?.date || ""}
+                        value={multiAuditChoices[key] || p.options[0]?.id || ""}
                         onChange={(e) => setMultiAuditChoices((prev) => ({ ...prev, [key]: e.target.value }))}
                       >
-                        {p.options.map((o) => <option key={o.date} value={o.date}>{o.label}</option>)}
+                        {p.options.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
                       </select>
                     </div>
                   );
@@ -1820,7 +1952,7 @@ export default function LaporanBulanan({ profile }) {
                     const filled = { ...multiAuditChoices };
                     pendingMultiAudit.forEach((p) => {
                       const key = `${p.branchId}|${p.moduleKey}`;
-                      if (!filled[key]) filled[key] = p.options[0]?.date;
+                      if (!filled[key]) filled[key] = p.options[0]?.id;
                     });
                     setMultiAuditChoices(filled);
                     generate(filled);

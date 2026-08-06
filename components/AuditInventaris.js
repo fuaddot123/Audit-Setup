@@ -39,6 +39,37 @@ export function countRusak(inventarisData) {
   return INVENTARIS_CATEGORIES.filter((c) => inventarisData[c]?.status === "Rusak").length;
 }
 
+// Hapus 1 file media dari bucket Storage "findings" berdasarkan public URL-nya.
+// Aman dipanggil walau url kosong/null, atau ternyata bukan file dari bucket findings
+// (langsung di-skip diam-diam, nggak nge-throw).
+export async function deleteMediaFromStorage(url) {
+  if (!url) return;
+  const marker = "/findings/";
+  const idx = url.indexOf(marker);
+  if (idx === -1) return;
+  const path = decodeURIComponent(url.slice(idx + marker.length));
+  const { error } = await supabase.storage.from("findings").remove([path]);
+  if (error) console.warn("Gagal hapus file storage:", path, error.message);
+}
+
+// Hapus banyak file sekaligus — buat pas hapus 1 audit/record penuh yang punya
+// banyak foto/video sekaligus (lebih efisien daripada looping deleteMediaFromStorage).
+// Terima array berisi string url ATAU object {url,type}.
+export async function deleteMediaListFromStorage(mediaList) {
+  const marker = "/findings/";
+  const paths = (mediaList || [])
+    .map((m) => (typeof m === "string" ? m : m?.url))
+    .filter(Boolean)
+    .map((url) => {
+      const idx = url.indexOf(marker);
+      return idx === -1 ? null : decodeURIComponent(url.slice(idx + marker.length));
+    })
+    .filter(Boolean);
+  if (!paths.length) return;
+  const { error } = await supabase.storage.from("findings").remove(paths);
+  if (error) console.warn("Gagal hapus file storage (batch):", error.message);
+}
+
 // Upload foto/video bukti kerusakan ke bucket Storage "findings".
 // Dipanggil dari komponen pemanggil (BeritaAcara.js), yang menyimpan hasilnya ke state sendiri.
 export async function uploadInventarisMedia({ branchId, period, cat, fileList }) {
@@ -101,7 +132,7 @@ export function InventarisChecklist({ inventaris, canEdit, uploadingKey, onUpdat
             return (
               <div key={cat} style={{ background: "var(--surface)", border: "1px solid var(--border)", padding: 14, borderRadius: 10, borderLeft: `3px solid ${rusak ? "#a32020" : "#1a9e6e55"}` }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1.4fr auto 1.6fr", gap: 10, alignItems: "start", marginBottom: rusak ? 10 : 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 600, paddingTop: 8 }}>{cat}</div>
+                  <div style={{ fontSize: 13.5, fontWeight: 600, paddingTop: 8, textTransform: "uppercase" }}>{cat}</div>
                   <StatusToggle value={row.status} onChange={(v) => onUpdate(cat, "status", v)} disabled={!canEdit} okLabel="Berfungsi" badLabel="Rusak" />
                   <input className="input" placeholder="Keterangan" value={row.keterangan} disabled={!canEdit} onChange={(e) => onUpdate(cat, "keterangan", e.target.value)} style={{ fontSize: 12.5 }} />
                 </div>

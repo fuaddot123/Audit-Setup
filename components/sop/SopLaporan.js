@@ -8,7 +8,7 @@ import {
 import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
 import BranchMultiSelect from "../BranchMultiSelect";
 
-export default function SopLaporan() {
+export default function SopLaporan({ profile }) {
   const [branches, setBranches] = useState([]);
   const [sopRecords, setSopRecords] = useState([]); // semua audit_generic module='sop', semua periode
   const [rankingRows, setRankingRows] = useState([]);
@@ -19,15 +19,25 @@ export default function SopLaporan() {
   const [pdfPeriod, setPdfPeriod] = useState(nowPeriode());
   const [pdfBranchIds, setPdfBranchIds] = useState([]);
 
+  // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua kayak
+  // biasa). Laporan yang di-generate auditor buat periode >= cutoff otomatis jadi versi
+  // personal (cuma cabang yang dia audit sendiri), dilabel jujur biar nggak disangka laporan resmi.
+  const ISOLATION_START_PERIOD = "2026-08";
+  const isPersonalView = profile?.role === "auditor" && pdfPeriod >= ISOLATION_START_PERIOD;
+
   useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
     setLoading(true);
     setError(null);
     try {
+      let sopQuery = supabase.from("audit_generic").select("*").eq("module", "sop").order("updated_at", { ascending: false });
+      if (profile?.role === "auditor") {
+        sopQuery = sopQuery.or(`period.lt.${ISOLATION_START_PERIOD},submitted_by.eq.${profile.id}`);
+      }
       const [brRes, sopRes, rankRes, tgtRes] = await Promise.all([
         supabase.from("branches").select("*").order("name"),
-        supabase.from("audit_generic").select("*").eq("module", "sop").order("updated_at", { ascending: false }),
+        sopQuery,
         supabase.from("ranking_scores").select("*"),
         supabase.from("sales_targets").select("*"),
       ]);
@@ -78,7 +88,7 @@ export default function SopLaporan() {
 
     const win = window.open("", "_blank");
     if (!win) { setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF."); return; }
-    win.document.write(`<!DOCTYPE html><html><head><title>Laporan Audit SOP</title><meta charset="utf-8">
+    win.document.write(`<!DOCTYPE html><html><head><title>${isPersonalView ? "Laporan Audit SOP - Data Saya" : "Laporan Audit SOP"}</title><meta charset="utf-8">
       <style>
         * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         @page { margin: 8mm; }
@@ -292,7 +302,7 @@ export default function SopLaporan() {
     const printedAtLabel = now.toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }) + ", " + now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
     const scopeBranches = branches.filter((b) => pdfBranchIds.includes(b.id));
     if (!scopeBranches.length) { setError("Pilih minimal 1 cabang dulu."); return; }
-    const scopeLabel = pdfBranchIds.length === branches.length ? "SEMUA CABANG" : scopeBranches.map((b) => b.name).join(", ").toUpperCase();
+    const scopeLabel = isPersonalView ? "CABANG YANG SAYA AUDIT" : (pdfBranchIds.length === branches.length ? "SEMUA CABANG" : scopeBranches.map((b) => b.name).join(", ").toUpperCase());
 
     const rowsData = scopeBranches.map((b) => {
       const rec = latestFor(b.id, pdfPeriod);
@@ -339,7 +349,7 @@ export default function SopLaporan() {
       .map(([label, count]) => ({ label, count, pct: audited.length ? Math.round((count / audited.length) * 100) : 0, color: colorMap[label] }));
 
     const html = buildSummaryReportHtml({
-      reportTitle: "LAPORAN AUDIT SOP",
+      reportTitle: isPersonalView ? "LAPORAN AUDIT SOP \u2014 DATA SAYA" : "LAPORAN AUDIT SOP",
       scopeLabel,
       periodLabel: periodeLabel(pdfPeriod),
       printedAtLabel,
@@ -359,20 +369,22 @@ export default function SopLaporan() {
         { icon: "alertTriangle", color: "#a32020", title: "PERLU PERBAIKAN", desc: `Skor SOP < ${ALERT_THRESHOLD}%` },
       ],
       summaryList: [
-        { icon: "shieldCheck", label: "Cabang Sudah Diaudit", value: `${audited.length} / ${total}` },
-        { icon: "alertCircle", label: "Rata-rata Skor SOP", value: avgScore + "%" },
+        { icon: "shieldCheck", label: isPersonalView ? "Cabang yang Saya Audit" : "Cabang Sudah Diaudit", value: `${audited.length} / ${total}` },
+        { icon: "alertCircle", label: isPersonalView ? "Rata-rata Skor SOP (Saya)" : "Rata-rata Skor SOP", value: avgScore + "%" },
         { icon: "arrowUp", label: "Skor Tertinggi", value: top ? `${top.branch.name} (${top.score}%)` : "\u2014" },
         { icon: "arrowDown", label: "Skor Terendah", value: low ? `${low.branch.name} (${low.score}%)` : "\u2014", strong: true },
       ],
       notes: [
-        "Laporan ini merupakan ringkasan hasil audit SOP untuk seluruh cabang pada periode yang dipilih.",
+        isPersonalView
+          ? "Laporan ini cuma isi cabang yang kamu audit sendiri \u2014 BUKAN ringkasan resmi seluruh cabang perusahaan."
+          : "Laporan ini merupakan ringkasan hasil audit SOP untuk seluruh cabang pada periode yang dipilih.",
         "Status indikator berdasarkan skor tertimbang checklist SOP (Tier 1: Customer Experience, Tier 2: Operasional, Tier 3: Compliance).",
         `Harap lakukan tindak lanjut untuk cabang dengan indikator "Perlu Perbaikan".`,
       ],
       pageLabel: "Halaman 1 dari 1",
     });
 
-    const opened = openPrintWindow("Laporan Audit SOP", html);
+    const opened = openPrintWindow(isPersonalView ? "Laporan Audit SOP - Data Saya" : "Laporan Audit SOP", html);
     if (!opened) setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF.");
   }
 
@@ -381,8 +393,13 @@ export default function SopLaporan() {
   return (
     <div style={{ flex: 1 }}>
       <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)" }}>
-        <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Laporan Audit</div>
-        <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Cetak hasil audit SOP jadi PDF, per cabang atau ringkasan semua cabang</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Laporan Audit</div>
+          {isPersonalView && (
+            <span style={{ fontSize: 10.5, fontWeight: 700, color: "#F4B740", background: "#F4B74022", padding: "2px 8px", borderRadius: 20 }}>PERSONAL</span>
+          )}
+        </div>
+        <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>{isPersonalView ? "Cetak hasil audit SOP kamu sendiri jadi PDF, per cabang atau ringkasan" : "Cetak hasil audit SOP jadi PDF, per cabang atau ringkasan semua cabang"}</div>
       </div>
 
       {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
@@ -399,7 +416,7 @@ export default function SopLaporan() {
           </Row>
           <div style={{ display: "flex", gap: 8 }}>
             <button className="btn" onClick={exportPDF}>Cetak Detail per Cabang</button>
-            <button className="btn-ghost" onClick={exportSummaryPDF}>Cetak Ringkasan Semua Cabang</button>
+            <button className="btn-ghost" onClick={exportSummaryPDF}>{isPersonalView ? "Cetak Ringkasan Cabang Saya" : "Cetak Ringkasan Semua Cabang"}</button>
           </div>
         </ReportCard>
       </div>

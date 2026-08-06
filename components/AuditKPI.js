@@ -17,17 +17,29 @@ export default function AuditKPI({ profile }) {
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState(false);
 
-  const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
+  const canEdit = profile?.role === "super_admin" || (profile?.role === "auditor" && selectedAuditor?.id === profile?.id);
+  // Isolasi per-auditor, berlaku mulai Agustus 2026 ke depan — data sebelum itu (Jan-Jul 2026)
+  // tetep kebuka bareng buat semua auditor, nggak diisolasi retroaktif. Auditor biasa tetep bisa
+  // liat SEMUA nama di kartu pilih-auditor, tapi begitu masuk ke data periode >= cutoff milik
+  // auditor lain, datanya nggak muncul (bukan disembunyiin orangnya, tapi record-nya per periode).
+  const ISOLATION_START_PERIOD = "2026-08";
   const [allRecords, setAllRecords] = useState([]);
   const [exportPeriod, setExportPeriod] = useState(nowPeriode());
   const [exportBusy, setExportBusy] = useState(false);
+  // Laporan/export gabungan (semua auditor) cuma valid buat periode sebelum cutoff — abis itu,
+  // auditor biasa nggak lagi punya akses ke data lengkap semua orang buat digabung jadi laporan.
+  const canExportAll = profile?.role !== "auditor" || exportPeriod < ISOLATION_START_PERIOD;
 
   useEffect(() => { loadAuditors(); loadAllRecords(); }, []);
   useEffect(() => { if (selectedAuditor) loadAuditorData(selectedAuditor.id); }, [selectedAuditor]);
   useEffect(() => { if (selectedAuditor) applyPeriod(period); }, [period, history]);
 
   async function loadAllRecords() {
-    const { data, error: err } = await supabase.from("audit_kpi").select("*").order("period", { ascending: false });
+    let q = supabase.from("audit_kpi").select("*").order("period", { ascending: false });
+    if (profile?.role === "auditor") {
+      q = q.or(`period.lt.${ISOLATION_START_PERIOD},auditor_id.eq.${profile.id}`);
+    }
+    const { data, error: err } = await q;
     if (!err) setAllRecords(data || []);
   }
 
@@ -265,7 +277,9 @@ export default function AuditKPI({ profile }) {
   async function loadAuditorData(auditorId) {
     setLoadingRecord(true);
     setError(null);
-    const { data, error: err } = await supabase.from("audit_kpi").select("*").eq("auditor_id", auditorId).order("period", { ascending: false }).limit(12);
+    let q = supabase.from("audit_kpi").select("*").eq("auditor_id", auditorId).order("period", { ascending: false }).limit(12);
+    if (profile?.role === "auditor" && auditorId !== profile.id) q = q.lt("period", ISOLATION_START_PERIOD);
+    const { data, error: err } = await q;
     if (!err) setHistory(data || []);
     setLoadingRecord(false);
   }
@@ -366,8 +380,12 @@ export default function AuditKPI({ profile }) {
               <div style={{ minWidth: 130, textAlign: "center", fontWeight: 600, fontSize: 13.5 }}>{periodeLabel(exportPeriod)}</div>
               <button className="btn-ghost" onClick={() => setExportPeriod(addMonthsToPeriod(exportPeriod, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
             </div>
-            <button className="btn" onClick={exportPdfLaporan}>Cetak PDF Laporan</button>
-            <button className="btn-ghost" disabled={exportBusy} onClick={exportExcelLaporan}>{exportBusy ? "..." : "Download Excel"}</button>
+            {canExportAll && (
+              <>
+                <button className="btn" onClick={exportPdfLaporan}>Cetak PDF Laporan</button>
+                <button className="btn-ghost" disabled={exportBusy} onClick={exportExcelLaporan}>{exportBusy ? "..." : "Download Excel"}</button>
+              </>
+            )}
           </div>
         </div>
         {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
@@ -376,17 +394,34 @@ export default function AuditKPI({ profile }) {
             <div style={{ color: "var(--text-secondary)" }}>Memuat\u2026</div>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
-              {auditors.map((a) => (
+              {auditors.map((a) => {
+                const rec = allRecords.find((r) => r.auditor_id === a.id && r.period === exportPeriod);
+                const calc = rec ? calcKPI({
+                  coverage: rec.realisasi_coverage, kepatuhan_sop: rec.realisasi_kepatuhan_sop,
+                  temuan_berulang: rec.realisasi_temuan_berulang, temuan_audit: rec.realisasi_temuan_audit,
+                  ketepatan_laporan: rec.realisasi_ketepatan_laporan,
+                }) : null;
+                const kpiInfo = calc ? totalKpiInfo(calc.total) : null;
+                return (
                 <div
                   key={a.id}
                   onClick={() => pickAuditor(a)}
                   style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", overflow: "hidden" }}
                 >
                   <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: "linear-gradient(90deg, #7c3aed, #F4B740)" }} />
-                  <div style={{ fontWeight: 600, fontSize: 14.5 }}>{a.full_name || "\u2026"}</div>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                    <div style={{ fontWeight: 600, fontSize: 14.5 }}>{a.full_name || "\u2026"}</div>
+                    {kpiInfo ? (
+                      <span style={{ fontSize: 12.5, fontWeight: 800, color: kpiInfo.color, background: `${kpiInfo.color}22`, padding: "2px 9px", borderRadius: 20, whiteSpace: "nowrap" }} className="mono">
+                        {fmtPct(calc.total)}
+                      </span>
+                    ) : (
+                      <span style={{ fontSize: 10.5, color: "var(--text-faint)", whiteSpace: "nowrap" }}>Belum ada data</span>
+                    )}
+                  </div>
                   <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>{{ admin: "Admin", auditor: "Auditor", ceo: "CEO", super_admin: "Super Admin" }[a.role] || a.role} &middot; Lihat KPI &rarr;</div>
                 </div>
-              ))}
+              );})}
             </div>
           )}
         </div>

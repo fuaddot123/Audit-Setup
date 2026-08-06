@@ -32,6 +32,8 @@ export default function StokKesehatan({ profile }) {
   const [syncResult, setSyncResult] = useState(null);
   const isSuperAdmin = profile?.role === "super_admin";
   const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
+  // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua kayak biasa).
+  const ISOLATION_START_PERIOD = "2026-08";
 
   useEffect(() => { loadBranches(); }, []);
 
@@ -39,10 +41,11 @@ export default function StokKesehatan({ profile }) {
     setLoadingBranches(true);
     const { data, error: err } = await supabase.from("branches").select("*").order("name");
     if (!err) setBranches(sortBranches(data || []));
-    const { data: recs, error: recErr } = await supabase
-      .from("audit_generic")
-      .select("*")
-      .eq("module", "stok_kesehatan");
+    let recQuery = supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan");
+    if (profile?.role === "auditor") {
+      recQuery = recQuery.or(`period.lt.${ISOLATION_START_PERIOD},submitted_by.eq.${profile.id}`);
+    }
+    const { data: recs, error: recErr } = await recQuery;
     if (!recErr) {
       const sorted = [...(recs || [])].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""));
       const map = {};
@@ -104,10 +107,11 @@ export default function StokKesehatan({ profile }) {
     setError(null);
     setLoadingRecord(true);
     const period = viewPeriod;
-    const [periodRes, histRes] = await Promise.all([
-      supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("branch_id", b.id).eq("period", period),
-      supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("branch_id", b.id),
-    ]);
+    let periodQuery = supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("branch_id", b.id).eq("period", period);
+    if (profile?.role === "auditor" && period >= ISOLATION_START_PERIOD) periodQuery = periodQuery.eq("submitted_by", profile.id);
+    let histQuery = supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("branch_id", b.id);
+    if (profile?.role === "auditor") histQuery = histQuery.or(`period.lt.${ISOLATION_START_PERIOD},submitted_by.eq.${profile.id}`);
+    const [periodRes, histRes] = await Promise.all([periodQuery, histQuery]);
     if (periodRes.error) setError("Gagal memuat riwayat bulan ini: " + periodRes.error.message);
     if (histRes.error) setError((prev) => prev || "Gagal memuat riwayat: " + histRes.error.message);
     const entries = !periodRes.error

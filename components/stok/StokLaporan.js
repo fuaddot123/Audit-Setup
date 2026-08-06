@@ -8,7 +8,7 @@ import {
 import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
 import BranchMultiSelect from "../BranchMultiSelect";
 
-export default function StokLaporan() {
+export default function StokLaporan({ profile }) {
   const [branches, setBranches] = useState([]);
   const [serviceRecords, setServiceRecords] = useState([]);
   const [kesehatanRecords, setKesehatanRecords] = useState([]);
@@ -21,16 +21,25 @@ export default function StokLaporan() {
   const [serviceBranchIds, setServiceBranchIds] = useState([]);
   const [kesehatanBranchIds, setKesehatanBranchIds] = useState([]);
 
+  // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua kayak
+  // biasa). Dua sub-laporan (Service Ratio & Kesehatan Stok) dicek periodenya masing-masing,
+  // soalnya tiap sub-laporan punya selector periode sendiri-sendiri.
+  const ISOLATION_START_PERIOD = "2026-08";
+  const isServicePersonal = profile?.role === "auditor" && servicePeriod >= ISOLATION_START_PERIOD;
+  const isKesehatanPersonal = profile?.role === "auditor" && kesehatanPeriod >= ISOLATION_START_PERIOD;
+
   useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
     setLoading(true);
     setError(null);
     try {
+      const isolate = profile?.role === "auditor";
+      const orFilter = `period.lt.${ISOLATION_START_PERIOD},submitted_by.eq.${profile?.id}`;
       const [brRes, svcRes, kshRes] = await Promise.all([
         supabase.from("branches").select("*").order("name"),
-        supabase.from("audit_generic").select("*").eq("module", "stok_service").order("updated_at", { ascending: false }),
-        supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").order("updated_at", { ascending: false }),
+        (() => { let q = supabase.from("audit_generic").select("*").eq("module", "stok_service").order("updated_at", { ascending: false }); if (isolate) q = q.or(orFilter); return q; })(),
+        (() => { let q = supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").order("updated_at", { ascending: false }); if (isolate) q = q.or(orFilter); return q; })(),
       ]);
       if (brRes.error) throw brRes.error;
       const sortedBr = sortBranches(brRes.data || []);
@@ -75,7 +84,7 @@ export default function StokLaporan() {
     const printedAtLabel = now.toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }) + ", " + now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
     const scopeBranches = branches.filter((b) => serviceBranchIds.includes(b.id));
     if (!scopeBranches.length) { setError("Pilih minimal 1 cabang dulu."); return; }
-    const scopeLabel = serviceBranchIds.length === branches.length ? "SEMUA CABANG" : scopeBranches.map((b) => b.name).join(", ").toUpperCase();
+    const scopeLabel = isServicePersonal ? "CABANG YANG SAYA AUDIT" : (serviceBranchIds.length === branches.length ? "SEMUA CABANG" : scopeBranches.map((b) => b.name).join(", ").toUpperCase());
 
     const rows = scopeBranches.map((b) => {
       const rec = latestFor(serviceRecords, b.id, servicePeriod);
@@ -117,7 +126,7 @@ export default function StokLaporan() {
     });
 
     const html = buildSummaryReportHtml({
-      reportTitle: "LAPORAN SERVICE RATIO",
+      reportTitle: isServicePersonal ? "LAPORAN SERVICE RATIO \u2014 DATA SAYA" : "LAPORAN SERVICE RATIO",
       scopeLabel,
       periodLabel: periodeLabel(servicePeriod),
       printedAtLabel,
@@ -139,19 +148,21 @@ export default function StokLaporan() {
         ...(countBaru > 0 ? [{ icon: "building", color: BARU_COLOR, title: "CABANG BARU", desc: "Cabang baru dibuka, belum ikut dihitung ke indikator" }] : []),
       ],
       summaryList: [
-        { icon: "shieldCheck", label: "Cabang Sudah Diaudit", value: `${audited.length} / ${total}` },
+        { icon: "shieldCheck", label: isServicePersonal ? "Cabang yang Saya Audit" : "Cabang Sudah Diaudit", value: `${audited.length} / ${total}` },
         { icon: "arrowDown", label: "Ratio Terbaik (terkecil)", value: top ? `${top.branch.name} (${formatRatioPct(top.ratio)})` : "\u2014" },
         { icon: "arrowUp", label: "Ratio Terburuk (terbesar)", value: low ? `${low.branch.name} (${formatRatioPct(low.ratio)})` : "\u2014", strong: true },
       ],
       notes: [
-        "Laporan ini merupakan ringkasan Service Ratio seluruh cabang pada periode yang dipilih.",
+        isServicePersonal
+          ? "Laporan ini cuma isi cabang yang kamu audit sendiri \u2014 BUKAN ringkasan resmi seluruh cabang perusahaan."
+          : "Laporan ini merupakan ringkasan Service Ratio seluruh cabang pada periode yang dipilih.",
         "% Ratio Service dihitung dari Stok Service dibagi Total Unit per Cabang. Makin kecil ratio, makin baik.",
         `Harap lakukan tindak lanjut untuk cabang dengan indikator "Perlu Perhatian".`,
         ...(countBaru > 0 ? [`${countBaru} cabang ditandai "CABANG BARU" \u2014 datanya belum ikut dihitung ke persentase distribusi indikator di atas.`] : []),
       ],
       pageLabel: "Halaman 1 dari 1",
     });
-    const opened = openPrintWindow("Laporan Service Ratio", html);
+    const opened = openPrintWindow(isServicePersonal ? "Laporan Service Ratio - Data Saya" : "Laporan Service Ratio", html);
     if (!opened) setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF.");
   }
 
@@ -190,7 +201,7 @@ export default function StokLaporan() {
     const printedAtLabel = now.toLocaleDateString("id-ID", { day: "2-digit", month: "2-digit", year: "numeric" }) + ", " + now.toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
     const scopeBranches = branches.filter((b) => kesehatanBranchIds.includes(b.id));
     if (!scopeBranches.length) { setError("Pilih minimal 1 cabang dulu."); return; }
-    const scopeLabel = kesehatanBranchIds.length === branches.length ? "SEMUA CABANG" : scopeBranches.map((b) => b.name).join(", ").toUpperCase();
+    const scopeLabel = isKesehatanPersonal ? "CABANG YANG SAYA AUDIT" : (kesehatanBranchIds.length === branches.length ? "SEMUA CABANG" : scopeBranches.map((b) => b.name).join(", ").toUpperCase());
 
     const rows = scopeBranches.map((b) => {
       const rec = latestFor(kesehatanRecords, b.id, kesehatanPeriod);
@@ -234,7 +245,7 @@ export default function StokLaporan() {
     });
 
     const html = buildSummaryReportHtml({
-      reportTitle: "LAPORAN KESEHATAN STOK",
+      reportTitle: isKesehatanPersonal ? "LAPORAN KESEHATAN STOK \u2014 DATA SAYA" : "LAPORAN KESEHATAN STOK",
       scopeLabel,
       periodLabel: periodeLabel(kesehatanPeriod),
       printedAtLabel,
@@ -257,19 +268,21 @@ export default function StokLaporan() {
         ...(countBaru > 0 ? [{ icon: "building", color: BARU_COLOR, title: "CABANG BARU", desc: "Cabang baru dibuka, belum ikut dihitung ke indikator" }] : []),
       ],
       summaryList: [
-        { icon: "shieldCheck", label: "Cabang Sudah Diaudit", value: `${audited.length} / ${total}` },
+        { icon: "shieldCheck", label: isKesehatanPersonal ? "Cabang yang Saya Audit" : "Cabang Sudah Diaudit", value: `${audited.length} / ${total}` },
         { icon: "arrowUp", label: "Kesehatan Terbaik", value: top ? `${top.branch.name} (${formatKesehatanPct(top.pct)})` : "\u2014" },
         { icon: "arrowDown", label: "Kesehatan Terendah", value: low ? `${low.branch.name} (${formatKesehatanPct(low.pct)})` : "\u2014", strong: true },
       ],
       notes: [
-        "Laporan ini merupakan ringkasan Kesehatan Stok seluruh cabang pada periode yang dipilih.",
+        isKesehatanPersonal
+          ? "Laporan ini cuma isi cabang yang kamu audit sendiri \u2014 BUKAN ringkasan resmi seluruh cabang perusahaan."
+          : "Laporan ini merupakan ringkasan Kesehatan Stok seluruh cabang pada periode yang dipilih.",
         "% Kesehatan Barang = MAX(0, 1 \u2212 Skor Total/100). Skor Total = Skor Temuan + (Skor Rugi \u00d7 5).",
         `Harap lakukan tindak lanjut untuk cabang dengan indikator "Perlu Perhatian".`,
         ...(countBaru > 0 ? [`${countBaru} cabang ditandai "CABANG BARU" \u2014 datanya belum ikut dihitung ke persentase distribusi indikator di atas.`] : []),
       ],
       pageLabel: "Halaman 1 dari 1",
     });
-    const opened = openPrintWindow("Laporan Kesehatan Stok", html);
+    const opened = openPrintWindow(isKesehatanPersonal ? "Laporan Kesehatan Stok - Data Saya" : "Laporan Kesehatan Stok", html);
     if (!opened) setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF.");
   }
 
@@ -314,7 +327,7 @@ export default function StokLaporan() {
       {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
 
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16, maxWidth: 640 }}>
-        <ReportCard title="Export Service Ratio" desc="Ringkasan rasio unit service dibanding total unit per cabang.">
+        <ReportCard title="Export Service Ratio" desc="Ringkasan rasio unit service dibanding total unit per cabang." personal={isServicePersonal}>
           <Row label="Periode">
             <select className="input" value={servicePeriod} onChange={(e) => setServicePeriod(e.target.value)}>
               {servicePeriodOptions.map((p) => <option key={p} value={p}>{periodeLabel(p)}</option>)}
@@ -324,12 +337,12 @@ export default function StokLaporan() {
             <BranchMultiSelect branches={branches} selectedIds={serviceBranchIds} onChange={setServiceBranchIds} />
           </Row>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn" onClick={exportServicePDF}>Cetak PDF Ringkasan</button>
+            <button className="btn" onClick={exportServicePDF}>{isServicePersonal ? "Cetak PDF Cabang Saya" : "Cetak PDF Ringkasan"}</button>
             <button className="btn-ghost" disabled={busy} onClick={exportServiceExcel}>{busy ? "Memproses\u2026" : "Download Excel"}</button>
           </div>
         </ReportCard>
 
-        <ReportCard title="Export Kesehatan Stok" desc="Ringkasan skor temuan barang & kerugian per cabang.">
+        <ReportCard title="Export Kesehatan Stok" desc="Ringkasan skor temuan barang & kerugian per cabang." personal={isKesehatanPersonal}>
           <Row label="Periode">
             <select className="input" value={kesehatanPeriod} onChange={(e) => setKesehatanPeriod(e.target.value)}>
               {kesehatanPeriodOptions.map((p) => <option key={p} value={p}>{periodeLabel(p)}</option>)}
@@ -339,7 +352,7 @@ export default function StokLaporan() {
             <BranchMultiSelect branches={branches} selectedIds={kesehatanBranchIds} onChange={setKesehatanBranchIds} />
           </Row>
           <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn" onClick={exportKesehatanPDF}>Cetak PDF Ringkasan</button>
+            <button className="btn" onClick={exportKesehatanPDF}>{isKesehatanPersonal ? "Cetak PDF Cabang Saya" : "Cetak PDF Ringkasan"}</button>
             <button className="btn-ghost" disabled={busy} onClick={exportKesehatanExcel}>{busy ? "Memproses\u2026" : "Download Excel"}</button>
           </div>
         </ReportCard>
@@ -348,10 +361,15 @@ export default function StokLaporan() {
   );
 }
 
-function ReportCard({ title, desc, children }) {
+function ReportCard({ title, desc, children, personal }) {
   return (
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: 20 }}>
-      <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4 }}>{title}</div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
+        <div style={{ fontWeight: 700, fontSize: 15 }}>{title}</div>
+        {personal && (
+          <span style={{ fontSize: 10.5, fontWeight: 700, color: "#F4B740", background: "#F4B74022", padding: "2px 8px", borderRadius: 20 }}>PERSONAL</span>
+        )}
+      </div>
       <div style={{ fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 14 }}>{desc}</div>
       <div style={{ display: "flex", flexDirection: "column", gap: 10, alignItems: "flex-start" }}>{children}</div>
     </div>

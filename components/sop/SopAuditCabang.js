@@ -6,6 +6,7 @@ import {
   calcWeightedScore, calcWeightedFromRecord, scoreColor, periodFromDate, todayInputValue, periodeLabel,
   nowPeriode, addMonthsToPeriod,
 } from "../../lib/sopConfig";
+import { deleteMediaFromStorage, deleteMediaListFromStorage } from "../AuditInventaris";
 
 function emptyChecklist() {
   const state = {};
@@ -58,7 +59,14 @@ export default function SopAuditCabang({ profile }) {
     setLoadingBranches(true);
     const { data, error: err } = await supabase.from("branches").select("*").order("name");
     if (!err) setBranches(sortBranches(data || []));
-    const { data: recs, error: recErr } = await supabase.from("audit_generic").select("*").eq("module", "sop");
+    // Auditor biasa cuma boleh liat/pake audit yang dia submit sendiri — TAPI cuma berlaku
+    // mulai Agustus 2026 ke depan. Data Jan-Jul 2026 tetep kebuka bareng buat semua auditor.
+    const ISOLATION_START_PERIOD = "2026-08";
+    let recQuery = supabase.from("audit_generic").select("*").eq("module", "sop");
+    if (profile?.role === "auditor") {
+      recQuery = recQuery.or(`period.lt.${ISOLATION_START_PERIOD},submitted_by.eq.${profile.id}`);
+    }
+    const { data: recs, error: recErr } = await recQuery;
     if (!recErr) {
       const sorted = [...(recs || [])].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""));
       const map = {};
@@ -101,12 +109,15 @@ export default function SopAuditCabang({ profile }) {
     setError(null);
     setLoadingRecord(true);
     const period = viewPeriod;
-    const { data, error: err } = await supabase
+    const ISOLATION_START_PERIOD = "2026-08";
+    let entryQuery = supabase
       .from("audit_generic")
       .select("*")
       .eq("module", "sop")
       .eq("branch_id", b.id)
       .eq("period", period);
+    if (profile?.role === "auditor" && period >= ISOLATION_START_PERIOD) entryQuery = entryQuery.eq("submitted_by", profile.id);
+    const { data, error: err } = await entryQuery;
     const entries = !err
       ? [...(data || [])].sort((a, b2) => (b2.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))
       : [];
@@ -189,7 +200,8 @@ export default function SopAuditCabang({ profile }) {
   function removePhoto(key, index) {
     setPhotos((prev) => {
       const list = [...(prev[key] || [])];
-      list.splice(index, 1);
+      const [removed] = list.splice(index, 1);
+      deleteMediaFromStorage(removed?.url); // hapus filenya juga di Storage
       const next = { ...prev, [key]: list };
       if (!list.length) delete next[key];
       return next;
@@ -215,6 +227,9 @@ export default function SopAuditCabang({ profile }) {
     try {
       const { error: err } = await supabase.from("audit_generic").delete().eq("id", selectedEntryId);
       if (err) throw err;
+      // Semua foto/video bukti SOP yang nempel di audit ini ikut kehapus dari Storage juga.
+      const allMedia = Object.values(photos).flat();
+      deleteMediaListFromStorage(allMedia);
       const remaining = entriesThisPeriod.filter((e) => e.id !== selectedEntryId);
       setEntriesThisPeriod(remaining);
       if (remaining.length) applyEntryToForm(remaining[0]);

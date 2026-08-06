@@ -51,7 +51,7 @@ function keuanganSisa(entry) {
   return (parseFloat(entry.saldo_sebelumnya) || 0) + (parseFloat(entry.saldo_masuk) || 0) - (parseFloat(entry.pengeluaran) || 0);
 }
 
-export default function SopKepatuhan() {
+export default function SopKepatuhan({ profile }) {
   const [branches, setBranches] = useState([]);
   const [sopRecords, setSopRecords] = useState([]);
   const [stokRecords, setStokRecords] = useState([]);
@@ -61,18 +61,25 @@ export default function SopKepatuhan() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
+  // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua kayak
+  // biasa). Karena modul ini gabungan 4 sumber, filternya diterapin ke SEMUA sumber sekaligus.
+  const ISOLATION_START_PERIOD = "2026-08";
+  const isPersonalView = profile?.role === "auditor" && period >= ISOLATION_START_PERIOD;
+
   useEffect(() => { loadAll(); }, []);
 
   async function loadAll() {
     setLoading(true);
     setError(null);
     try {
+      const isolate = profile?.role === "auditor";
+      const orFilter = `period.lt.${ISOLATION_START_PERIOD},submitted_by.eq.${profile?.id}`;
       const [brRes, sopRes, stokRes, keuRes, invRes] = await Promise.all([
         supabase.from("branches").select("*").order("name"),
-        supabase.from("audit_generic").select("*").eq("module", "sop"),
-        supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan"),
-        supabase.from("audit_keuangan").select("*"),
-        supabase.from("audit_generic").select("*").eq("module", "inventaris"),
+        (() => { let q = supabase.from("audit_generic").select("*").eq("module", "sop"); if (isolate) q = q.or(orFilter); return q; })(),
+        (() => { let q = supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan"); if (isolate) q = q.or(orFilter); return q; })(),
+        (() => { let q = supabase.from("audit_keuangan").select("*"); if (isolate) q = q.or(orFilter); return q; })(),
+        (() => { let q = supabase.from("audit_generic").select("*").eq("module", "inventaris"); if (isolate) q = q.or(orFilter); return q; })(),
       ]);
       if (brRes.error) throw brRes.error;
       setBranches(sortBranches(brRes.data || []));
@@ -182,8 +189,8 @@ export default function SopKepatuhan() {
     ];
 
     const html = buildSummaryReportHtml({
-      reportTitle: "LAPORAN KEPATUHAN SOP",
-      scopeLabel: "SEMUA CABANG",
+      reportTitle: isPersonalView ? "LAPORAN KEPATUHAN SOP \u2014 DATA SAYA" : "LAPORAN KEPATUHAN SOP",
+      scopeLabel: isPersonalView ? "CABANG YANG SAYA AUDIT" : "SEMUA CABANG",
       periodLabel: periodeLabel(period),
       printedAtLabel,
       summaryCards: [
@@ -208,17 +215,18 @@ export default function SopKepatuhan() {
         { icon: "shieldCheck", label: "Cabang Audited", value: `${current.visitedRows.length} / ${branches.length}` },
         { icon: "alertTriangle", label: "Total Temuan Bulan Ini", value: String(totalTemuanNow) },
         { icon: "alertCircle", label: "Total Temuan Bulan Lalu", value: String(totalTemuanPrev) },
-        { icon: "wallet", label: "Skor Kepatuhan Company-wide", value: current.avgPct !== null ? `${Math.round(current.avgPct * 100)}%` : "\u2014", strong: true },
+        { icon: "wallet", label: isPersonalView ? "Skor Kepatuhan (Cabang Saya)" : "Skor Kepatuhan Company-wide", value: current.avgPct !== null ? `${Math.round(current.avgPct * 100)}%` : "\u2014", strong: true },
       ],
       notes: [
         `Formula: % Skor = 1 \u2212 (Total Temuan \u00f7 ${BASELINE}). Gabungan dari SOP Operasional + Persediaan Stok + Keuangan (saldo minus) + Aset.`,
         "Kategori: \u226590% Sangat Baik \u00b7 80-89% Baik \u00b7 70-79% Cukup \u00b7 <70% Perlu Perbaikan.",
         "Cabang tanpa data Audit SOP bulan ini dianggap Tidak Visit dan dikecualikan dari rata-rata.",
+        ...(isPersonalView ? ["Laporan ini cuma isi cabang yang kamu audit sendiri \u2014 BUKAN skor company-wide seluruh cabang."] : []),
         ...(countBaru > 0 ? [`${countBaru} cabang ditandai "CABANG BARU" \u2014 tetap dihitung & ditampilkan skornya di tabel, tapi dikecualikan dari skor company-wide di atas.`] : []),
       ],
       pageLabel: "Halaman 1 dari 1",
     });
-    const opened = openPrintWindow("Laporan Kepatuhan SOP", html);
+    const opened = openPrintWindow(isPersonalView ? "Laporan Kepatuhan SOP - Data Saya" : "Laporan Kepatuhan SOP", html);
     if (!opened) setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF.");
   }
 
@@ -226,8 +234,13 @@ export default function SopKepatuhan() {
     <div style={{ flex: 1 }}>
       <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Skor Kepatuhan SOP</div>
-          <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Gabungan: SOP Operasional + Persediaan Stok + Keuangan + Aset</div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>{isPersonalView ? "Skor Kepatuhan SOP (Data Saya)" : "Skor Kepatuhan SOP"}</div>
+            {isPersonalView && (
+              <span style={{ fontSize: 10.5, fontWeight: 700, color: "#F4B740", background: "#F4B74022", padding: "2px 8px", borderRadius: 20 }}>PERSONAL</span>
+            )}
+          </div>
+          <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>{isPersonalView ? "Gabungan 4 sumber \u2014 cabang yang kamu audit sendiri" : "Gabungan: SOP Operasional + Persediaan Stok + Keuangan + Aset"}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "4px 6px" }}>
@@ -246,7 +259,7 @@ export default function SopKepatuhan() {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(210px, 1fr))", gap: 14, marginBottom: 22 }}>
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", position: "relative", overflow: "hidden" }}>
             <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: companyInfo?.color || "#888" }} />
-            <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", marginBottom: 8 }}>% Skor Kepatuhan (Company-wide)</div>
+            <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", marginBottom: 8 }}>{isPersonalView ? "% Skor Kepatuhan (Cabang Saya)" : "% Skor Kepatuhan (Company-wide)"}</div>
             <div style={{ fontSize: 30, fontWeight: 800, color: companyInfo?.color || "var(--text-primary)" }}>{current.avgPct !== null ? `${Math.round(current.avgPct * 100)}%` : "\u2014"}</div>
             <div style={{ fontSize: 12, color: companyInfo?.color, fontWeight: 600, marginTop: 4 }}>{companyInfo?.lbl || "Belum ada data"}</div>
           </div>
