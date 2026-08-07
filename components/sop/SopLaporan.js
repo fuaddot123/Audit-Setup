@@ -201,10 +201,13 @@ export default function SopLaporan({ profile }) {
     });
     const top5 = failedItems.slice(0, 5);
 
-    const kesimpulan = weightedScore >= 90
+    // Kata-katanya disamain sumbernya sama badge skor (scoreInfo) — biar nggak pernah beda
+    // kayak kasus "85% Baik" di badge tapi "cukup baik, perlu diperbaiki segera" di teks ini.
+    const scoreLbl = scoreInfo(weightedScore).lbl;
+    const kesimpulan = scoreLbl === "Sempurna"
       ? "Cabang sangat baik dan perlu mempertahankan standar operasional."
-      : weightedScore >= ALERT_THRESHOLD
-      ? "Cabang cukup baik, namun ada beberapa area yang perlu diperbaiki segera."
+      : scoreLbl === "Baik"
+      ? "Cabang dalam kondisi baik, tetap perlu pemantauan rutin untuk mempertahankan dan meningkatkan standar."
       : "Cabang memerlukan perhatian serius dan tindak lanjut mendesak dari manajemen.";
 
     const tierRows = [
@@ -328,7 +331,7 @@ export default function SopLaporan({ profile }) {
     const tableRows = scopeBranches.map((b, i) => {
       const row = rowsData.find((r) => r.branch.id === b.id);
       if (!row.rec) {
-        return { cells: [String(i + 1), b.name, null, null, null, null, null, null], badge: null };
+        return { cells: [String(i + 1), b.name, null, null, null, null, null, null, "\u00A0"], badge: null };
       }
       return {
         cells: [
@@ -339,6 +342,7 @@ export default function SopLaporan({ profile }) {
           (row.tiers?.tier2 ?? "\u2014") + "%",
           (row.tiers?.tier3 ?? "\u2014") + "%",
           row.info.lbl,
+          "\u00A0", // kolom Tanda Tangan — sengaja dikosongin, buat ditandatangani manual di kertas
         ],
         badge: { label: row.info.lbl, color: colorMap[row.info.lbl] },
       };
@@ -359,7 +363,8 @@ export default function SopLaporan({ profile }) {
         { icon: "alertCircle", label: "BAIK", value: String(grouped.Baik), sub: `Cabang (${audited.length ? Math.round((grouped.Baik / audited.length) * 100) : 0}%)`, color: "#b07212" },
         { icon: "alertTriangle", label: "PERLU PERBAIKAN", value: String(grouped["Perlu Perbaikan"]), sub: `Cabang (${audited.length ? Math.round((grouped["Perlu Perbaikan"] / audited.length) * 100) : 0}%)`, color: "#a32020" },
       ],
-      tableHeaders: ["No", "Cabang", "Tanggal Audit", "Skor SOP", "Tier 1", "Tier 2", "Tier 3", "Status"],
+      tableHeaders: ["No", "Cabang", "Tanggal Audit", "Skor SOP", "Tier 1", "Tier 2", "Tier 3", "Status", "Tanda Tangan"],
+      badgeCol: 7,
       tableRows,
       donutSegments,
       donutCenterLines: [String(total), "Cabang"],
@@ -510,6 +515,20 @@ function buildBranchPageHtml(branch, rec, weightedScore, statusInfo, tiers) {
     ${weightedScore < ALERT_THRESHOLD ? `<div class="alert">Total skor SOP di bawah ${ALERT_THRESHOLD}% &mdash; perlu tindakan korektif.</div>` : ""}
     <div class="sect">Lampiran Checklist Lengkap</div>
     ${catRows}
-    <div class="footer"><span>PT. KLA Teknologi Indonesia &bull; Confidential</span><span>${esc(branch.name)} &bull; ${esc(periodeLabel(rec.period))}</span></div>
+    <div style="page-break-inside: avoid;">
+      <div style="display:flex;gap:16px;margin-top:18px;padding-top:14px;border-top:1px solid #e4dff2;">
+        <div style="flex:1;text-align:center;">
+          <div style="font-size:9.5px;font-weight:700;color:#2A1F52;letter-spacing:0.05em;">AUDITOR</div>
+          <div style="height:36px;"></div>
+          <div style="border-top:1px solid #ccc;padding-top:3px;font-weight:700;font-size:10.5px;">${esc(rec.data?.auditor_name || "\u2014")}</div>
+        </div>
+        <div style="flex:1;text-align:center;">
+          <div style="font-size:9.5px;font-weight:700;color:#2A1F52;letter-spacing:0.05em;">MENGETAHUI</div>
+          <div style="height:36px;"></div>
+          <div style="border-top:1px solid #ccc;padding-top:3px;font-weight:700;font-size:10.5px;">${esc(rec.data?.store_manager_name || "\u2014")}</div>
+        </div>
+      </div>
+      <div class="footer"><span>PT. KLA Teknologi Indonesia &bull; Confidential</span><span>${esc(branch.name)} &bull; ${esc(periodeLabel(rec.period))}</span></div>
+    </div>
   </div>`;
 }

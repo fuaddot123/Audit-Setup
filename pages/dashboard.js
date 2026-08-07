@@ -10,17 +10,23 @@ import AuditStok from "../components/AuditStok";
 import AuditKPI from "../components/AuditKPI";
 import BeritaAcara from "../components/BeritaAcara";
 import LaporanBulanan from "../components/LaporanBulanan";
+import BiayaDinas from "../components/BiayaDinas";
+import DashboardAudit from "../components/DashboardAudit";
 
 export default function Dashboard() {
   const router = useRouter();
   const [profile, setProfile] = useState(null);
-  const [active, setActive] = useState("keuangan");
-  const [activeSub, setActiveSub] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Menu aktif sekarang ditarik dari URL (?m=...&sub=...), bukan state React doang — biar
+  // tiap menu punya alamat beneran (klik-kanan "Open in new tab" / "Copy link address" jalan,
+  // refresh halaman tetap di menu yang sama, dst).
+  const active = typeof router.query.m === "string" ? router.query.m : "keuangan";
+  const activeSub = typeof router.query.sub === "string" ? router.query.sub : null;
+
   function handleSelect(moduleKey, subKey) {
-    setActive(moduleKey);
-    setActiveSub(subKey || null);
+    const query = subKey ? { m: moduleKey, sub: subKey } : { m: moduleKey };
+    router.push({ pathname: "/dashboard", query }, undefined, { shallow: true });
   }
 
   useEffect(() => {
@@ -34,7 +40,7 @@ export default function Dashboard() {
     })();
   }, [router]);
 
-  if (loading || !profile) {
+  if (loading || !profile || !router.isReady) {
     return (
       <div style={{ minHeight: "100vh", background: "var(--bg-page)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, color: "var(--text-secondary)" }}>
         <RadarLogo size={64} />
@@ -46,10 +52,12 @@ export default function Dashboard() {
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
       <Sidebar active={active} activeSub={activeSub} onSelect={handleSelect} profile={profile} />
-      {active === "keuangan" ? (
+      {active === "dashboard_audit" ? (
+        <DashboardAudit profile={profile} />
+      ) : active === "keuangan" ? (
         <AuditKeuangan profile={profile} />
       ) : active === "timeline" ? (
-        <Timeline />
+        <Timeline profile={profile} onSelect={handleSelect} />
       ) : active === "sop" ? (
         <AuditSOP profile={profile} sub={activeSub || "cabang"} />
       ) : active === "stok" ? (
@@ -58,6 +66,8 @@ export default function Dashboard() {
         <AuditKPI profile={profile} />
       ) : active === "berita_acara" ? (
         <BeritaAcara profile={profile} />
+      ) : active === "biaya_dinas" ? (
+        <BiayaDinas profile={profile} />
       ) : active === "laporan_bulanan" ? (
         <LaporanBulanan profile={profile} />
       ) : (

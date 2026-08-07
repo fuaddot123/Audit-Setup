@@ -1477,10 +1477,66 @@ export default function LaporanBulanan({ profile }) {
         .map((r) => ({ ...r, findings: r.findings.filter((f) => f.media && f.media.length > 0) }))
         .filter((r) => r.findings.length > 0);
       branchesWithFindings.forEach((r) => {
-        const findingsAll = r.findings;
+        // Temuan dengan foto banyak (>=3) dapet slide sendiri, grid foto lebih gede & jelas
+        // dibaca — sisanya (1-2 foto) tetep gabung 3-temuan-per-slide kayak biasa.
+        const bigFindings = r.findings.filter((f) => f.media.length >= 3);
+        const findingsAll = r.findings.filter((f) => f.media.length < 3);
         const chunks = [];
         for (let i = 0; i < findingsAll.length; i += 3) chunks.push(findingsAll.slice(i, i + 3));
-        if (!chunks.length) chunks.push([]);
+        if (!chunks.length && bigFindings.length === 0) chunks.push([]);
+
+        // ── Slide temuan foto banyak (1 temuan = 1 slide, grid 3x2 sedang) ──
+        bigFindings.forEach((f, fi) => {
+          const s = newSlide();
+          addGradientHeader(s, 1.15);
+          s.addText(`${r.branch.name.toUpperCase()} \u2014 TEMUAN AUDIT`, { x: 0.4, y: 0.15, w: 8.5, h: 0.45, fontSize: 20, bold: true, color: WHITE, margin: 0 });
+          s.addText([
+            { text: `\u{1F4C5}  Audit Date: ${shortDate2(r.sopCur?.data?.audit_date)}`, options: { fontSize: 11.5, color: "E4DCFF", bold: true } },
+            { text: "     |     ", options: { fontSize: 11.5, color: "8A7BC2" } },
+            { text: `\u{1F4CD}  Lokasi: Toko ${r.branch.name}`, options: { fontSize: 11.5, color: "E4DCFF", bold: true } },
+          ], { x: 0.4, y: 0.72, w: 8.5, h: 0.35, margin: 0 });
+          s.addText(periodeLabel(period), { x: 8.6, y: 0.3, w: 2.35, h: 0.4, fontSize: 13, color: GOLD, align: "right", margin: 0 });
+          s.addShape(pptx.ShapeType.rect, { x: 11.05, y: 0.28, w: 0.014, h: 0.44, fill: { color: "6b5f96" } });
+          addLogo(s, 11.3, 0.18);
+
+          // Judul temuan
+          s.addShape(pptx.ShapeType.roundRect, { x: 0.5, y: 1.35, w: 0.46, h: 0.46, rectRadius: 0.08, fill: { color: PURPLE } });
+          s.addText("\u2605", { x: 0.5, y: 1.35, w: 0.46, h: 0.46, fontSize: 16, bold: true, color: WHITE, align: "center", valign: "middle", margin: 0 });
+          s.addText(f.text.toUpperCase(), { x: 1.08, y: 1.35, w: 11, h: 0.5, fontSize: 15, bold: true, color: PURPLE, valign: "middle", margin: 0 });
+
+          // Deskripsi
+          s.addText([
+            { text: "\u{1F4CB}  Deskripsi: ", options: { fontSize: 11.5, bold: true, color: PURPLE } },
+            { text: f.note || "Tidak ada catatan tambahan dari auditor.", options: { fontSize: 11.5, color: "444444" } },
+          ], { x: 0.5, y: 1.95, w: 12.3, h: 0.5, valign: "top", margin: 0 });
+
+          // Grid foto — 3 kolom x 2 baris, sedang (bukan edge-to-edge), maks 6 kebuka
+          // langsung; sisanya (kalau >6) numpuk "+N" di sel terakhir.
+          const shown = f.media.slice(0, 6);
+          const extra = f.media.length - shown.length;
+          const gridTop = 2.65, gridLeft = 1.4, gridW = 10.53, gridH = 4.25;
+          const cols = 3, rowsN = shown.length > 3 ? 2 : 1, gap = 0.18;
+          const cellW = (gridW - gap * (cols - 1)) / cols;
+          const cellH = (rowsN === 1 ? gridH * 0.62 : gridH - gap) / rowsN; // 1 baris: nggak usah setinggi 2 baris, biar foto nggak keregang
+          const gridTopAdj = rowsN === 1 ? gridTop + (gridH - cellH) / 2 : gridTop; // 1 baris: ditengahin vertikal
+          shown.forEach((media, mi) => {
+            const col = mi % cols, row = Math.floor(mi / cols);
+            const cx = gridLeft + col * (cellW + gap);
+            const cy = gridTopAdj + row * (cellH + gap);
+            s.addShape(pptx.ShapeType.rect, { x: cx, y: cy, w: cellW, h: cellH, fill: { color: "F5F3FA" }, line: { color: "E5E0F0", width: 1 } });
+            if (media.type === "video") {
+              s.addText("\u25B6 Video", { x: cx, y: cy, w: cellW, h: cellH, align: "center", valign: "middle", fontSize: 13, color: PURPLE });
+            } else {
+              // "contain" — foto ditampilin utuh (nggak dipotong), sisa ruang kosong di kotak dibiarin aja.
+              try { s.addImage({ path: media.url, x: cx, y: cy, w: cellW, h: cellH, sizing: { type: "contain", w: cellW, h: cellH } }); } catch (e) { /* skip broken image */ }
+            }
+            if (mi === shown.length - 1 && extra > 0) {
+              s.addShape(pptx.ShapeType.rect, { x: cx, y: cy, w: cellW, h: cellH, fill: { color: "000000", transparency: 45 } });
+              s.addText(`+${extra}`, { x: cx, y: cy, w: cellW, h: cellH, align: "center", valign: "middle", fontSize: 20, bold: true, color: WHITE, margin: 0 });
+            }
+          });
+          s.addText(`${f.media.length} foto/video terlampir`, { x: gridLeft, y: gridTop + gridH + 0.1, w: gridW, h: 0.3, fontSize: 9.5, italic: true, color: GREY, align: "center", margin: 0 });
+        });
 
         chunks.forEach((chunk, pageIdx) => {
           const s = newSlide();
@@ -1512,17 +1568,47 @@ export default function LaporanBulanan({ profile }) {
               s.addText(String(pageIdx * 3 + ci + 1).padStart(2, "0"), { x, y: cardTop, w: 0.46, h: 0.46, fontSize: 14, bold: true, color: WHITE, align: "center", valign: "middle", margin: 0 });
               s.addText(f.text.toUpperCase(), { x: x + 0.58, y: cardTop, w: colW - 0.58, h: 0.55, fontSize: 11.5, bold: true, color: PURPLE, valign: "middle", margin: 0 });
 
-              // Foto / video — pakai "contain" biar rasio aslinya kejaga, nggak gepeng/kepotong
-              const media = f.media && f.media[0];
-              const hasMedia = !!media;
+              // Foto / video — sampe 4 ditampilin (grid kalau lebih dari 1), sisanya (kalau
+              // ada) ditandain "+N lainnya" di foto terakhir. Foto tunggal tetep pakai
+              // "contain" biar rasio aslinya kejaga; grid multi-foto pakai "cover" (dipotong
+              // rapi) biar nggak ada spasi kosong ganjil di tiap kotak kecil.
+              const mediaList = (f.media || []).slice(0, 4);
+              const hasMedia = mediaList.length > 0;
+              const extraCount = (f.media?.length || 0) - mediaList.length;
               const mediaY = cardTop + 0.62;
               const mediaH = hasMedia ? 2.85 : 0.55;
               if (hasMedia) {
                 s.addShape(pptx.ShapeType.rect, { x, y: mediaY, w: colW, h: mediaH, fill: { color: "F5F3FA" }, line: { color: "E5E0F0", width: 1 } });
-                if (media.type === "video") {
-                  s.addText("\u25B6 Video", { x, y: mediaY, w: colW, h: mediaH, align: "center", valign: "middle", fontSize: 14, color: PURPLE });
+                if (mediaList.length === 1) {
+                  const media = mediaList[0];
+                  if (media.type === "video") {
+                    s.addText("\u25B6 Video", { x, y: mediaY, w: colW, h: mediaH, align: "center", valign: "middle", fontSize: 14, color: PURPLE });
+                  } else {
+                    try { s.addImage({ path: media.url, x, y: mediaY, w: colW, h: mediaH, sizing: { type: "contain", w: colW, h: mediaH } }); } catch (e) { /* skip broken image */ }
+                  }
                 } else {
-                  try { s.addImage({ path: media.url, x, y: mediaY, w: colW, h: mediaH, sizing: { type: "contain", w: colW, h: mediaH } }); } catch (e) { /* skip broken image */ }
+                  // Grid: 2 foto = 2 kolom x 1 baris; 3-4 foto = 2 kolom x 2 baris.
+                  const cols = 2;
+                  const rowsN = mediaList.length > 2 ? 2 : 1;
+                  const cellGap = 0.03;
+                  const cellW = (colW - cellGap) / cols;
+                  const cellH = (mediaH - cellGap * (rowsN - 1)) / rowsN;
+                  mediaList.forEach((media, mi) => {
+                    const col = mi % cols, row = Math.floor(mi / cols);
+                    const cx = x + col * (cellW + cellGap);
+                    const cy = mediaY + row * (cellH + cellGap);
+                    if (media.type === "video") {
+                      s.addShape(pptx.ShapeType.rect, { x: cx, y: cy, w: cellW, h: cellH, fill: { color: "EDE9F5" } });
+                      s.addText("\u25B6", { x: cx, y: cy, w: cellW, h: cellH, align: "center", valign: "middle", fontSize: 16, color: PURPLE, margin: 0 });
+                    } else {
+                      try { s.addImage({ path: media.url, x: cx, y: cy, w: cellW, h: cellH, sizing: { type: "contain", w: cellW, h: cellH } }); } catch (e) { /* skip broken image */ }
+                    }
+                    // Badge "+N lainnya" di foto terakhir kalau masih ada sisa yang nggak muat.
+                    if (mi === mediaList.length - 1 && extraCount > 0) {
+                      s.addShape(pptx.ShapeType.rect, { x: cx, y: cy, w: cellW, h: cellH, fill: { color: "000000", transparency: 45 } });
+                      s.addText(`+${extraCount}`, { x: cx, y: cy, w: cellW, h: cellH, align: "center", valign: "middle", fontSize: 15, bold: true, color: WHITE, margin: 0 });
+                    }
+                  });
                 }
               } else {
                 // Nggak ada foto — nggak usah kasih kotak kosong gede yang buang tempat,

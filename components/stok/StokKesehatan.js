@@ -31,6 +31,11 @@ export default function StokKesehatan({ profile }) {
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState(null);
   const isSuperAdmin = profile?.role === "super_admin";
+  // Pengecualian khusus: akun Fuad (fuadmulya123@gmail.com) tetep boleh pake tombol Sync
+  // walau rolenya "auditor" biasa, soalnya sheet yang lagi dipake sekarang emang punya dia.
+  // Auditor lain (Yuni, dst) tetep nggak boleh, cuma lewat super_admin.
+  const FUAD_USER_ID = "a6457b2f-0b3e-45e1-b381-b32139053387";
+  const canSync = isSuperAdmin || profile?.id === FUAD_USER_ID;
   const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
   // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua kayak biasa).
   const ISOLATION_START_PERIOD = "2026-08";
@@ -250,7 +255,7 @@ export default function StokKesehatan({ profile }) {
               <div className="mono" style={{ fontWeight: 600, minWidth: 130, textAlign: "center", fontSize: 13.5 }}>{periodeLabel(viewPeriod)}</div>
               <button className="btn-ghost" onClick={() => setViewPeriod(addMonthsToPeriod(viewPeriod, 1))} style={{ padding: "6px 10px" }}>{">"}</button>
             </div>
-            {isSuperAdmin && (
+            {canSync && (
               <button className="btn" disabled={syncing} onClick={handleSync}>{syncing ? "Sync\u2026" : "Sync dari Google Sheet"}</button>
             )}
           </div>

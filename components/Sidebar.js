@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { useRouter } from "next/router";
+import Link from "next/link";
 import { supabase } from "../lib/supabaseClient";
 import { useTheme } from "../lib/ThemeContext";
 import RadarLogo from "./RadarLogo";
 
 const MODULES = [
+  { key: "dashboard_audit", label: "Dashboard Audit", ready: true },
   { key: "keuangan", label: "Audit Keuangan", ready: true },
   {
     key: "sop", label: "Audit SOP", ready: true, subs: [
@@ -22,14 +24,8 @@ const MODULES = [
     ],
   },
   { key: "berita_acara", label: "Berita Acara", ready: true },
-  {
-    key: "pengajuan", label: "Form Pengajuan", ready: false, subs: [
-      { key: "adjust", label: "Barang Adjust" },
-      { key: "inventaris", label: "Barang Inventaris" },
-      { key: "hadiah", label: "Barang Hadiah Undian" },
-    ],
-  },
   { key: "kpi", label: "KPI", ready: true },
+  { key: "biaya_dinas", label: "Biaya Dinas", ready: true },
   { key: "laporan_bulanan", label: "Laporan Bulanan", ready: true },
   { key: "laporan_tahunan", label: "Laporan Tahunan", ready: false },
   { key: "timeline", label: "Timeline", ready: true },
@@ -44,6 +40,16 @@ function ChevronIcon({ open }) {
   );
 }
 
+// Tiap menu/submenu sekarang punya alamat URL beneran (bukan cuma state React) — biar
+// klik-kanan "Open link in new tab" / "Copy link address" jalan normal kayak link web pada
+// umumnya, dan refresh halaman tetap di menu yang lagi dibuka.
+function hrefFor(m) {
+  return m.subs ? `/dashboard?m=${m.key}&sub=${m.subs[0].key}` : `/dashboard?m=${m.key}`;
+}
+function hrefForSub(m, s) {
+  return `/dashboard?m=${m.key}&sub=${s.key}`;
+}
+
 export default function Sidebar({ active, activeSub, onSelect, profile }) {
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
@@ -55,18 +61,11 @@ export default function Sidebar({ active, activeSub, onSelect, profile }) {
   }
 
   function clickModule(m) {
-    if (m.subs) {
-      const willOpen = !expanded[m.key];
-      setExpanded((p) => ({ ...p, [m.key]: willOpen }));
-      if (active !== m.key) onSelect(m.key, m.subs[0].key);
-    } else {
-      onSelect(m.key, null);
-    }
-  }
-
-  function clickSub(m, s) {
-    setExpanded((p) => ({ ...p, [m.key]: true }));
-    onSelect(m.key, s.key);
+    // Cuma dipanggil buat modul yang punya submenu (Link-nya di-preventDefault) — toggle
+    // buka/tutup daftar submenu; kalau modulnya belum aktif, sekalian arahin ke sub pertama.
+    const willOpen = !expanded[m.key];
+    setExpanded((p) => ({ ...p, [m.key]: willOpen }));
+    if (active !== m.key) onSelect(m.key, m.subs[0].key);
   }
 
   const roleLabel = { super_admin: "Super Admin", auditor: "Auditor", ceo: "CEO", viewer: "Viewer" }[profile?.role] || "\u2026";
@@ -83,38 +82,47 @@ export default function Sidebar({ active, activeSub, onSelect, profile }) {
           const isOpen = !!expanded[m.key];
           return (
             <div key={m.key}>
-              <div
-                onClick={() => clickModule(m)}
+              <Link
+                href={hrefFor(m)}
+                onClick={(e) => {
+                  // Modul yang punya submenu: klik cuma buka/tutup daftar submenu-nya doang
+                  // (kalau udah aktif) — bukan pindah halaman tiap kali diklik ulang.
+                  if (m.subs) {
+                    e.preventDefault();
+                    clickModule(m);
+                  }
+                }}
                 onMouseEnter={(e) => { if (!(isActive && !m.subs)) e.currentTarget.style.background = "var(--sidebar-hover-bg, rgba(255,255,255,0.04))"; }}
                 onMouseLeave={(e) => { if (!(isActive && !m.subs)) e.currentTarget.style.background = "transparent"; }}
                 style={{
                   display: "flex", alignItems: "center", gap: 12, padding: "12px 14px", borderRadius: 12,
-                  cursor: "pointer", transition: "background .12s",
+                  cursor: "pointer", transition: "background .12s", textDecoration: "none",
                   background: isActive && !m.subs ? "linear-gradient(90deg, rgba(244,183,64,0.14), rgba(244,183,64,0.02))" : "transparent",
                   boxShadow: isActive && !m.subs ? "inset 3px 0 0 0 #F4B740" : "inset 3px 0 0 0 transparent",
                 }}
               >
                 <span style={{ color: isActive ? "var(--sidebar-text)" : "var(--sidebar-text-muted)", fontSize: 14, fontWeight: 500, flex: 1 }}>{m.label}</span>
                 {m.subs && <ChevronIcon open={isOpen} />}
-              </div>
+              </Link>
 
               {m.subs && isOpen && (
                 <div style={{ display: "flex", flexDirection: "column", gap: 2, margin: "2px 0 4px", paddingLeft: 14 }}>
                   {m.subs.map((s) => {
                     const subActive = isActive && activeSub === s.key;
                     return (
-                      <div
+                      <Link
                         key={s.key}
-                        onClick={() => clickSub(m, s)}
+                        href={hrefForSub(m, s)}
+                        onClick={() => setExpanded((p) => ({ ...p, [m.key]: true }))}
                         style={{
                           display: "flex", alignItems: "center", padding: "9px 14px", borderRadius: 10,
-                          cursor: "pointer",
+                          cursor: "pointer", textDecoration: "none",
                           background: subActive ? "linear-gradient(90deg, rgba(244,183,64,0.14), rgba(244,183,64,0.02))" : "transparent",
                           boxShadow: subActive ? "inset 3px 0 0 0 #F4B740" : "inset 3px 0 0 0 transparent",
                         }}
                       >
                         <span style={{ color: subActive ? "var(--sidebar-text)" : "var(--sidebar-text-muted)", fontSize: 13, fontWeight: subActive ? 600 : 400 }}>{s.label}</span>
-                      </div>
+                      </Link>
                     );
                   })}
                 </div>

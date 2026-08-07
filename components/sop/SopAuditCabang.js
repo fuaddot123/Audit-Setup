@@ -6,7 +6,7 @@ import {
   calcWeightedScore, calcWeightedFromRecord, scoreColor, periodFromDate, todayInputValue, periodeLabel,
   nowPeriode, addMonthsToPeriod,
 } from "../../lib/sopConfig";
-import { deleteMediaFromStorage, deleteMediaListFromStorage } from "../AuditInventaris";
+import { deleteMediaFromStorage, deleteMediaListFromStorage, compressImage } from "../AuditInventaris";
 
 function emptyChecklist() {
   const state = {};
@@ -43,6 +43,7 @@ export default function SopAuditCabang({ profile }) {
   const [checklist, setChecklist] = useState(emptyChecklist());
   const [tidakVisit, setTidakVisit] = useState(false);
   const [cabangBaru, setCabangBaru] = useState(false);
+  const [storeManagerName, setStoreManagerName] = useState("");
   const [notes, setNotes] = useState({});
   const [photos, setPhotos] = useState({}); // { catId_idx: url }
   const [uploadingKey, setUploadingKey] = useState(null);
@@ -89,6 +90,7 @@ export default function SopAuditCabang({ profile }) {
     setTidakVisit(!!entry.data?.tidak_visit);
     setCabangBaru(!!entry.data?.cabang_baru);
     setAuditDate(entry.data?.audit_date || todayInputValue());
+    setStoreManagerName(entry.data?.store_manager_name || "");
     setSelectedEntryId(entry.id);
   }
 
@@ -99,6 +101,7 @@ export default function SopAuditCabang({ profile }) {
     setTidakVisit(false);
     setCabangBaru(false);
     setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
+    setStoreManagerName("");
     setSelectedEntryId(null);
     setSaved(false);
   }
@@ -177,11 +180,20 @@ export default function SopAuditCabang({ profile }) {
         const isImage = file.type.startsWith("image/");
         const isVideo = file.type.startsWith("video/");
         if (!isImage && !isVideo) { setError("File harus berupa gambar atau video."); continue; }
+        let uploadFile = file;
+        let ext = file.name.split(".").pop() || (isVideo ? "mp4" : "jpg");
+        if (isImage) {
+          try {
+            const compressed = await compressImage(file, 0.75);
+            if (compressed.size < file.size) { uploadFile = compressed; ext = "jpg"; }
+          } catch (err) {
+            // Kompresi gagal — lanjut upload file asli aja.
+          }
+        }
         const maxSize = isVideo ? 30 * 1024 * 1024 : 5 * 1024 * 1024;
-        if (file.size > maxSize) { setError(`Ukuran ${isVideo ? "video" : "foto"} maksimal ${isVideo ? "30MB" : "5MB"}.`); continue; }
-        const ext = file.name.split(".").pop() || (isVideo ? "mp4" : "jpg");
+        if (uploadFile.size > maxSize) { setError(`Ukuran ${isVideo ? "video" : "foto"} maksimal ${isVideo ? "30MB" : "5MB"}.`); continue; }
         const path = `sop/${selectedBranch.id}/${viewPeriod}/${key}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
-        const { error: upErr } = await supabase.storage.from("findings").upload(path, file, { upsert: true });
+        const { error: upErr } = await supabase.storage.from("findings").upload(path, uploadFile, { upsert: true, contentType: isImage ? "image/jpeg" : file.type });
         if (upErr) throw upErr;
         const { data: pub } = supabase.storage.from("findings").getPublicUrl(path);
         uploaded.push({ url: pub.publicUrl, type: isVideo ? "video" : "image" });
@@ -261,7 +273,7 @@ export default function SopAuditCabang({ profile }) {
         status: "submitted",
         submitted_by: user.id,
         data: tidakVisit
-          ? { audit_date: auditDate, tidak_visit: true, cabang_baru: cabangBaru, auditor_name: profile?.full_name || null }
+          ? { audit_date: auditDate, tidak_visit: true, cabang_baru: cabangBaru, auditor_name: profile?.full_name || null, store_manager_name: storeManagerName || null }
           : {
               audit_date: auditDate,
               tidak_visit: false,
@@ -273,6 +285,7 @@ export default function SopAuditCabang({ profile }) {
               done: totalDone,
               score: weightedPct,
               auditor_name: profile?.full_name || null,
+              store_manager_name: storeManagerName || null,
             },
       };
 
@@ -466,6 +479,10 @@ export default function SopAuditCabang({ profile }) {
               <label style={{ display: "block", fontSize: 11, color: "var(--text-secondary)", marginBottom: 3 }}>Tanggal audit</label>
               <input className="input" type="date" value={auditDate} onChange={(e) => { setAuditDate(e.target.value); setSaved(false); }} />
             </div>
+            <div>
+              <label style={{ display: "block", fontSize: 11, color: "var(--text-secondary)", marginBottom: 3 }}>Nama yang Mengetahui</label>
+              <input className="input" placeholder="Misal: Store Manager" disabled={!canEdit} value={storeManagerName} onChange={(e) => { setStoreManagerName(e.target.value); setSaved(false); }} />
+            </div>
             <button className="btn" disabled={saving || !canEdit} onClick={saveAudit} style={{ alignSelf: "flex-end" }} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
               {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan Hasil Audit" : "Hanya Lihat"}
             </button>
@@ -652,13 +669,30 @@ export default function SopAuditCabang({ profile }) {
                                     </div>
                                   ))}
                                   {canEdit && (
-                                    <label style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 11.5, color: "var(--text-faint)", border: "1px dashed var(--border)", borderRadius: 8, padding: "8px 12px", cursor: "pointer", height: 90, boxSizing: "border-box" }}>
+                                    <label
+                                      tabIndex={0}
+                                      onPaste={(e) => {
+                                        const items = e.clipboardData?.items;
+                                        if (!items) return;
+                                        const files = [];
+                                        for (const item of items) {
+                                          if (item.kind === "file" && (item.type.startsWith("image/") || item.type.startsWith("video/"))) {
+                                            const f = item.getAsFile();
+                                            if (f) files.push(f);
+                                          }
+                                        }
+                                        if (files.length) { e.preventDefault(); uploadPhoto(id, files); }
+                                      }}
+                                      title="Klik lalu Ctrl+V buat paste foto dari clipboard"
+                                      style={{ display: "inline-flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, fontSize: 11.5, color: "var(--text-faint)", border: "1px dashed var(--border)", borderRadius: 8, padding: "8px 12px", cursor: "pointer", height: 90, boxSizing: "border-box" }}
+                                    >
                                       {uploadingKey === id ? (
                                         "Mengunggah\u2026"
                                       ) : (
                                         <>
                                           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="3" width="18" height="18" rx="2" /><circle cx="8.5" cy="8.5" r="1.5" /><path d="M21 15l-5-5L5 21" /></svg>
                                           {(photos[id] || []).length ? "Tambah lagi" : "Tambah foto/video"}
+                                          <span style={{ fontSize: 9, opacity: 0.7 }}>atau Ctrl+V</span>
                                         </>
                                       )}
                                       <input type="file" accept="image/*,video/*" multiple style={{ display: "none" }} disabled={uploadingKey === id} onChange={(e) => { if (e.target.files?.length) uploadPhoto(id, e.target.files); e.target.value = ""; }} />

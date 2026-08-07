@@ -72,6 +72,30 @@ export async function deleteMediaListFromStorage(mediaList) {
 
 // Upload foto/video bukti kerusakan ke bucket Storage "findings".
 // Dipanggil dari komponen pemanggil (BeritaAcara.js), yang menyimpan hasilnya ke state sendiri.
+// Kompres foto: gambar ulang ke <canvas> di RESOLUSI ASLI (lebar/tinggi nggak diubah sama
+// sekali), terus disimpan ulang sebagai JPEG kualitas 0.75 — ukuran file jauh lebih kecil,
+// tapi dimensi/resolusi tetap persis kayak hasil kamera HP. Video nggak disentuh (biarin apa
+// adanya, kompresi video butuh cara lain yang jauh lebih berat buat browser).
+export function compressImage(file, quality = 0.75) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
+      const ctx = canvas.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      canvas.toBlob((blob) => {
+        URL.revokeObjectURL(url);
+        if (blob) resolve(blob); else reject(new Error("Gagal kompres gambar"));
+      }, "image/jpeg", quality);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("Gagal baca gambar")); };
+    img.src = url;
+  });
+}
+
 export async function uploadInventarisMedia({ branchId, period, cat, fileList }) {
   const files = Array.from(fileList || []);
   const uploaded = [];
@@ -79,12 +103,23 @@ export async function uploadInventarisMedia({ branchId, period, cat, fileList })
     const isImage = file.type.startsWith("image/");
     const isVideo = file.type.startsWith("video/");
     if (!isImage && !isVideo) continue;
+    let uploadFile = file;
+    let ext = file.name.split(".").pop() || (isVideo ? "mp4" : "jpg");
+    if (isImage) {
+      try {
+        const compressed = await compressImage(file, 0.75);
+        // Pakai hasil kompresi cuma kalau beneran lebih kecil (foto yang udah kecil/simpel
+        // kadang malah nggak nyusut, atau dikit doang — nggak masalah, tetep pakai aslinya).
+        if (compressed.size < file.size) { uploadFile = compressed; ext = "jpg"; }
+      } catch (err) {
+        // Kompresi gagal (jarang) — lanjut upload file asli aja, jangan sampai gagal total.
+      }
+    }
     const maxSize = isVideo ? 30 * 1024 * 1024 : 5 * 1024 * 1024;
-    if (file.size > maxSize) throw new Error(`Ukuran ${isVideo ? "video" : "foto"} maksimal ${isVideo ? "30MB" : "5MB"}.`);
-    const ext = file.name.split(".").pop() || (isVideo ? "mp4" : "jpg");
+    if (uploadFile.size > maxSize) throw new Error(`Ukuran ${isVideo ? "video" : "foto"} maksimal ${isVideo ? "30MB" : "5MB"}.`);
     const safeCat = cat.replace(/[^a-z0-9]+/gi, "-").toLowerCase();
     const path = `inventaris/${branchId}/${period}/${safeCat}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}.${ext}`;
-    const { error: upErr } = await supabase.storage.from("findings").upload(path, file, { upsert: true });
+    const { error: upErr } = await supabase.storage.from("findings").upload(path, uploadFile, { upsert: true, contentType: isImage ? "image/jpeg" : file.type });
     if (upErr) throw upErr;
     const { data: pub } = supabase.storage.from("findings").getPublicUrl(path);
     uploaded.push({ url: pub.publicUrl, type: isVideo ? "video" : "image" });
@@ -109,6 +144,21 @@ function StatusToggle({ value, onChange, disabled, okLabel, badLabel }) {
 }
 
 // Bagian checklist Inventaris — dirender sebagai section di dalam form Berita Acara.
+// Ambil file gambar/video dari clipboard (Ctrl+V), biar nggak perlu save-as ke folder dulu
+// baru upload — copy dari mana aja (galeri, browser, screenshot), klik kotaknya, paste.
+function extractPastedFiles(e) {
+  const items = e.clipboardData?.items;
+  if (!items) return [];
+  const files = [];
+  for (const item of items) {
+    if (item.kind === "file" && (item.type.startsWith("image/") || item.type.startsWith("video/"))) {
+      const f = item.getAsFile();
+      if (f) files.push(f);
+    }
+  }
+  return files;
+}
+
 export function InventarisChecklist({ inventaris, canEdit, uploadingKey, onUpdate, onUploadMedia, onRemoveMedia, filter }) {
   const rusakCount = countRusak(inventaris);
   const cats = filter === "rusak" ? INVENTARIS_CATEGORIES.filter((cat) => inventaris[cat]?.status === "Rusak") : INVENTARIS_CATEGORIES;
@@ -151,8 +201,13 @@ export function InventarisChecklist({ inventaris, canEdit, uploadingKey, onUpdat
                       </div>
                     ))}
                     {canEdit && (
-                      <label style={{ width: 64, height: 64, display: "flex", alignItems: "center", justifyContent: "center", border: "1px dashed var(--border)", borderRadius: 6, cursor: "pointer", fontSize: 9.5, color: "var(--text-faint)", textAlign: "center" }}>
-                        {uploadingKey === key ? "..." : "+ Foto/Video"}
+                      <label
+                        tabIndex={0}
+                        onPaste={(e) => { const files = extractPastedFiles(e); if (files.length) { e.preventDefault(); onUploadMedia(cat, files); } }}
+                        style={{ width: 64, height: 64, display: "flex", alignItems: "center", justifyContent: "center", border: "1px dashed var(--border)", borderRadius: 6, cursor: "pointer", fontSize: 9, color: "var(--text-faint)", textAlign: "center", lineHeight: 1.3 }}
+                        title="Klik lalu Ctrl+V buat paste foto dari clipboard"
+                      >
+                        {uploadingKey === key ? "..." : (<>+ Foto/Video<br /><span style={{ fontSize: 8, opacity: 0.7 }}>atau Ctrl+V</span></>)}
                         <input type="file" accept="image/*,video/*" multiple style={{ display: "none" }} disabled={uploadingKey === key} onChange={(e) => { if (e.target.files?.length) onUploadMedia(cat, e.target.files); e.target.value = ""; }} />
                     </label>
                   )}

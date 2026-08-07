@@ -6,7 +6,15 @@ const PALETTE = ["#F4B740", "#EC4899", "#8B5CF6", "#22D3EE", "#34D399", "#F97316
 const MONTH_NAMES = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
 
 function toDate(str) { const d = new Date(str + "T00:00:00"); return d; }
-function fmtISO(d) { return d.toISOString().slice(0, 10); }
+function fmtISO(d) {
+  // JANGAN pakai toISOString() — itu convert ke UTC, dan Indonesia (WIB/WITA/WIT) di depan
+  // UTC, jadi tanggalnya bisa mundur 1 hari (misal tanggal 17 lokal jadi "16" pas dicek ke
+  // data hari libur). Ambil komponen tanggal LOKAL langsung, bukan lewat konversi UTC.
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 function sameDay(a, b) { return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate(); }
 function addDays(d, n) { const r = new Date(d); r.setDate(r.getDate() + n); return r; }
 
@@ -51,32 +59,43 @@ function assignLanes(events) {
   return { events: sorted, laneCount: laneEnds.length || 1 };
 }
 
-const EMPTY_FORM = { branch_id: "", auditor_name: "", start_date: "", end_date: "", notes: "" };
+const EMPTY_FORM = { branch_id: "", start_date: "", end_date: "", notes: "" };
+const ISOLATION_START_PERIOD = "2026-08-01"; // format tanggal (bukan "YYYY-MM"), sesuai kolom start_date
 
-export default function Timeline() {
+export default function Timeline({ profile, onSelect }) {
   const [current, setCurrent] = useState(() => { const n = new Date(); return { year: n.getFullYear(), month: n.getMonth() }; });
   const [branches, setBranches] = useState([]);
+  const [auditors, setAuditors] = useState([]);
   const [rawEvents, setRawEvents] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showModal, setShowModal] = useState(false);
   const [editingId, setEditingId] = useState(null);
+  const [viewingRaw, setViewingRaw] = useState(null); // event yang lagi dibuka via mode LIAT-DOANG (super_admin, atau bukan milik sendiri)
   const [form, setForm] = useState(EMPTY_FORM);
+  const [statusNoteDraft, setStatusNoteDraft] = useState("");
   const [saving, setSaving] = useState(false);
   const [holidays, setHolidays] = useState({}); // { "2026-08-17": "Hari Kemerdekaan Republik Indonesia", ... }
+
+  // Auditor bikin jadwalnya sendiri-sendiri; super_admin cuma mantau (read-only, liat semua).
+  const canManage = profile?.role === "auditor";
+  const isolate = profile?.role === "auditor";
 
   useEffect(() => { loadAll(); }, []);
   useEffect(() => { loadHolidays(current.year); }, [current.year]);
 
   async function loadHolidays(year) {
     try {
-      const res = await fetch(`https://api-hari-libur.vercel.app/api?year=${year}`);
+      // Lewat API route sendiri (/api/hari-libur), bukan langsung ke domain luar — biar nggak
+      // kena blokir CORS dari browser (server-ke-server aman, browser-ke-domain-luar kena block).
+      const res = await fetch(`/api/hari-libur?year=${year}`);
       const json = await res.json();
       const map = {};
       (json.data || []).forEach((h) => { map[h.date] = h.description; });
       setHolidays((prev) => ({ ...prev, ...map }));
     } catch (err) {
       // Kalau API-nya lagi down, kalender tetap jalan normal — cuma tanpa tanda tanggal merah otomatis.
+      console.error("DEBUG loadHolidays GAGAL:", err);
     }
   }
 
@@ -87,7 +106,13 @@ export default function Timeline() {
       const { data: br, error: brErr } = await supabase.from("branches").select("*").order("name");
       if (brErr) throw brErr;
       setBranches(br || []);
-      const { data: ev, error: evErr } = await supabase.from("audit_schedule").select("*").order("start_date");
+      const { data: prof, error: profErr } = await supabase.from("profiles").select("id, full_name");
+      if (profErr) throw profErr;
+      setAuditors(prof || []);
+      // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua kayak biasa).
+      let evQuery = supabase.from("audit_schedule").select("*").order("start_date");
+      if (isolate) evQuery = evQuery.or(`start_date.lt.${ISOLATION_START_PERIOD},auditor_id.eq.${profile.id}`);
+      const { data: ev, error: evErr } = await evQuery;
       if (evErr) throw evErr;
       setRawEvents(ev || []);
     } catch (err) {
@@ -102,29 +127,45 @@ export default function Timeline() {
     return PALETTE[(idx >= 0 ? idx : 0) % PALETTE.length];
   }
 
-  const events = rawEvents.map((e) => ({
-    id: e.id,
-    branch_id: e.branch_id,
-    label: (branches.find((b) => b.id === e.branch_id)?.name || "?") + (e.auditor_name ? " · " + e.auditor_name : ""),
-    start: toDate(e.start_date),
-    end: toDate(e.end_date),
-    color: e.color || branchColor(e.branch_id),
-    raw: e,
-  }));
+  const STATUS_INFO = {
+    "Sudah Visit": { icon: "\u2705", color: "#1a9e6e" },
+    "Ada Kendala": { icon: "\u26A0\uFE0F", color: "#a32020" },
+  };
+
+  const events = rawEvents.map((e) => {
+    const auditorName = auditors.find((a) => a.id === e.auditor_id)?.full_name || e.auditor_name || "\u2014";
+    const statusIcon = STATUS_INFO[e.status]?.icon || "";
+    return {
+      id: e.id,
+      branch_id: e.branch_id,
+      label: `${statusIcon ? statusIcon + " " : ""}${(branches.find((b) => b.id === e.branch_id)?.name || "?")} \u00b7 ${auditorName}`,
+      start: toDate(e.start_date),
+      end: toDate(e.end_date),
+      color: e.color || branchColor(e.branch_id),
+      raw: e,
+    };
+  });
 
   const weeks = getMonthGrid(current.year, current.month);
 
   function openAdd(dateForNew) {
+    if (!canManage) return;
     setEditingId(null);
     setForm({ ...EMPTY_FORM, start_date: dateForNew ? fmtISO(dateForNew) : "", end_date: dateForNew ? fmtISO(dateForNew) : "" });
     setShowModal(true);
   }
 
   function openEdit(rawEvent) {
+    const isOwner = canManage && rawEvent.auditor_id === profile?.id;
+    if (!isOwner) {
+      // Super admin (atau lihat jadwal auditor lain, kalaupun ke-load) — mode liat doang.
+      setViewingRaw(rawEvent);
+      return;
+    }
     setEditingId(rawEvent.id);
+    setStatusNoteDraft(rawEvent.status_note || "");
     setForm({
       branch_id: rawEvent.branch_id,
-      auditor_name: rawEvent.auditor_name || "",
       start_date: rawEvent.start_date,
       end_date: rawEvent.end_date,
       notes: rawEvent.notes || "",
@@ -132,7 +173,30 @@ export default function Timeline() {
     setShowModal(true);
   }
 
+  async function setEventStatus(status, note) {
+    if (!editingId) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const payload = { status, status_note: status === "Ada Kendala" ? (note || null) : null };
+      const res = await supabase.from("audit_schedule").update(payload).eq("id", editingId).select().single();
+      if (res.error) throw res.error;
+      setRawEvents((prev) => prev.map((e) => (e.id === editingId ? res.data : e)));
+      setShowModal(false);
+    } catch (err) {
+      setError("Gagal update status: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function goToBeritaAcara() {
+    setShowModal(false);
+    if (onSelect) onSelect("berita_acara", null);
+  }
+
   async function saveEvent() {
+    if (!canManage) return;
     if (!form.branch_id || !form.start_date || !form.end_date) {
       setError("Cabang, tanggal mulai, dan tanggal selesai wajib diisi.");
       return;
@@ -140,15 +204,15 @@ export default function Timeline() {
     setSaving(true);
     setError(null);
     try {
-      const user = (await supabase.auth.getUser()).data.user;
       const payload = {
         branch_id: parseInt(form.branch_id, 10),
-        auditor_name: form.auditor_name || null,
+        auditor_id: profile.id,
         start_date: form.start_date,
         end_date: form.end_date < form.start_date ? form.start_date : form.end_date,
         notes: form.notes || null,
         color: branchColor(parseInt(form.branch_id, 10)),
-        created_by: user.id,
+        created_by: profile.id,
+        ...(editingId ? {} : { status: "Terjadwal" }),
       };
       let res;
       if (editingId) {
@@ -170,7 +234,7 @@ export default function Timeline() {
   }
 
   async function deleteEvent() {
-    if (!editingId) return;
+    if (!editingId || !canManage) return;
     setSaving(true);
     try {
       const { error: delErr } = await supabase.from("audit_schedule").delete().eq("id", editingId);
@@ -199,13 +263,13 @@ export default function Timeline() {
       <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
         <div>
           <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Timeline</div>
-          <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Jadwal audit tiap cabang, satu tampilan buat seluruh tim</div>
+          <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>{canManage ? "Jadwal kunjungan audit kamu sendiri" : "Pantau jadwal kunjungan semua auditor (lihat saja)"}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button className="btn-ghost" onClick={() => changeMonth(-1)}>{"<"}</button>
           <div className="mono" style={{ fontWeight: 600, minWidth: 150, textAlign: "center" }}>{MONTH_NAMES[current.month]} {current.year}</div>
           <button className="btn-ghost" onClick={() => changeMonth(1)}>{">"}</button>
-          <button className="btn" onClick={() => openAdd(null)}>+ Jadwal baru</button>
+          {canManage && <button className="btn" onClick={() => openAdd(null)}>+ Jadwal baru</button>}
         </div>
       </div>
 
@@ -323,11 +387,6 @@ export default function Timeline() {
               </select>
             </div>
 
-            <div style={{ marginBottom: 12 }}>
-              <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Nama yang audit</label>
-              <input className="input" placeholder="Misal: Budi" value={form.auditor_name} onChange={(e) => setForm({ ...form, auditor_name: e.target.value })} />
-            </div>
-
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 12 }}>
               <div>
                 <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Mulai</label>
@@ -339,10 +398,22 @@ export default function Timeline() {
               </div>
             </div>
 
-            <div style={{ marginBottom: 18 }}>
+            <div style={{ marginBottom: editingId ? 12 : 18 }}>
               <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Catatan (opsional)</label>
               <input className="input" placeholder="Misal: Report Monthly" value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
             </div>
+
+            {editingId && (
+              <div style={{ marginBottom: 18, padding: 12, background: "var(--surface-alt)", borderRadius: 10, border: "1px solid var(--border)" }}>
+                <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 8 }}>Setelah kunjungan</label>
+                <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                  <button className="btn-ghost" disabled={saving} style={{ flex: 1, color: "#1a9e6e", borderColor: "#1a9e6e55" }} onClick={() => setEventStatus("Sudah Visit", null)}>✅ Sudah Visit</button>
+                  <button className="btn-ghost" disabled={saving} style={{ flex: 1, color: "var(--danger-text)", borderColor: "var(--danger-border)" }} onClick={() => setEventStatus("Ada Kendala", statusNoteDraft)}>⚠️ Ada Kendala</button>
+                </div>
+                <input className="input" placeholder="Keterangan kendala (kalau ada)" value={statusNoteDraft} onChange={(e) => setStatusNoteDraft(e.target.value)} style={{ marginBottom: 8 }} />
+                <button className="btn" style={{ width: "100%" }} onClick={goToBeritaAcara}>Isi Berita Acara →</button>
+              </div>
+            )}
 
             <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
               {editingId ? (
@@ -356,6 +427,30 @@ export default function Timeline() {
           </div>
         </div>
       )}
+
+      {viewingRaw && (
+        <div style={{ position: "fixed", inset: 0, background: "var(--overlay)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50 }} onClick={() => setViewingRaw(null)}>
+          <div style={{ background: "var(--surface)", borderRadius: 14, padding: 24, width: 380, maxWidth: "90%" }} onClick={(e) => e.stopPropagation()}>
+            <div className="display" style={{ fontSize: 18, fontWeight: 600, marginBottom: 4 }}>{branches.find((b) => b.id === viewingRaw.branch_id)?.name || "?"}</div>
+            <div style={{ fontSize: 12.5, color: "var(--text-faint)", marginBottom: 16 }}>Jadwal kunjungan (lihat saja)</div>
+            <ViewRow label="Auditor" value={auditors.find((a) => a.id === viewingRaw.auditor_id)?.full_name || "\u2014"} />
+            <ViewRow label="Tanggal" value={`${viewingRaw.start_date} s/d ${viewingRaw.end_date}`} />
+            <ViewRow label="Status" value={viewingRaw.status || "Terjadwal"} valueColor={STATUS_INFO[viewingRaw.status]?.color} />
+            {viewingRaw.status === "Ada Kendala" && viewingRaw.status_note && <ViewRow label="Keterangan Kendala" value={viewingRaw.status_note} />}
+            {viewingRaw.notes && <ViewRow label="Catatan" value={viewingRaw.notes} />}
+            <button className="btn-ghost" style={{ width: "100%", marginTop: 8 }} onClick={() => setViewingRaw(null)}>Tutup</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ViewRow({ label, value, valueColor }) {
+  return (
+    <div style={{ marginBottom: 10 }}>
+      <div style={{ fontSize: 11, fontWeight: 600, color: "var(--text-faint)", textTransform: "uppercase", marginBottom: 2 }}>{label}</div>
+      <div style={{ fontSize: 13.5, fontWeight: 600, color: valueColor || "var(--text-primary)" }}>{value}</div>
     </div>
   );
 }
