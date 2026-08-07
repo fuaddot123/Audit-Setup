@@ -287,7 +287,6 @@ export default function LaporanBulanan({ profile }) {
 
       // Kepatuhan SOP gabungan — 4 sumber sekaligus, per bulan
       const kepatuhanTrend = (() => {
-        if (typeof window !== "undefined") window.__kepDebugTrend = []; // reset tiap generate
         // Semua sumber di-resolve ke audit paling baru per cabang+bulan dulu (bisa ada >1 audit),
         // baru digabung — sebelumnya numpuk semua audit, bikin beda tipis sama kartu ringkasan.
         function latestByBranchPeriodKey(records, dateOf, moduleKey) {
@@ -333,14 +332,6 @@ export default function LaporanBulanan({ profile }) {
             const asetTemuan = invTemuan + kondisiTemuan;
             const total = sopTemuan + stokTemuan + keuanganTemuan + asetTemuan;
             pctList.push(Math.max(0, 1 - total / BASELINE));
-            // ── DEBUG SEMENTARA: rekam detail cabang ini kalau ini bulan yang lagi digenerate ──
-            if (p === period) {
-              window.__kepDebugTrend = window.__kepDebugTrend || [];
-              window.__kepDebugTrend.push({
-                branch_id: sopRec.branch_id, sopTemuan, stokTemuan, keuanganTemuan, asetTemuan, total,
-                pct: Math.round(Math.max(0, 1 - total / BASELINE) * 100),
-              });
-            }
           });
           if (!pctList.length) return null;
           return pctList.reduce((s, v) => s + v, 0) / pctList.length;
@@ -566,37 +557,6 @@ export default function LaporanBulanan({ profile }) {
       const kepatuhanAvg = kepatuhanRows.length ? kepatuhanRows.reduce((s, r) => s + r.kepatuhan, 0) / kepatuhanRows.length : null;
 
       const totalTemuanKepatuhan = rows.filter((r) => r.kepatuhan !== null && !r.kepCurDetail?.cabangBaru).reduce((s, r) => s + Math.round((1 - r.kepatuhan) * BASELINE), 0);
-
-      // ── DEBUG SEMENTARA: bandingin cabang & temuan yang dipake KARTU vs GRAFIK TREN buat bulan ini ──
-      if (typeof window !== "undefined") {
-        const kartuDebug = kepatuhanRows.map((r) => ({
-          branch_id: r.branch.id, branch_name: r.branch.name,
-          totalTemuan: r.kepCurDetail.totalTemuan, pct: Math.round(r.kepatuhan * 100),
-        }));
-        const trendDebug = (window.__kepDebugTrend || []).map((d) => ({
-          ...d, branch_name: branches.find((b) => b.id === d.branch_id)?.name || "?",
-        }));
-        console.log("=== DEBUG KEPATUHAN: KARTU (Skor Bulan Ini) ===");
-        console.table(kartuDebug);
-        console.log(`KARTU -> ${kartuDebug.length} cabang, total temuan ${kartuDebug.reduce((s, r) => s + r.totalTemuan, 0)}, avg ${kepatuhanAvg !== null ? Math.round(kepatuhanAvg * 100) : "-"}%`);
-        console.log("=== DEBUG KEPATUHAN: GRAFIK TREN (titik bulan ini) ===");
-        console.table(trendDebug);
-        const trendAvg = kepatuhanTrend[kepatuhanTrend.length - 1];
-        console.log(`TREN -> ${trendDebug.length} cabang, total temuan ${trendDebug.reduce((s, r) => s + r.total, 0)}, avg ${trendAvg !== null ? Math.round(trendAvg * 100) : "-"}%`);
-        const kartuIds = new Set(kartuDebug.map((r) => r.branch_id));
-        const trendIds = new Set(trendDebug.map((r) => r.branch_id));
-        const onlyInKartu = kartuDebug.filter((r) => !trendIds.has(r.branch_id));
-        const onlyInTrend = trendDebug.filter((r) => !kartuIds.has(r.branch_id));
-        if (onlyInKartu.length || onlyInTrend.length) {
-          console.warn("BEDA CABANG antara kartu & tren:", { onlyInKartu, onlyInTrend });
-        }
-        kartuDebug.forEach((k) => {
-          const t = trendDebug.find((r) => r.branch_id === k.branch_id);
-          if (t && t.totalTemuan !== k.totalTemuan && t.total !== k.totalTemuan) {
-            console.warn(`BEDA TEMUAN di cabang ${k.branch_name}: kartu=${k.totalTemuan}, tren=${t.total}`);
-          }
-        });
-      }
 
       const rankedSOP = [...auditedRows].filter((r) => !r.sopCur?.data?.cabang_baru).sort((a, b) => b.sopScore - a.sopScore);
 

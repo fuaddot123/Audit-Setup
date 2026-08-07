@@ -46,6 +46,7 @@ export default function BiayaDinas({ profile }) {
   const [jenisPerjalanan, setJenisPerjalanan] = useState("Sementara");
   const [savedRow, setSavedRow] = useState(null); // record tersimpan penuh (buat No dok/Tgl dok)
   const [nikDraft, setNikDraft] = useState("");
+  const [editingNik, setEditingNik] = useState(false);
   const [savingNik, setSavingNik] = useState(false);
   const [showRealisasi, setShowRealisasi] = useState(false);
   const [realisasiItems, setRealisasiItems] = useState([]);
@@ -478,18 +479,24 @@ export default function BiayaDinas({ profile }) {
           </div>
         </div>
 
-        {!profile?.nik && (
-          <div style={{ background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", borderRadius: 12, padding: 16 }}>
-            <div style={{ fontSize: 12.5, marginBottom: 8 }}>NIK kamu belum diisi — perlu buat dokumen SPDLK. Isi sekali aja, otomatis kepake terus.</div>
+        {profile?.nik && !editingNik ? (
+          <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12.5, color: "var(--text-secondary)" }}>
+            <span>NIK: <b style={{ color: "var(--text-primary)" }}>{profile.nik}</b></span>
+            <button className="btn-ghost" style={{ padding: "3px 10px", fontSize: 11.5 }} onClick={() => { setNikDraft(profile.nik); setEditingNik(true); }}>Ubah NIK</button>
+          </div>
+        ) : (
+          <div style={{ background: profile?.nik ? "var(--surface)" : "var(--danger-bg)", border: profile?.nik ? "1px solid var(--border)" : "1px solid rgba(248,113,113,0.35)", borderRadius: 12, padding: 16 }}>
+            <div style={{ fontSize: 12.5, marginBottom: 8 }}>{profile?.nik ? "Ubah NIK kamu:" : "NIK kamu belum diisi — perlu buat dokumen SPDLK. Isi sekali aja, otomatis kepake terus."}</div>
             <div style={{ display: "flex", gap: 8 }}>
               <input className="input" placeholder="NIK" value={nikDraft} onChange={(e) => setNikDraft(e.target.value)} style={{ maxWidth: 220 }} />
               <button className="btn" disabled={savingNik || !nikDraft.trim()} onClick={async () => {
                 setSavingNik(true);
                 const { error: err } = await supabase.from("profiles").update({ nik: nikDraft.trim() }).eq("id", profile.id);
                 if (err) setError("Gagal simpan NIK: " + err.message);
-                else profile.nik = nikDraft.trim(); // biar langsung kepake tanpa reload
+                else { profile.nik = nikDraft.trim(); setEditingNik(false); } // biar langsung kepake tanpa reload
                 setSavingNik(false);
               }}>{savingNik ? "Menyimpan\u2026" : "Simpan NIK"}</button>
+              {profile?.nik && <button className="btn-ghost" onClick={() => setEditingNik(false)}>Batal</button>}
             </div>
           </div>
         )}
@@ -506,13 +513,25 @@ export default function BiayaDinas({ profile }) {
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
               <div style={{ fontWeight: 700, fontSize: 14.5 }}>Pelaporan Biaya (Realisasi)</div>
               {canManage && (
-                <button className="btn-ghost" onClick={() => { setShowRealisasi((v) => !v); if (!showRealisasi && !realisasiItems.length) setRealisasiItems([emptyItem()]); }}>
+                <button className="btn-ghost" onClick={() => {
+                  setShowRealisasi((v) => !v);
+                  if (!showRealisasi && !realisasiItems.length) {
+                    // Isi awal langsung dari anggaran (bukan baris kosong) — biar tinggal koreksi
+                    // nilainya, nggak perlu ngetik ulang Jenis Fasilitas/Detail dari nol.
+                    setRealisasiItems(items.map((it) => ({ ...it, id: Date.now() + Math.random().toString(36).slice(2) })));
+                  }
+                }}>
                   {showRealisasi ? "Sembunyikan" : "Isi Realisasi"}
                 </button>
               )}
             </div>
             {showRealisasi && (
               <div style={{ marginTop: 12 }}>
+                {canManage && (
+                  <button className="btn-ghost" style={{ marginBottom: 10, fontSize: 12 }} onClick={() => setRealisasiItems(items.map((it) => ({ ...it, id: Date.now() + Math.random().toString(36).slice(2) })))}>
+                    &#8635; Copy dari Anggaran
+                  </button>
+                )}
                 <ItemsEditor title={null} items={realisasiItems} canManage={canManage} onUpdate={updateRItem} onAdd={addRItemRow} onRemove={removeRItemRow} total={totalRealisasi} />
               </div>
             )}

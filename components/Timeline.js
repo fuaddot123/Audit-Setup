@@ -95,7 +95,7 @@ export default function Timeline({ profile, onSelect }) {
       setHolidays((prev) => ({ ...prev, ...map }));
     } catch (err) {
       // Kalau API-nya lagi down, kalender tetap jalan normal — cuma tanpa tanda tanggal merah otomatis.
-      console.error("DEBUG loadHolidays GAGAL:", err);
+      console.error("Gagal memuat data hari libur:", err);
     }
   }
 
