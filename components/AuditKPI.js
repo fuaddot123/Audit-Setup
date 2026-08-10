@@ -18,11 +18,12 @@ export default function AuditKPI({ profile }) {
   const [saved, setSaved] = useState(false);
 
   const canEdit = profile?.role === "super_admin" || (profile?.role === "auditor" && selectedAuditor?.id === profile?.id);
-  // Isolasi per-auditor, berlaku mulai Agustus 2026 ke depan — data sebelum itu (Jan-Jul 2026)
-  // tetep kebuka bareng buat semua auditor, nggak diisolasi retroaktif. Auditor biasa tetep bisa
-  // liat SEMUA nama di kartu pilih-auditor, tapi begitu masuk ke data periode >= cutoff milik
-  // auditor lain, datanya nggak muncul (bukan disembunyiin orangnya, tapi record-nya per periode).
+  // Isolasi per-auditor — role "auditor" cuma bisa liat kartunya sendiri di daftar pilih-auditor,
+  // nama auditor lain nggak ditampilin sama sekali (bukan cuma di-gate per periode kayak
+  // sebelumnya — balik ke versi "sembunyiin orangnya" sesuai permintaan user).
   const ISOLATION_START_PERIOD = "2026-08";
+  const canSeeAll = profile?.role !== "auditor";
+  const visibleAuditors = canSeeAll ? auditors : auditors.filter((a) => a.id === profile?.id);
   const [allRecords, setAllRecords] = useState([]);
   const [exportPeriod, setExportPeriod] = useState(nowPeriode());
   const [exportBusy, setExportBusy] = useState(false);
@@ -394,7 +395,7 @@ export default function AuditKPI({ profile }) {
             <div style={{ color: "var(--text-secondary)" }}>Memuat\u2026</div>
           ) : (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
-              {auditors.map((a) => {
+              {visibleAuditors.map((a) => {
                 const rec = allRecords.find((r) => r.auditor_id === a.id && r.period === exportPeriod);
                 const calc = rec ? calcKPI({
                   coverage: rec.realisasi_coverage, kepatuhan_sop: rec.realisasi_kepatuhan_sop,
