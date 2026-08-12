@@ -34,7 +34,7 @@ export default function StokKesehatan({ profile }) {
   // Pengecualian khusus: akun Fuad (fuadmulya123@gmail.com) tetep boleh pake tombol Sync
   // walau rolenya "auditor" biasa, soalnya sheet yang lagi dipake sekarang emang punya dia.
   // Auditor lain (Yuni, dst) tetep nggak boleh, cuma lewat super_admin.
-  const FUAD_USER_ID = "a6457b2f-0b3e-45e1-b381-b32139053387";
+  const FUAD_USER_ID = "61f8e921-ac98-4d74-8dbd-de2d69cff096";
   const canSync = isSuperAdmin || profile?.id === FUAD_USER_ID;
   const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
   // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua kayak biasa).
