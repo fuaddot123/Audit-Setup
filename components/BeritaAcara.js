@@ -177,6 +177,8 @@ export default function BeritaAcara({ profile }) {
         stockKat2: Array.isArray(prevLatest.stock_opname_kat2) ? prevLatest.stock_opname_kat2 : [],
         inventarisCategories: pairedInvPrev?.data?.categories || null,
         periodLabel: periodeLabel(prevPeriod),
+        storeLeaderName: prevLatest.store_leader_name || "",
+        storeManagerName: prevLatest.store_manager_name || "",
       });
     } else {
       setPrevMonthData(null);
@@ -198,6 +200,8 @@ export default function BeritaAcara({ profile }) {
     if (!prevMonthData) return;
     setStockKat1(prevMonthData.stockKat1.map((r) => ({ nama: r.nama, status: "Lengkap", keterangan: "" })));
     setStockKat2(prevMonthData.stockKat2.map((r) => ({ nama: r.nama, status: "Lengkap", keterangan: "" })));
+    if (prevMonthData.storeLeaderName) setStoreLeaderName(prevMonthData.storeLeaderName);
+    if (prevMonthData.storeManagerName) setStoreManagerName(prevMonthData.storeManagerName);
     if (prevMonthData.inventarisCategories) {
       setInventaris(normalizeInventaris(prevMonthData.inventarisCategories));
       // reset status & keterangan & foto — auditor tinggal ubah yang beda aja
