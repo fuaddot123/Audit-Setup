@@ -415,15 +415,25 @@ export default function LaporanBulanan({ profile }) {
 
         const svcRatio = svcCur && !svcCur.data?.tidak_visit ? Number(svcCur.data?.ratio) || 0 : null;
         const svcRatioPrev = svcPrev && !svcPrev.data?.tidak_visit ? Number(svcPrev.data?.ratio) || 0 : null;
-        // Detail lengkap Service Ratio (buat tabel per-cabang di slide) — bulan ini & bulan lalu
+        // Detail lengkap Service Ratio (buat tabel per-cabang di slide) — bulan ini & bulan lalu.
+        // Data BARU (udah dipisah Laptop/Aksesoris): pakai laptop/aksesoris/total_unit_laptop/
+        // total_unit_aksesoris/ratio_laptop/ratio_aksesoris. Data LAMA (sebelum dipisah): cuma
+        // punya stok_service/total_unit_cabang/ratio gabungan — dibiarin apa adanya, ditandain
+        // `isLegacy` biar tabel bisa nunjukkin beda formatnya, bukan direkonstruksi jadi 2 angka.
         const svcDetail = (rec) => {
           if (!rec) return { hasData: false, tidakVisit: false };
           if (rec.data?.tidak_visit) return { hasData: true, tidakVisit: true };
+          const isLegacy = rec.data?.ratio_laptop == null && rec.data?.total_unit_cabang != null;
           return {
-            hasData: true, tidakVisit: false, cabangBaru: !!rec.data?.cabang_baru,
+            hasData: true, tidakVisit: false, cabangBaru: !!rec.data?.cabang_baru, isLegacy,
             laptop: Number(rec.data?.laptop) || 0,
             aksesoris: Number(rec.data?.aksesoris) || 0,
             user: Number(rec.data?.user) || 0,
+            totalUnitLaptop: Number(rec.data?.total_unit_laptop) || 0,
+            totalUnitAksesoris: Number(rec.data?.total_unit_aksesoris) || 0,
+            ratioLaptop: Number(rec.data?.ratio_laptop) || 0,
+            ratioAksesoris: Number(rec.data?.ratio_aksesoris) || 0,
+            // Field lama, cuma keisi kalau ini record legacy — buat tampilin data lama apa adanya.
             stokService: Number(rec.data?.stok_service) || 0,
             totalUnit: Number(rec.data?.total_unit_cabang) || 0,
             ratio: Number(rec.data?.ratio) || 0,
@@ -1046,11 +1056,9 @@ export default function LaporanBulanan({ profile }) {
         const svcTh = [
           { text: "No", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 11, align: "center" } },
           { text: "Cabang", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 11 } },
-          { text: "Laptop", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 11, align: "center" } },
-          { text: "Stok Service", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 11, align: "center" } },
-          { text: "Total Unit/Cabang", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 11, align: "center" } },
-          { text: "Indikator", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 11, align: "center" } },
-          { text: "% Ratio", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 11, align: "center" } },
+          { text: "Ratio Laptop", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 11, align: "center" } },
+          { text: "Ratio Aksesoris", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 11, align: "center" } },
+          { text: "Status", options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 11, align: "center" } },
         ];
         function svcTableRows(detailKey) {
           const body = svcRowsAll.map((r, i) => {
@@ -1059,31 +1067,43 @@ export default function LaporanBulanan({ profile }) {
               return [
                 { text: String(i + 1), options: { fontSize: 10.5, align: "center" } },
                 { text: r.branch.name, options: { fontSize: 10.5, bold: true } },
-                { text: "TIDAK VISIT", options: { colspan: 5, fontSize: 10.5, bold: true, align: "center", fill: { color: "DDE6F7" }, color: PURPLE } },
+                { text: "TIDAK VISIT", options: { colspan: 3, fontSize: 10.5, bold: true, align: "center", fill: { color: "DDE6F7" }, color: PURPLE } },
               ];
             }
-            const info = serviceStatusInfo(d.ratio);
-            // Makin kecil ratio makin bagus, jadi bar-nya dibalik: penuh kalau ratio-nya rendah.
-            const barFilled = info.lbl === "Terkendali" ? 1 : info.lbl === "Monitoring" ? 0.6 : 0.2;
+            if (d.isLegacy) {
+              // Data lama (sebelum dipisah Laptop/Aksesoris) — tampilin apa adanya, jangan
+              // direkonstruksi jadi 2 angka yang sebenernya nggak ada.
+              const infoLegacy = serviceStatusInfo(d.ratio);
+              return [
+                { text: String(i + 1), options: { fontSize: 10, align: "center", bold: true, fill: { color: PURPLE }, color: WHITE } },
+                { text: r.branch.name, options: { fontSize: 10.5, bold: true } },
+                { text: `Data lama (gabungan): ${(d.ratio * 100).toFixed(2)}%`, options: { colspan: 2, fontSize: 9.5, italic: true, align: "center", color: "888888" } },
+                { text: infoLegacy.lbl, options: { fontSize: 10, align: "center", bold: true, color: WHITE, fill: { color: infoLegacy.color.replace("#", "") } } },
+              ];
+            }
+            const infoLaptop = serviceStatusInfo(d.ratioLaptop);
+            const infoAksesoris = serviceStatusInfo(d.ratioAksesoris);
+            // Status gabungan = yang TERBURUK dari dua-duanya (bukan rata-rata) — biar nggak ada
+            // kategori yang "ketutupan" sama kategori lain yang lebih bagus.
+            const worstInfo = infoLaptop.lbl === "Perlu Perhatian" || infoAksesoris.lbl === "Perlu Perhatian" ? infoAksesoris.lbl === "Perlu Perhatian" ? infoAksesoris : infoLaptop
+              : infoLaptop.lbl === "Monitoring" || infoAksesoris.lbl === "Monitoring" ? (infoLaptop.lbl === "Monitoring" ? infoLaptop : infoAksesoris)
+              : infoLaptop;
             return [
               { text: String(i + 1), options: { fontSize: 10, align: "center", bold: true, fill: { color: PURPLE }, color: WHITE } },
               { text: r.branch.name, options: { fontSize: 10.5, bold: true } },
-              { text: String(d.laptop), options: { fontSize: 10.5, align: "center" } },
-              { text: String(d.stokService), options: { fontSize: 10.5, align: "center" } },
-              { text: String(d.totalUnit), options: { fontSize: 10.5, align: "center", bold: true } },
-              { text: info.lbl, options: { fontSize: 10, align: "center", bold: true, color: WHITE, fill: { color: info.color.replace("#", "") } } },
-              { text: `${textBar(barFilled)}  ${(d.ratio * 100).toFixed(2)}%`, options: { fontSize: 9, align: "center", bold: true, color: d.ratio >= 0.0033 ? RED : "1a9e6e" } },
+              { text: `${(d.ratioLaptop * 100).toFixed(2)}%`, options: { fontSize: 10.5, align: "center", bold: true, color: infoLaptop.color.replace("#", "") } },
+              { text: `${(d.ratioAksesoris * 100).toFixed(2)}%`, options: { fontSize: 10.5, align: "center", bold: true, color: infoAksesoris.color.replace("#", "") } },
+              { text: worstInfo.lbl, options: { fontSize: 10, align: "center", bold: true, color: WHITE, fill: { color: worstInfo.color.replace("#", "") } } },
             ];
           });
-          const valid = svcRowsAll.map((r) => r[detailKey]).filter((d) => d && d.hasData && !d.tidakVisit);
-          const avgRatio = valid.length ? valid.reduce((s2, d) => s2 + d.ratio, 0) / valid.length : 0;
-          const totalStok = valid.reduce((s2, d) => s2 + d.stokService, 0);
+          const valid = svcRowsAll.map((r) => r[detailKey]).filter((d) => d && d.hasData && !d.tidakVisit && !d.isLegacy);
+          const avgLaptop = valid.length ? valid.reduce((s2, d) => s2 + d.ratioLaptop, 0) / valid.length : 0;
+          const avgAksesoris = valid.length ? valid.reduce((s2, d) => s2 + d.ratioAksesoris, 0) / valid.length : 0;
           body.push([
-            { text: "TOTAL / RATA-RATA", options: { colspan: 3, fontSize: 10.5, bold: true, fill: { color: PURPLE }, color: WHITE } },
-            { text: String(totalStok), options: { fontSize: 10.5, bold: true, align: "center", fill: { color: PURPLE }, color: WHITE } },
+            { text: "RATA-RATA", options: { colspan: 2, fontSize: 10.5, bold: true, fill: { color: PURPLE }, color: WHITE } },
+            { text: `${(avgLaptop * 100).toFixed(2)}%`, options: { fontSize: 10.5, bold: true, align: "center", fill: { color: PURPLE }, color: WHITE } },
+            { text: `${(avgAksesoris * 100).toFixed(2)}%`, options: { fontSize: 10.5, bold: true, align: "center", fill: { color: PURPLE }, color: WHITE } },
             { text: "", options: { fill: { color: PURPLE } } },
-            { text: "", options: { fill: { color: PURPLE } } },
-            { text: `${(avgRatio * 100).toFixed(2)}%`, options: { fontSize: 10.5, bold: true, align: "center", fill: { color: PURPLE }, color: WHITE } },
           ]);
           return body;
         }
@@ -1094,7 +1114,8 @@ export default function LaporanBulanan({ profile }) {
           s.addText("SERVICE RATIO CABANG", { x: 0.35, y: 0.08, w: 8.5, h: 0.42, fontSize: 20, bold: true, color: WHITE, margin: 0 });
           s.addText(`${labelBulan} \u2014 ${periodLbl}`, { x: 0.35, y: 0.5, w: 8.5, h: 0.3, fontSize: 13, bold: true, color: GOLD, margin: 0 });
           addLogo(s, 11.3, 0.18);
-          s.addTable([svcTh].concat(svcTableRows(detailKey)), { x: 0.35, y: 1.15, w: 12.6, colW: [0.6, 3.2, 1.7, 1.9, 2.0, 1.7, 1.5], border: { type: "solid", color: "E5E5E5", pt: 0.5 }, autoPage: false, margin: [2, 4, 2, 4] });
+          s.addTable([svcTh].concat(svcTableRows(detailKey)), { x: 0.35, y: 1.15, w: 12.6, colW: [0.6, 4.0, 2.6, 2.6, 2.8], border: { type: "solid", color: "E5E5E5", pt: 0.5 }, autoPage: false, margin: [2, 4, 2, 4] });
+          s.addText("Status = yang terburuk antara Laptop & Aksesoris (bukan rata-rata) \u2014 audit sebelum periode split ditandai \"Data lama (gabungan)\".", { x: 0.35, y: 6.9, w: 12.6, h: 0.3, fontSize: 8.5, italic: true, color: "999999", margin: 0 });
         }
         svcTableSlide("BULAN LALU", periodeLabel(prevPeriod), "svcPrevDetail");
         svcTableSlide("BULAN INI", periodeLabel(period), "svcCurDetail");

@@ -51,6 +51,7 @@ export default function StokServiceRatio({ profile }) {
 
   const [form, setForm] = useState(EMPTY_FORM);
   const [isLegacyEntry, setIsLegacyEntry] = useState(false); // true kalau buka audit lama (pre-split, cuma punya total_unit_cabang gabungan)
+  const [entryOwnerId, setEntryOwnerId] = useState(null); // submitted_by dari record yang lagi dibuka, buat cek "boleh hapus sendiri"
   const [catatan, setCatatan] = useState("");
   const [cabangBaru, setCabangBaru] = useState(false);
   const [tidakVisit, setTidakVisit] = useState(false);
@@ -103,6 +104,7 @@ export default function StokServiceRatio({ profile }) {
     setTidakVisit(!!entry.data?.tidak_visit);
     setAuditDate(entry.data?.audit_date || todayInputValue());
     setSelectedEntryId(entry.id);
+    setEntryOwnerId(entry.submitted_by || null);
   }
 
   function startNewEntry(period) {
@@ -113,6 +115,7 @@ export default function StokServiceRatio({ profile }) {
     setTidakVisit(false);
     setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
     setSelectedEntryId(null);
+    setEntryOwnerId(null);
     setSaved(false);
   }
 
@@ -168,7 +171,9 @@ export default function StokServiceRatio({ profile }) {
   const selectedEntry = entriesThisPeriod.find((e) => e.id === selectedEntryId) || null;
 
   async function deleteRecord() {
-    if (!selectedEntry || profile?.role !== "super_admin") return;
+    if (!selectedEntry) return;
+    const isOwner = profile?.role === "auditor" && selectedEntry.submitted_by === profile?.id;
+    if (profile?.role !== "super_admin" && !isOwner) return;
     if (!window.confirm(`Hapus audit ${selectedBranch.name} tanggal ${shortDate(selectedEntry.data?.audit_date)}? Aksi ini tidak bisa dibatalkan.`)) return;
     setSaving(true);
     setError(null);
@@ -479,7 +484,7 @@ export default function StokServiceRatio({ profile }) {
             <button className="btn" disabled={saving || !canEdit} onClick={saveRecord} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
               {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan" : "Hanya Lihat"}
             </button>
-            {profile?.role === "super_admin" && selectedEntryId && (
+            {(profile?.role === "super_admin" || (profile?.role === "auditor" && entryOwnerId === profile?.id)) && selectedEntryId && (
               <button className="btn-ghost" disabled={saving} onClick={deleteRecord} style={{ color: "var(--danger-text)", borderColor: "var(--danger-text)" }}>
                 Hapus Data
               </button>

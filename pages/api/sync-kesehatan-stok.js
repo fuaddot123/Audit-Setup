@@ -146,26 +146,21 @@ export default async function handler(req, res) {
       const skorTotal = skorTemuan + sRugi * 5;
       const kesehatanPct = Math.max(0, 1 - skorTotal / 100);
 
-      // Nggak ada penanda pasti di sheet buat bedain "belum sempet diisi" vs "beneran diperiksa,
-      // 0 temuan" — jadi dipatoki: kalau ke-3 angka nol semua, dianggep belum diisi (Tidak Visit),
-      // BUKAN dipaksa jadi skor 100% sempurna. Biar konsisten sama semua modul lain: cabang Tidak
-      // Visit dikecualikan dari rata-rata company-wide, bukan nyumbang skor palsu.
-      const kemungkinanBelumDiisi = temuanCount === 0 && bonusCount === 0 && untungRugi === 0;
-
-      const dataPayload = kemungkinanBelumDiisi
-        ? { tidak_visit: true, sumber: "google_sheet", synced_at: new Date().toISOString() }
-        : {
-            tidak_visit: false,
-            temuan_count: temuanCount,
-            bonus_count: bonusCount,
-            untung_rugi: untungRugi,
-            skor_temuan: skorTemuan,
-            skor_rugi: sRugi,
-            skor_total: skorTotal,
-            kesehatan_pct: kesehatanPct,
-            sumber: "google_sheet",
-            synced_at: new Date().toISOString(),
-          };
+      // "Tidak Visit" sekarang MURNI manual (dicentang sendiri lewat checklist di app) — sync
+      // nggak nebak-nebak lagi dari angka kosong. Sheet kosong = disimpen apa adanya (0 semua),
+      // biar auditor sendiri yang nentuin itu "beneran nggak dikunjungi" atau "diperiksa & bersih".
+      const dataPayload = {
+        tidak_visit: false,
+        temuan_count: temuanCount,
+        bonus_count: bonusCount,
+        untung_rugi: untungRugi,
+        skor_temuan: skorTemuan,
+        skor_rugi: sRugi,
+        skor_total: skorTotal,
+        kesehatan_pct: kesehatanPct,
+        sumber: "google_sheet",
+        synced_at: new Date().toISOString(),
+      };
 
       // Nggak pakai upsert(onConflict) lagi — constraint unik (module,branch_id,period) buat
       // stok_kesehatan udah sengaja dilepas (fitur multi-audit per bulan), jadi Postgres nolak
@@ -196,9 +191,7 @@ export default async function handler(req, res) {
       if (upsertErr) { logs.push(`Gagal simpan "${cabangName}": ${upsertErr.message}`); totalSkipped++; }
       else {
         totalSynced++;
-        logs.push(kemungkinanBelumDiisi
-          ? `"${cabangName}": tab kosong, ditandai Tidak Visit (bukan skor 100%).`
-          : `"${cabangName}": ${temuanCount} temuan barang, ${bonusCount} bonus hilang, untung/rugi Rp${untungRugi.toLocaleString("id-ID")}.`);
+        logs.push(`"${cabangName}": ${temuanCount} temuan barang, ${bonusCount} bonus hilang, untung/rugi Rp${untungRugi.toLocaleString("id-ID")}.`);
       }
     }
 

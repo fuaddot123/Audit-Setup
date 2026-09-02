@@ -250,7 +250,9 @@ export default function AuditKeuangan({ profile }) {
   async function deleteEntry() {
     const entriesHere = (entriesByBranch[selectedBranch.id] || {})[selectedPeriod] || [];
     const existing = entriesHere.find((e) => e.id === selectedEntryId) || latestOf(entriesHere);
-    if (!existing || profile?.role !== "super_admin") return;
+    if (!existing) return;
+    const isOwner = profile?.role === "auditor" && existing.submitted_by === profile?.id;
+    if (profile?.role !== "super_admin" && !isOwner) return;
     if (!window.confirm(`Hapus audit ${selectedBranch.name} tanggal ${shortDate(existing.audit_date)}? Aksi ini tidak bisa dibatalkan.`)) return;
     setSaving(true);
     setError(null);
@@ -544,7 +546,7 @@ export default function AuditKeuangan({ profile }) {
                   {saving ? "Menyimpan\u2026" : savedFlash ? "\u2713 Tersimpan" : "Simpan"}
                 </button>
               )}
-              {profile?.role === "super_admin" && selectedEntryId && (
+              {(profile?.role === "super_admin" || (profile?.role === "auditor" && ((entriesByBranch[selectedBranch?.id] || {})[selectedPeriod] || []).find((e) => e.id === selectedEntryId)?.submitted_by === profile?.id)) && selectedEntryId && (
                 <button className="btn-ghost" disabled={saving} onClick={deleteEntry} style={{ alignSelf: "flex-end", color: "var(--danger-text)" }}>
                   Hapus Data
                 </button>

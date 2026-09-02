@@ -161,7 +161,9 @@ export default function StokKesehatan({ profile }) {
   const selectedEntry = entriesThisPeriod.find((e) => e.id === selectedEntryId) || null;
 
   async function deleteRecord() {
-    if (!selectedEntry || profile?.role !== "super_admin") return;
+    if (!selectedEntry) return;
+    const isOwner = profile?.role === "auditor" && selectedEntry.submitted_by === profile?.id;
+    if (profile?.role !== "super_admin" && !isOwner) return;
     if (!window.confirm(`Hapus audit ${selectedBranch.name} tanggal ${shortDate(selectedEntry.data?.audit_date)}? Aksi ini tidak bisa dibatalkan.`)) return;
     setSaving(true);
     setError(null);
@@ -357,7 +359,7 @@ export default function StokKesehatan({ profile }) {
             <button className="btn" disabled={saving || !canEdit} onClick={saveRecord} style={{ alignSelf: "flex-end" }} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
               {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan" : "Hanya Lihat"}
             </button>
-            {profile?.role === "super_admin" && selectedEntryId && (
+            {(profile?.role === "super_admin" || (profile?.role === "auditor" && selectedEntry?.submitted_by === profile?.id)) && selectedEntryId && (
               <button className="btn-ghost" disabled={saving} onClick={deleteRecord} style={{ alignSelf: "flex-end", color: "var(--danger-text)" }}>
                 Hapus Data
               </button>

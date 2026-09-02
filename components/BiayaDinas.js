@@ -146,7 +146,9 @@ export default function BiayaDinas({ profile }) {
   }
 
   async function deleteRecord() {
-    if (!selected || selected === "new" || profile?.role !== "super_admin") return;
+    if (!selected || selected === "new") return;
+    const isOwner = profile?.role === "auditor" && savedRow?.submitted_by === profile?.id;
+    if (profile?.role !== "super_admin" && !isOwner) return;
     if (!window.confirm("Yakin hapus pengajuan ini? Aksi ini tidak bisa dibatalkan.")) return;
     setSaving(true);
     setError(null);
@@ -435,7 +437,7 @@ export default function BiayaDinas({ profile }) {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {selected !== "new" && <button className="btn-ghost" onClick={printPDF}>Cetak PDF</button>}
-          {selected !== "new" && profile?.role === "super_admin" && (
+          {selected !== "new" && (profile?.role === "super_admin" || (profile?.role === "auditor" && savedRow?.submitted_by === profile?.id)) && (
             <button className="btn-ghost" disabled={saving} style={{ color: "var(--danger-text)", borderColor: "var(--danger-border)" }} onClick={deleteRecord}>Hapus</button>
           )}
           <button className="btn" disabled={saving || !canManage} onClick={saveRecord}>{saving ? "Menyimpan\u2026" : "Simpan"}</button>
