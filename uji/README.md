@@ -12,6 +12,20 @@ node uji/uji-cetak-baru.mjs       # cetakan Berita Acara format baru, dirender s
 node uji/uji-berkas-asli.mjs      # pengurai diadu ke berkas laporan yang asli
 ```
 
+Dua uji berikut memasang skema SQL di **Postgres sungguhan** (PGlite, Postgres
+berjalan di dalam proses Node) dan butuh satu paket yang sengaja TIDAK ada di
+`package.json` — menambah dependensi hanya demi uji berarti setiap build Vercel
+ikut mengunduhnya, padahal aplikasinya tidak memerlukannya:
+
+```bash
+npm install --no-save @electric-sql/pglite
+node uji/uji-skema.mjs        # skema terpasang, RLS, trigger, search_path
+node uji/uji-pembekuan.mjs    # master berubah TIDAK mengubah audit yang lalu
+```
+
+Tanpa paket itu keduanya berhenti dan menyatakan dirinya **DILEWATI**, bukan
+lolos.
+
 Semuanya menyalin berkas sumbernya ke `.mjs` sementara lalu mengimpornya, jadi
 yang diuji benar-benar isi berkas di repo ini — bukan salinan yang bisa basi.
 Kalau berkas sasarannya tidak ketemu, ujinya **berhenti dengan galat** dan

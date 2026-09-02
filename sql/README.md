@@ -50,11 +50,51 @@ melewatinya. Karena itu ia dipasang di database, bukan di kode.
 
 ## Membuktikannya
 
+### Yang benar-benar menjaga: dua uji Node
+
+```bash
+npm install --no-save @electric-sql/pglite
+node uji/uji-skema.mjs        # 27 pemeriksaan
+node uji/uji-pembekuan.mjs    # 13 pemeriksaan
+```
+
+Keduanya memasang skema ini di Postgres sungguhan (PGlite, Postgres 18 di dalam
+proses Node) lalu memeriksa hasilnya. `uji-pembekuan.mjs` menjalankan skenario
+yang dulu benar-benar merusak: simpan audit Agustus, turunkan skor di master,
+lalu baca ulang baris Agustus — angkanya wajib tidak bergeser. Ia juga memuat
+kendali negatif: triggernya dilepas, dan angka Agustus memang ikut berubah
+80 -> 50. Tanpa kendali itu, hijaunya tidak berarti apa-apa.
+
+### Skrip `.sql` di bawah ini BUKAN uji otomatis
+
+Ini perlu dikatakan terus terang. Skrip `uji-*.sql` adalah **peragaan psql untuk
+dibaca manusia**, bukan pagar:
+
+- Semuanya memakai `\set ON_ERROR_STOP off` dan sengaja memancing penolakan.
+- Mereka **satu sesi berurutan yang saling bergantung** — `uji-rls.sql` yang
+  memberi `grant` ke `authenticated`, dan skrip lain memakainya. Dijalankan
+  sendiri-sendiri, sebagian gagal karena itu.
+- **Lima di antaranya tidak menyatakan harapan apa pun** — `uji-ambang`,
+  `uji-beku`, `uji-retroaktif`, `uji-sept`, `uji-skor`. Mereka mencetak angka
+  untuk dibaca, jadi mereka tidak pernah bisa merah.
+
+Yang paling perlu diketahui: dua di antaranya (`uji-beku`, `uji-retroaktif`)
+justru tentang jaminan paling penting di skema ini, dan keduanya tidak menjaga
+apa pun. Itulah sebabnya `uji/uji-pembekuan.mjs` ditulis.
+
+Skrip-skrip ini tetap disimpan karena berguna dibaca sambil melihat keluarannya
+di psql — bukan karena ia membuktikan sesuatu secara otomatis.
+
+## Menjalankan skrip peragaan itu
+
 Skrip `uji-*.sql` dijalankan di Postgres **kosong**, bukan di produksi.
 `tiruan-supabase.sql` menyediakan `auth.uid()` dan kawan-kawannya supaya
 kebijakan RLS bisa diadu tanpa Supabase.
 
-| Skrip | Yang dibuktikan |
+Kolom di bawah menyebut apa yang skripnya *peragakan*, bukan apa yang ia jaga —
+lihat catatan di atas.
+
+| Skrip | Yang diperagakan |
 |---|---|
 | `uji-rls.sql` | Auditor tidak bisa membaca/menulis milik auditor lain |
 | `uji-akses.sql` | `akses_auditor` memberi hak BACA saja |
