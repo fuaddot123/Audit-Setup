@@ -325,6 +325,10 @@ export default function AuditKPI({ profile }) {
   async function deleteRecord() {
     const existing = history.find((r) => r.period === period);
     if (!existing) return;
+    // Mode "lihat sebagai" hanya hak baca. Tanpa baris ini, tombol Hapus
+    // muncul untuk catatan orang yang sedang dilihat — perannya memang
+    // "auditor" dan profile.id memang id orang itu.
+    if (profile?.liatSebagai) return;
     const isOwner = profile?.role === "auditor" && existing.auditor_id === profile?.id;
     if (profile?.role !== "super_admin" && !isOwner) return;
     if (!window.confirm(`Hapus data KPI ${selectedAuditor.full_name} periode ${periodeLabel(period)}? Aksi ini tidak bisa dibatalkan.`)) return;
@@ -514,7 +518,7 @@ export default function AuditKPI({ profile }) {
             {canEdit && (
               <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 32 }}>
                 <button className="btn" disabled={saving} onClick={saveRecord}>{saving ? "Menyimpan\u2026" : "Simpan"}</button>
-                {(profile?.role === "super_admin" || (profile?.role === "auditor" && history.find((r) => r.period === period)?.auditor_id === profile?.id)) && history.some((r) => r.period === period) && (
+                {!profile?.liatSebagai && (profile?.role === "super_admin" || (profile?.role === "auditor" && history.find((r) => r.period === period)?.auditor_id === profile?.id)) && history.some((r) => r.period === period) && (
                   <button className="btn-ghost" disabled={saving} onClick={deleteRecord} style={{ color: "var(--danger-text)" }}>Hapus Data</button>
                 )}
                 {saved && <span style={{ color: "var(--success-text)", fontSize: 13 }}>Tersimpan \u2713</span>}

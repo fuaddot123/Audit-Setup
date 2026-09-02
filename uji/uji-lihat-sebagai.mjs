@@ -116,6 +116,41 @@ for (const [berkas, nama] of [...MODUL, ["components/AuditKPI.js", "canEdit"]]) 
     /^\s*\(.*\)\s*&&\s*!profile\?\.liatSebagai\s*$/.test(teks), teks);
 }
 
+console.log("\n=== 5. Tombol Hapus ikut terkunci saat lihat-sebagai ===");
+// Celah ini lahir dari GABUNGAN dua perubahan yang masing-masing benar:
+// "auditor boleh menghapus catatannya sendiri" + "mode lihat sebagai".
+// Saat mode itu aktif, profile.id memang id orang yang dilihat dan perannya
+// memang "auditor", jadi tombol Hapus muncul untuk catatan orang itu.
+//
+// Dua lapis diperiksa: tombolnya disembunyikan DAN deleteRecord() menolak.
+// Menyembunyikan tombol saja tidak cukup — fungsinya masih bisa terpanggil.
+const MODUL_HAPUS = [
+  "components/BeritaAcara.js",
+  "components/AuditKPI.js",
+  "components/AuditKeuangan.js",
+  "components/BiayaDinas.js",
+  "components/sop/SopAuditCabang.js",
+  "components/stok/StokKesehatan.js",
+  "components/stok/StokServiceRatio.js",
+];
+for (const berkas of MODUL_HAPUS) {
+  const isi = fs.readFileSync(cariBerkas(berkas), "utf8");
+  const label = path.basename(berkas);
+
+  // Lapis 1: fungsinya menolak.
+  const barisIsOwner = isi.split("\n").findIndex((b) => b.trim().startsWith("const isOwner ="));
+  const sebelum = isi.split("\n").slice(Math.max(0, barisIsOwner - 6), barisIsOwner).join(" ");
+  cek(label + ": deleteRecord() menolak saat lihat-sebagai",
+    barisIsOwner > 0 && /if \(profile\?\.liatSebagai\) return;/.test(sebelum), sebelum.trim().slice(-70));
+
+  // Lapis 2: tombolnya tidak dirender.
+  const barisTombol = isi.split("\n").find(
+    (b) => b.includes('(profile?.role === "super_admin" || (profile?.role === "auditor"') && !b.includes("const "));
+  cek(label + ": tombol Hapus disembunyikan",
+    !!barisTombol && barisTombol.includes("!profile?.liatSebagai"),
+    (barisTombol || "(baris tombol tidak ketemu)").trim().slice(0, 70));
+}
+
 console.log("\n====================================================");
 console.log("  LOLOS: " + lolos + "   GAGAL: " + gagal);
 console.log("====================================================");
