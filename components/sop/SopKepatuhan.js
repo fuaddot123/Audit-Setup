@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { CATS, CONDITION_ITEMS, nowPeriode, periodeLabel, addMonthsToPeriod } from "../../lib/sopConfig";
-import { INVENTARIS_CATEGORIES } from "../AuditInventaris";
+import { INVENTARIS_CATEGORIES, statusKategori } from "../../lib/format-ba";
 import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
 import { sortBranches } from "../../lib/branchOrder";
 
@@ -40,7 +40,12 @@ function countStokTemuan(stokRecord) {
 const OVERLAP_INVENTARIS_CATS = ["Penerangan", "Furniture & Fixture", "Listrik & Utilitas"];
 function countRusakNonOverlap(inventarisData) {
   if (!inventarisData) return 0;
-  return INVENTARIS_CATEGORIES.filter((c) => !OVERLAP_INVENTARIS_CATS.includes(c) && inventarisData[c]?.status === "Rusak").length;
+  // statusKategori() WAJIB dipakai, bukan inventarisData[c]?.status langsung.
+  // Mulai September 2026 datanya berkunci "Kategori|Item", sehingga
+  // inventarisData["Peralatan Kasir"] bernilai undefined dan angka temuan
+  // jatuh ke NOL tanpa satu pun galat — kepatuhan seolah sempurna.
+  return INVENTARIS_CATEGORIES.filter((c) => !OVERLAP_INVENTARIS_CATS.includes(c)
+    && statusKategori(inventarisData, c) === "Rusak").length;
 }
 
 function keuanganSisa(entry) {

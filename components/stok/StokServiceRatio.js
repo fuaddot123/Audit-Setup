@@ -36,7 +36,9 @@ function statusDesc(lbl) {
 }
 
 export default function StokServiceRatio({ profile }) {
-  const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
+  // Mode "lihat sebagai": seluruh isian dikunci. Pagar sungguhannya ada di
+  // RLS — submitted_by wajib sama dengan pengguna yang benar-benar login.
+  const canEdit = (profile?.role === "auditor" || profile?.role === "super_admin") && !profile?.liatSebagai;
   // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua kayak biasa).
   const ISOLATION_START_PERIOD = "2026-08";
   const [branches, setBranches] = useState([]);
@@ -172,6 +174,10 @@ export default function StokServiceRatio({ profile }) {
 
   async function deleteRecord() {
     if (!selectedEntry) return;
+    // Mode "lihat sebagai" hanya hak baca. Tanpa baris ini, tombol Hapus
+    // muncul untuk catatan orang yang sedang dilihat — perannya memang
+    // "auditor" dan profile.id memang id orang itu.
+    if (profile?.liatSebagai) return;
     const isOwner = profile?.role === "auditor" && selectedEntry.submitted_by === profile?.id;
     if (profile?.role !== "super_admin" && !isOwner) return;
     if (!window.confirm(`Hapus audit ${selectedBranch.name} tanggal ${shortDate(selectedEntry.data?.audit_date)}? Aksi ini tidak bisa dibatalkan.`)) return;
@@ -484,7 +490,7 @@ export default function StokServiceRatio({ profile }) {
             <button className="btn" disabled={saving || !canEdit} onClick={saveRecord} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
               {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan" : "Hanya Lihat"}
             </button>
-            {(profile?.role === "super_admin" || (profile?.role === "auditor" && entryOwnerId === profile?.id)) && selectedEntryId && (
+            {!profile?.liatSebagai && (profile?.role === "super_admin" || (profile?.role === "auditor" && entryOwnerId === profile?.id)) && selectedEntryId && (
               <button className="btn-ghost" disabled={saving} onClick={deleteRecord} style={{ color: "var(--danger-text)", borderColor: "var(--danger-text)" }}>
                 Hapus Data
               </button>

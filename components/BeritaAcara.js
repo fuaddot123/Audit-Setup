@@ -4,7 +4,16 @@ import { sortBranches } from "../lib/branchOrder";
 import {
   INVENTARIS_CATEGORIES, freshInventaris, normalizeInventaris, countRusak,
   uploadInventarisMedia, InventarisChecklist, deleteMediaFromStorage, deleteMediaListFromStorage,
+  freshInventarisUntuk, normalizeInventarisUntuk, kunciTerpakai,
+  itemBelumTersedia, skorInventaris,
 } from "./AuditInventaris";
+import { pakaiFormatBaru, namaPeriode, INVENTARIS_ITEMS, kunciItem } from "../lib/format-ba";
+import { cetakBaruHtml } from "./BeritaAcaraCetakBaru";
+import { barisDisplayHtml } from "../lib/baris-display";
+import {
+  DisplaySection, muatDisplay, simpanDisplay, periksaDisplay,
+  barisDisplayBaru, uploadDisplayMedia,
+} from "./DisplayMonitoring";
 
 function nowPeriode() {
   const n = new Date();
@@ -43,7 +52,9 @@ function kategoriInfo(pct) {
 }
 
 export default function BeritaAcara({ profile }) {
-  const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
+  // Mode "lihat sebagai": seluruh isian dikunci. Pagar sungguhannya ada di
+  // RLS — submitted_by wajib sama dengan pengguna yang benar-benar login.
+  const canEdit = (profile?.role === "auditor" || profile?.role === "super_admin") && !profile?.liatSebagai;
   // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua kayak biasa).
   const ISOLATION_START_PERIOD = "2026-08";
 
@@ -79,6 +90,15 @@ export default function BeritaAcara({ profile }) {
   const [showCopyBanner, setShowCopyBanner] = useState(false);
   const [stockFilter, setStockFilter] = useState("all"); // "all" | "selisih"
   const [invFilter, setInvFilter] = useState("all"); // "all" | "rusak"
+
+  // ── Monitoring Display ──
+  // displayRows tidak diketik ulang tiap bulan: unit yang masih dipajang
+  // datang sendiri dari tabel display_unit lewat view v_display_monitoring.
+  const [displayRows, setDisplayRows] = useState([]);
+  const [perlakuanOpsi, setPerlakuanOpsi] = useState([]);
+  const [kondisiOpsi, setKondisiOpsi] = useState([]);
+  const [displayUploadIdx, setDisplayUploadIdx] = useState(null);
+  const [displayError, setDisplayError] = useState(null);
 
   useEffect(() => { loadBranches(); }, []);
 
@@ -118,7 +138,9 @@ export default function BeritaAcara({ profile }) {
     setCabangBaru(!!entry.cabang_baru);
     setAuditDate(entry.audit_date || todayInputValue());
     setSelectedEntryId(entry.id);
-    setInventaris(normalizeInventaris(invEntry?.data?.categories));
+    // Bentuknya mengikuti periode ENTRI ITU. Audit Agustus yang dibuka hari
+    // ini harus tetap terbaca 10 kategori, bukan dipaksa jadi 36 item.
+    setInventaris(normalizeInventarisUntuk(invEntry?.data?.categories, entry.period || viewPeriod));
     setSelectedInventarisEntryId(invEntry?.id || null);
     setShowCopyBanner(false);
   }
@@ -129,7 +151,7 @@ export default function BeritaAcara({ profile }) {
     setPerlengkapan("Laptop dan Scanner");
     setStockKat1([]);
     setStockKat2([]);
-    setInventaris(freshInventaris());
+    setInventaris(freshInventarisUntuk(period));
     setStoreManagerName("");
     setStoreLeaderName("");
     setTidakVisit(false);
@@ -158,6 +180,21 @@ export default function BeritaAcara({ profile }) {
     let invPrevQuery = supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", prevPeriod);
     if (isolate && prevPeriod >= ISOLATION_START_PERIOD) invPrevQuery = invPrevQuery.eq("submitted_by", profile.id);
     const [beRes, invRes, bePrevRes, invPrevRes] = await Promise.all([beQuery, invQuery, bePrevQuery, invPrevQuery]);
+
+    // Data display dimuat terpisah dan galatnya SENGAJA tidak dilempar ke
+    // atas: kalau schema-display.sql belum dijalankan, Berita Acara harus
+    // tetap bisa dipakai. Pesannya ditampilkan di sectionnya sendiri,
+    // bukan ditelan diam-diam.
+    setDisplayError(null);
+    try {
+      const d = await muatDisplay({ branchId: b.id, period });
+      setDisplayRows(d.rows);
+      setPerlakuanOpsi(d.perlakuanOpsi);
+      setKondisiOpsi(d.kondisiOpsi);
+    } catch (errDisplay) {
+      setDisplayRows([]); setPerlakuanOpsi([]); setKondisiOpsi([]);
+      setDisplayError("Data display tidak bisa dimuat: " + errDisplay.message);
+    }
     const entries = !beRes.error
       ? [...(beRes.data || [])].sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""))
       : [];
@@ -203,13 +240,10 @@ export default function BeritaAcara({ profile }) {
     if (prevMonthData.storeLeaderName) setStoreLeaderName(prevMonthData.storeLeaderName);
     if (prevMonthData.storeManagerName) setStoreManagerName(prevMonthData.storeManagerName);
     if (prevMonthData.inventarisCategories) {
-      setInventaris(normalizeInventaris(prevMonthData.inventarisCategories));
-      // reset status & keterangan & foto — auditor tinggal ubah yang beda aja
-      setInventaris((prev) => {
-        const next = {};
-        Object.keys(prev).forEach((cat) => { next[cat] = { status: "Berfungsi", keterangan: "", photos: [] }; });
-        return next;
-      });
+      // Bulan lalu bisa saja berbentuk lama sementara periode ini sudah baru
+      // (persis yang terjadi Agustus -> September 2026). Yang dipakai adalah
+      // bentuk PERIODE INI, isinya dikosongkan — auditor tinggal ubah yang beda.
+      setInventaris(freshInventarisUntuk(period));
     }
     setShowCopyBanner(false);
     setSaved(false);
@@ -232,6 +266,18 @@ export default function BeritaAcara({ profile }) {
   function removeRow(setter, i) { setter((prev) => prev.filter((_, idx) => idx !== i)); setSaved(false); }
 
   // ── Inventaris helpers ──
+  // Menandai SEMUA item sekaligus. Lewat satu setState, bukan 36 panggilan
+  // updateInventaris berturut-turut — selain lebih ringan, ia juga menghindari
+  // 36 gambar-ulang yang membuat layar tersendat di tablet.
+  function setSemuaInventaris(status) {
+    setInventaris((prev) => {
+      const next = {};
+      Object.keys(prev).forEach((k) => { next[k] = { ...prev[k], status, keterangan: "" }; });
+      return next;
+    });
+    setSaved(false);
+  }
+
   function updateInventaris(cat, field, val) {
     setInventaris((prev) => ({ ...prev, [cat]: { ...prev[cat], [field]: val } }));
     setSaved(false);
@@ -261,6 +307,69 @@ export default function BeritaAcara({ profile }) {
       return { ...prev, [cat]: { ...prev[cat], photos } };
     });
     setSaved(false);
+  }
+
+  // ── Handler Monitoring Display ──
+
+  function updateDisplay(i, field, value) {
+    setDisplayRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, [field]: value } : r)));
+    setSaved(false);
+  }
+
+  function addDisplay() {
+    setDisplayRows((prev) => [...prev, barisDisplayBaru()]);
+    setSaved(false);
+  }
+
+  // Unit hasil impor Excel. KONDISI FISIK SENGAJA DIBIARKAN KOSONG — ia hasil
+  // pemeriksaan di tempat, bukan isi berkas. Mengisinya otomatis berarti
+  // Berita Acara memuat penilaian yang tidak pernah dilakukan siapa pun.
+  function imporDisplay(barisBaru) {
+    setDisplayRows((prev) => [
+      ...prev,
+      ...barisBaru.map((r) => ({
+        ...barisDisplayBaru(),
+        brand: r.brand,
+        model: r.model,
+        serial_number: r.serial_number || "",
+        tanggal_pajang: r.tanggal_pajang,
+        program_nama: r.program_nama || "",
+        program_brand: !!r.program_nama,
+      })),
+    ]);
+    setSaved(false);
+  }
+
+  function removeDisplay(i) {
+    // Hanya baris baru yang boleh dibuang dari form. Unit yang sudah
+    // tersimpan diturunkan lewat tombol "Turunkan" supaya riwayat dan
+    // perlakuannya tetap tercatat, bukan dihapus begitu saja.
+    setDisplayRows((prev) => (prev[i] && prev[i].baru ? prev.filter((_, idx) => idx !== i) : prev));
+    setSaved(false);
+  }
+
+  async function handleUploadDisplayMedia(i, fileList) {
+    if (!fileList || !fileList.length) return;
+    setDisplayUploadIdx(i);
+    setError(null);
+    try {
+      const uploaded = await uploadDisplayMedia({
+        branchId: selectedBranch.id, period: viewPeriod, idx: i, fileList,
+      });
+      setDisplayRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, photos: [...r.photos, ...uploaded] } : r)));
+      setSaved(false);
+    } catch (err) {
+      setError("Gagal unggah foto display: " + err.message);
+    } finally {
+      setDisplayUploadIdx(null);
+    }
+  }
+
+  async function removeDisplayMedia(i, mediaIdx) {
+    const media = displayRows[i] && displayRows[i].photos[mediaIdx];
+    setDisplayRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, photos: r.photos.filter((_, mi) => mi !== mediaIdx) } : r)));
+    setSaved(false);
+    if (media && media.url) await deleteMediaFromStorage(media.url);
   }
 
   async function saveRecord() {
@@ -319,6 +428,24 @@ export default function BeritaAcara({ profile }) {
         }
       }
 
+      // Simpan data display sesudah berita acara tersimpan, supaya
+      // tanggal audit yang dipakai sama persis.
+      const galatDisplay = periksaDisplay(displayRows);
+      if (galatDisplay.length) throw new Error(galatDisplay.join(" "));
+      if (displayRows.length) {
+        await simpanDisplay({
+          rows: displayRows, branchId: selectedBranch.id, period: viewPeriod,
+          auditDate, userId: user.id, kondisiOpsi, perlakuanOpsi,
+        });
+        // Dimuat ulang termasuk DAFTAR PILIHANNYA — istilah baru yang barusan
+        // didaftarkan harus langsung muncul di dropdown, bukan menunggu
+        // halaman dibuka lagi.
+        const d = await muatDisplay({ branchId: selectedBranch.id, period: viewPeriod });
+        setDisplayRows(d.rows);
+        setPerlakuanOpsi(d.perlakuanOpsi);
+        setKondisiOpsi(d.kondisiOpsi);
+      }
+
       setSelectedEntryId(beRow.id);
       setSelectedInventarisEntryId(invRow ? invRow.id : null);
       setEntriesThisPeriod((prev) => {
@@ -336,6 +463,10 @@ export default function BeritaAcara({ profile }) {
   async function deleteRecord() {
     if (!selectedEntryId) return;
     const entry = entriesThisPeriod.find((e) => e.id === selectedEntryId);
+    // Mode "lihat sebagai" hanya hak baca. Tanpa baris ini, tombol Hapus
+    // muncul untuk catatan orang yang sedang dilihat — perannya memang
+    // "auditor" dan profile.id memang id orang itu.
+    if (profile?.liatSebagai) return;
     const isOwner = profile?.role === "auditor" && entry?.submitted_by === profile?.id;
     if (profile?.role !== "super_admin" && !isOwner) return;
     if (!window.confirm(`Hapus audit ${selectedBranch.name} tanggal ${shortDate(entry?.audit_date)}? Aksi ini tidak bisa dibatalkan.`)) return;
@@ -349,7 +480,10 @@ export default function BeritaAcara({ profile }) {
       }
       // Kumpulin semua foto/video Inventaris di record ini (dari semua kategori), hapus dari Storage
       // juga — biar nggak nyisain file orphan pas audit-nya udah kehapus dari database.
-      const allMedia = INVENTARIS_CATEGORIES.flatMap((cat) => inventaris[cat]?.photos || []);
+      // kunciTerpakai() mengikuti BENTUK datanya (10 kategori atau 36 item).
+      // Kalau tetap dipatok 10 kategori, foto milik data per item tidak ikut
+      // terhapus dan tertinggal jadi berkas yatim di Storage — tanpa galat.
+      const allMedia = kunciTerpakai(inventaris).flatMap((k) => inventaris[k]?.photos || []);
       deleteMediaListFromStorage(allMedia);
       const remaining = entriesThisPeriod.filter((e) => e.id !== selectedEntryId);
       setEntriesThisPeriod(remaining);
@@ -368,7 +502,7 @@ export default function BeritaAcara({ profile }) {
     }
   }
 
-  function exportPDF() {
+  async function exportPDF() {
     if (!selectedBranch) return;
     const printDate = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
 
@@ -447,6 +581,61 @@ export default function BeritaAcara({ profile }) {
       </tr>`;
     }).join("");
 
+    // ── Data Monitoring Display untuk cetakan ──
+    // Skor diambil dari view v_display_skor_periode, TIDAK dihitung ulang di
+    // sini. Dua tempat yang menghitung hal yang sama adalah cara paling andal
+    // untuk melahirkan dua angka yang berbeda.
+    let skorD = null;
+    try {
+      const rSkor = await supabase.from("v_display_skor_periode").select("*")
+        .eq("branch_id", selectedBranch.id).eq("period", viewPeriod).maybeSingle();
+      skorD = rSkor.data || null;
+    } catch (errSkor) {
+      skorD = null; // tabel display belum ada — cetakan tetap jalan tanpa blok ini
+    }
+
+    // Umur dihitung terhadap TANGGAL AUDIT, bukan hari ini. Berita Acara
+    // Agustus yang dicetak ulang bulan Desember harus memuat angka yang sama.
+    function umurSaatAudit(tglPajang) {
+      if (!tglPajang || !auditDate) return 0;
+      const a = new Date(tglPajang + "T00:00:00");
+      const b = new Date(auditDate + "T00:00:00");
+      return Math.max(0, Math.round((b - a) / 86400000));
+    }
+    const labelKondisi = (kode) => (kondisiOpsi.find((k) => k.kode === kode) || {}).label || "\u2014";
+    const labelPerlakuan = (kode) => (perlakuanOpsi.find((p) => p.kode === kode) || {}).label || "";
+
+    const dUnit = displayRows || [];
+    const dDipajang = dUnit.filter((r) => !r.turun);
+    const dLewat = dDipajang.filter((r) => r.batas_hari != null && umurSaatAudit(r.tanggal_pajang) > r.batas_hari);
+    const dBatas = dUnit.length && dUnit[0].batas_hari != null ? dUnit[0].batas_hari : 60;
+
+    const displayInfo = skorD == null
+      ? { color: "#999", lbl: "Belum dinilai" }
+      : Number(skorD.skor_display) >= 90 ? { color: "#1a9e6e", lbl: "Terkendali" }
+      : Number(skorD.skor_display) >= 75 ? { color: "#d98324", lbl: "Perhatian" }
+      : { color: "#c0392b", lbl: "Tindak Lanjut" };
+
+    // Jalur cetak LAMA: kelas status-*, dan catatan perlakuan TIDAK
+    // disertakan — persis seperti sebelumnya. Berita Acara periode sebelum
+    // September 2026 tidak boleh berubah bentuknya sedikit pun.
+    const displayBarisHtml = barisDisplayHtml(dUnit, {
+      esc, labelKondisi, labelPerlakuan,
+      tglAudit: auditDate,
+      kelasOk: "status-ok", kelasBad: "status-bad",
+      sertakanCatatan: false,
+    });
+
+    // Lampiran foto — semua foto ikut dicetak. Video dilewati: tidak bisa dicetak.
+    const displayFotoHtml = dUnit.map((r) => {
+      const fotos = (r.photos || []).filter((p) => p.type !== "video");
+      if (!fotos.length) return "";
+      return `<div class="foto-unit">
+        <div class="foto-unit-judul">${esc(r.brand)} ${esc(r.model)}${r.serial_number ? " \u00b7 SN " + esc(r.serial_number) : ""}</div>
+        <div class="foto-unit-grid">${fotos.map((p) => `<img src="${esc(p.url)}" class="foto-unit-img" />`).join("")}</div>
+      </div>`;
+    }).join("");
+
     const ICON = {
       store: `<svg viewBox="0 0 24 24" fill="none" stroke="#2A1F52" stroke-width="2.4"><path d="M3 9l1.5-5h15L21 9"/><path d="M4 9v10a1 1 0 001 1h14a1 1 0 001-1V9"/></svg>`,
       calendar: `<svg viewBox="0 0 24 24" fill="none" stroke="#2A1F52" stroke-width="2.4"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></svg>`,
@@ -457,6 +646,62 @@ export default function BeritaAcara({ profile }) {
       box: `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M21 8l-9-5-9 5 9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/></svg>`,
       checklist: `<svg viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/></svg>`,
     };
+
+    // ── Persimpangan format ──────────────────────────────────────────
+    // Mulai periode September 2026 dokumennya MENGALIR tiga poin dengan
+    // tanda tangan di halaman terakhir. Periode sebelumnya tetap memakai
+    // template lama di bawah ini, tidak disentuh sama sekali.
+    if (pakaiFormatBaru(viewPeriod)) {
+      const barisStok = (judul, rows) => rows.map((r, i) => {
+        const bad = r.status === "Selisih";
+        return `<tr><td>${i === 0 ? `<b>${esc(judul.toUpperCase())}</b>` : ""}</td>`
+          + `<td>${esc(r.nama).toUpperCase() || "\u2014"}</td>`
+          + `<td class="${bad ? "k-bad" : "k-ok"}">${bad ? "SELISIH" : "LENGKAP"}</td>`
+          + `<td>${esc(r.keterangan) || "-"}</td></tr>`;
+      }).join("");
+      const stokBarisHtml = (barisStok("Kategori 1", stockKat1) + barisStok("Kategori 2", stockKat2))
+        || `<tr><td colspan="4" style="text-align:center;color:#999;padding:9px">Tidak ada baris diisi</td></tr>`;
+
+      // Kelas warnanya WAJIB k-ok/k-bad: gaya cetak format baru hanya
+      // mendefinisikan itu. Dengan status-* kolom umur tercetak tanpa
+      // warna dan unit yang lewat batas berhenti menonjol merah —
+      // tanpa galat, tanpa yang kosong.
+      const displayBarisBaru = barisDisplayHtml(dUnit, {
+        esc, labelKondisi, labelPerlakuan,
+        tglAudit: auditDate,
+        kelasOk: "k-ok", kelasBad: "k-bad",
+        sertakanCatatan: true,
+      });
+
+      const htmlBaru = cetakBaruHtml({
+        cabang: selectedBranch.name,
+        periodeTeks: namaPeriode(viewPeriod),
+        tanggalCetakTeks: printDate,
+        waktuAudit,
+        auditor: profile?.full_name || "",
+        teamLeader: storeLeaderName,
+        storeManager: storeManagerName,
+        inventaris,
+        stokBarisHtml,
+        stokTotal: stockTotalCount,
+        stokSelisih: stockSelisihCount,
+        stokPct,
+        kat1Pct,
+        kat2Pct,
+        displayBarisHtml: displayBarisBaru,
+        displayFotoHtml,
+        displayDipajang: dDipajang.length,
+        displayLewat: dLewat.length,
+        displayBatas: dBatas,
+        skorD,
+        displayInfo,
+      });
+      const winBaru = window.open("", "_blank");
+      if (!winBaru) { setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF."); return; }
+      winBaru.document.write(htmlBaru);
+      winBaru.document.close();
+      return;
+    }
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Berita Acara ${esc(selectedBranch.name)}</title>
     <style>
@@ -595,6 +840,16 @@ export default function BeritaAcara({ profile }) {
       #pdfZoom.compact-6 table.data th { font-size: 6px; }
       #pdfZoom.compact-7 table.data { font-size: 6.5px; }
       #pdfZoom.compact-7 table.data th { font-size: 5.5px; }
+      /* ── Lampiran Monitoring Display (halaman terpisah) ── */
+      .lampiran { page-break-before: always; border: 3px solid #2A1F52; border-radius: 10px; padding: 8mm 9mm; margin-top: 6mm; }
+      .lampiran .lamp-hdr { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #F4B740; padding-bottom: 7px; margin-bottom: 10px; }
+      .lampiran .lamp-judul { font-size: 13px; font-weight: 900; color: #2A1F52; letter-spacing: .02em; }
+      .lampiran .lamp-sub { font-size: 8px; color: #8a83a0; }
+      .lampiran table.data { width: 100%; }
+      .foto-unit { margin-top: 10px; page-break-inside: avoid; }
+      .foto-unit-judul { font-size: 8.5px; font-weight: 800; color: #2A1F52; margin-bottom: 4px; }
+      .foto-unit-grid { display: flex; flex-wrap: wrap; gap: 5px; }
+      .foto-unit-img { width: 92px; height: 92px; object-fit: cover; border-radius: 5px; border: 1px solid #e4dff2; }
     </style></head><body><div id="pdfZoom">
       <div class="page">
 
@@ -650,6 +905,20 @@ export default function BeritaAcara({ profile }) {
               <div class="legend-row"><span class="legend-dot" style="background:#c0392b;"></span><span class="legend-label">Tidak Lengkap</span><span class="legend-val">${invTidakPct}%</span></div>
             </div>
           </div>
+          ${skorD ? `
+          <div class="summary-card" style="grid-column:1 / -1;">
+            <div class="icon-circle">${ICON.laptop}</div>
+            <div class="mid">
+              <div class="t">3. MONITORING DISPLAY</div>
+              <div class="pct" style="color:${displayInfo.color};">${skorD.skor_display}%</div>
+              <div class="badge" style="background:${displayInfo.color};">${displayInfo.lbl.toUpperCase()}</div>
+            </div>
+            <div class="legend">
+              <div class="legend-row"><span class="legend-dot" style="background:#2A1F52;"></span><span class="legend-label">Dalam batas umur</span><span class="legend-val">${skorD.unit_dalam_batas}/${skorD.unit_dinilai} unit &middot; ${skorD.skor_umur}%</span></div>
+              <div class="legend-row"><span class="legend-dot" style="background:#7c3aed;"></span><span class="legend-label">Kondisi fisik</span><span class="legend-val">${skorD.skor_kondisi}%</span></div>
+              <div class="legend-row"><span class="legend-dot" style="background:${dLewat.length ? "#c0392b" : "#1a9e6e"};"></span><span class="legend-label">Lewat batas</span><span class="legend-val">${dLewat.length} unit</span></div>
+            </div>
+          </div>` : ""}
         </div>
 
         <div class="tables-row">
@@ -701,9 +970,34 @@ export default function BeritaAcara({ profile }) {
 
       </div>
       </div>
+      ${skorD ? `
+      <div class="lampiran">
+        <div class="lamp-hdr">
+          <div>
+            <div class="lamp-judul">LAMPIRAN &mdash; MONITORING DISPLAY</div>
+            <div class="lamp-sub">${esc(selectedBranch.name)} &middot; ${esc(periodeLabel(viewPeriod))} &middot; batas pajang ${dBatas} hari</div>
+          </div>
+          <div style="text-align:right;">
+            <div class="lamp-judul" style="color:${displayInfo.color};">${skorD.skor_display}%</div>
+            <div class="lamp-sub">${dDipajang.length} unit dipajang &middot; ${dLewat.length} lewat batas</div>
+          </div>
+        </div>
+        <table class="data">
+          <thead><tr>
+            <th style="width:24%;">Brand / Model</th><th style="width:13%;">Serial</th>
+            <th style="width:12%;">Mulai Pajang</th><th style="width:14%;">Umur saat audit</th>
+            <th style="width:15%;">Kondisi</th><th>Program / Perlakuan</th>
+          </tr></thead>
+          <tbody>${displayBarisHtml}</tbody>
+        </table>
+        ${displayFotoHtml ? `<div style="margin-top:12px;"><div class="lamp-judul" style="font-size:10px;">FOTO KONDISI UNIT</div>${displayFotoHtml}</div>` : ""}
+      </div>` : ""}
       <script>
         function fitToPage() {
           const zoomEl = document.getElementById("pdfZoom");
+          // Lampiran Display SENGAJA ditaruh di luar #pdfZoom. Kalau di dalam,
+          // pemampatan ini akan menyusutkan halaman 1 supaya muat berdua —
+          // padahal halaman 1 harus tetap seperti sekarang.
           const targetHeight = 960; // ruang aman cetak A4 — diketatin dikit lagi (sempet ada kasus footer brand kepental sendirian ke halaman 2)
           // Bukan zoom lagi (itu ngecilin font juga) — nempelin class compact-1..4 bertahap,
           // yang cuma nyusutin padding/margin/gap/ukuran foto. Font-size nggak disentuh sama sekali.
@@ -831,7 +1125,7 @@ export default function BeritaAcara({ profile }) {
                 {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : "Simpan"}
               </button>
             )}
-            {(profile?.role === "super_admin" || (profile?.role === "auditor" && entriesThisPeriod.find((e) => e.id === selectedEntryId)?.submitted_by === profile?.id)) && selectedEntryId && (
+            {!profile?.liatSebagai && (profile?.role === "super_admin" || (profile?.role === "auditor" && entriesThisPeriod.find((e) => e.id === selectedEntryId)?.submitted_by === profile?.id)) && selectedEntryId && (
               <button className="btn-ghost" disabled={saving} onClick={deleteRecord} style={{ color: "var(--danger-text)" }}>Hapus</button>
             )}
           </div>
@@ -1006,6 +1300,39 @@ export default function BeritaAcara({ profile }) {
               </div>
             </div>
 
+            {/* Section: Monitoring Display — hanya untuk periode >= September 2026.
+                Ketetapan pemilik: format ini mulai berlaku periode itu. Untuk
+                periode lama section-nya TIDAK dirender sama sekali, bukan
+                sekadar dikunci — angka yang tidak berlaku tetapi terbaca di
+                layar adalah cara paling halus melahirkan salah paham. */}
+            {!pakaiFormatBaru(viewPeriod) ? (
+              <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "12px 15px", marginBottom: 16, fontSize: 12.5, color: "var(--text-secondary)", lineHeight: 1.6 }}>
+                🔒 <b>Monitoring Display berlaku mulai {namaPeriode("2026-09")}.</b>{" "}
+                Periode {namaPeriode(viewPeriod)} memakai format lama — Berita Acara yang
+                sudah ditandatangani tidak berubah bentuk hanya karena aplikasinya diperbarui.
+              </div>
+            ) : displayError ? (
+              <div style={{ background: "var(--danger-bg)", border: "1px solid rgba(239,68,68,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 10, fontSize: 12.5, marginBottom: 16 }}>
+                {displayError}
+              </div>
+            ) : (
+              <DisplaySection
+                rows={displayRows}
+                perlakuanOpsi={perlakuanOpsi}
+                kondisiOpsi={kondisiOpsi}
+                canEdit={canEdit}
+                uploadingIdx={displayUploadIdx}
+                onUpdate={updateDisplay}
+                onAdd={addDisplay}
+                onRemove={removeDisplay}
+                onUploadFoto={handleUploadDisplayMedia}
+                onHapusFoto={removeDisplayMedia}
+                onImpor={imporDisplay}
+                cabang={selectedBranch.name}
+                tanggalAudit={auditDate}
+              />
+            )}
+
             {/* Section: Inventaris */}
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
@@ -1018,11 +1345,13 @@ export default function BeritaAcara({ profile }) {
                 )}
               </div>
               <InventarisChecklist
+                period={viewPeriod}
                 inventaris={inventaris}
                 canEdit={canEdit}
                 uploadingKey={uploadingKey}
                 filter={invFilter}
                 onUpdate={updateInventaris}
+                onBulkStatus={setSemuaInventaris}
                 onUploadMedia={handleUploadInventarisMedia}
                 onRemoveMedia={removeInventarisMedia}
               />

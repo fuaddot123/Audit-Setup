@@ -1,3 +1,5 @@
 node_modules/
 .next/
 .env.local
+uji/contoh-monitoring-display.xlsx
+uji/prod-*.html

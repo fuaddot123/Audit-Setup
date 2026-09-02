@@ -28,7 +28,9 @@ function fmtDate(d) { if (!d) return "\u2014"; return new Date(d + "T00:00:00").
 
 export default function BiayaDinas({ profile }) {
   // Auditor bikin pengajuannya sendiri; super_admin bisa liat semua (oversight) & edit siapa aja.
-  const canManage = profile?.role === "auditor" || profile?.role === "super_admin";
+  // Mode "lihat sebagai": seluruh isian dikunci. Pagar sungguhannya ada di
+  // RLS — submitted_by wajib sama dengan pengguna yang benar-benar login.
+  const canManage = (profile?.role === "auditor" || profile?.role === "super_admin") && !profile?.liatSebagai;
   const isolate = profile?.role === "auditor";
 
   const [list, setList] = useState([]);
@@ -147,6 +149,10 @@ export default function BiayaDinas({ profile }) {
 
   async function deleteRecord() {
     if (!selected || selected === "new") return;
+    // Mode "lihat sebagai" hanya hak baca. Tanpa baris ini, tombol Hapus
+    // muncul untuk catatan orang yang sedang dilihat — perannya memang
+    // "auditor" dan profile.id memang id orang itu.
+    if (profile?.liatSebagai) return;
     const isOwner = profile?.role === "auditor" && savedRow?.submitted_by === profile?.id;
     if (profile?.role !== "super_admin" && !isOwner) return;
     if (!window.confirm("Yakin hapus pengajuan ini? Aksi ini tidak bisa dibatalkan.")) return;
@@ -437,7 +443,7 @@ export default function BiayaDinas({ profile }) {
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           {selected !== "new" && <button className="btn-ghost" onClick={printPDF}>Cetak PDF</button>}
-          {selected !== "new" && (profile?.role === "super_admin" || (profile?.role === "auditor" && savedRow?.submitted_by === profile?.id)) && (
+          {selected !== "new" && !profile?.liatSebagai && (profile?.role === "super_admin" || (profile?.role === "auditor" && savedRow?.submitted_by === profile?.id)) && (
             <button className="btn-ghost" disabled={saving} style={{ color: "var(--danger-text)", borderColor: "var(--danger-border)" }} onClick={deleteRecord}>Hapus</button>
           )}
           <button className="btn" disabled={saving || !canManage} onClick={saveRecord}>{saving ? "Menyimpan\u2026" : "Simpan"}</button>

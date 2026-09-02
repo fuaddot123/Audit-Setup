@@ -32,7 +32,9 @@ function shortDate(d) {
 }
 
 export default function SopAuditCabang({ profile }) {
-  const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
+  // Mode "lihat sebagai": seluruh isian dikunci. Pagar sungguhannya ada di
+  // RLS — submitted_by wajib sama dengan pengguna yang benar-benar login.
+  const canEdit = (profile?.role === "auditor" || profile?.role === "super_admin") && !profile?.liatSebagai;
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
   const [latestByBranchPeriod, setLatestByBranchPeriod] = useState({}); // buat kartu ringkasan & pilih-cabang
@@ -233,6 +235,10 @@ export default function SopAuditCabang({ profile }) {
   async function deleteAudit() {
     if (!selectedEntryId) return;
     const entry = entriesThisPeriod.find((e) => e.id === selectedEntryId);
+    // Mode "lihat sebagai" hanya hak baca. Tanpa baris ini, tombol Hapus
+    // muncul untuk catatan orang yang sedang dilihat — perannya memang
+    // "auditor" dan profile.id memang id orang itu.
+    if (profile?.liatSebagai) return;
     const isOwner = profile?.role === "auditor" && entry?.submitted_by === profile?.id;
     if (profile?.role !== "super_admin" && !isOwner) return;
     if (!window.confirm(`Hapus audit SOP ${selectedBranch.name} tanggal ${shortDate(entry?.data?.audit_date)}? Aksi ini tidak bisa dibatalkan.`)) return;
@@ -488,7 +494,7 @@ export default function SopAuditCabang({ profile }) {
             <button className="btn" disabled={saving || !canEdit} onClick={saveAudit} style={{ alignSelf: "flex-end" }} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
               {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan Hasil Audit" : "Hanya Lihat"}
             </button>
-            {(profile?.role === "super_admin" || (profile?.role === "auditor" && entriesThisPeriod.find((e) => e.id === selectedEntryId)?.submitted_by === profile?.id)) && selectedEntryId && (
+            {!profile?.liatSebagai && (profile?.role === "super_admin" || (profile?.role === "auditor" && entriesThisPeriod.find((e) => e.id === selectedEntryId)?.submitted_by === profile?.id)) && selectedEntryId && (
               <button className="btn-ghost" disabled={saving} onClick={deleteAudit} style={{ alignSelf: "flex-end", color: "var(--danger-text)", borderColor: "var(--danger-border, rgba(239,68,68,0.35))" }}>
                 Hapus Data
               </button>
