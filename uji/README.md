@@ -7,6 +7,7 @@ di luar yang sudah ada. Dijalankan dari **akar repo**:
 node uji/uji-format-ba.mjs        # aturan periode + katalog inventaris + hitungannya
 node uji/uji-impor-lib.mjs        # pengurai berkas impor display
 node uji/uji-lihat-sebagai.mjs    # pagar "mode lihat sebagai" (hanya hak baca)
+node uji/uji-baris-display.mjs    # baris tabel Monitoring Display di cetakan
 node uji/uji-cetak-baru.mjs       # cetakan Berita Acara format baru, dirender sungguhan
 node uji/uji-berkas-asli.mjs      # pengurai diadu ke berkas laporan yang asli
 ```

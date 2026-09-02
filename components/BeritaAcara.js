@@ -9,6 +9,7 @@ import {
 } from "./AuditInventaris";
 import { pakaiFormatBaru, namaPeriode, INVENTARIS_ITEMS, kunciItem } from "../lib/format-ba";
 import { cetakBaruHtml } from "./BeritaAcaraCetakBaru";
+import { barisDisplayHtml } from "../lib/baris-display";
 import {
   DisplaySection, muatDisplay, simpanDisplay, periksaDisplay,
   barisDisplayBaru, uploadDisplayMedia,
@@ -615,22 +616,15 @@ export default function BeritaAcara({ profile }) {
       : Number(skorD.skor_display) >= 75 ? { color: "#d98324", lbl: "Perhatian" }
       : { color: "#c0392b", lbl: "Tindak Lanjut" };
 
-    const displayBarisHtml = dUnit.map((r) => {
-      const umur = umurSaatAudit(r.tanggal_pajang);
-      const batas = r.batas_hari;
-      const lewat = batas != null && umur > batas && !r.turun;
-      const ket = r.turun
-        ? `${esc(labelPerlakuan(r.perlakuan_kode))}${r.harga_jual_display ? " \u2014 Rp " + Number(r.harga_jual_display).toLocaleString("id-ID") : ""}`
-        : (r.program_brand ? "Program: " + esc(r.program_nama) : (esc(r.kondisi_catatan) || "-"));
-      return `<tr${r.turun ? ' style="background:#faf9fc;color:#8a83a0;"' : ""}>
-        <td style="font-weight:600;">${esc(r.brand)} ${esc(r.model)}</td>
-        <td>${esc(r.serial_number) || "-"}</td>
-        <td>${esc(r.tanggal_pajang) || "-"}</td>
-        <td class="${lewat ? "status-bad" : "status-ok"}">${umur} hr${batas != null ? " / " + batas : ""}${lewat ? " \u00b7 lewat " + (umur - batas) : ""}</td>
-        <td>${r.turun ? "\u2014" : esc(labelKondisi(r.kondisi_kode))}</td>
-        <td>${ket || "-"}</td>
-      </tr>`;
-    }).join("") || `<tr><td colspan="6" style="text-align:center;color:#999;padding:10px;">Belum ada unit display tercatat</td></tr>`;
+    // Jalur cetak LAMA: kelas status-*, dan catatan perlakuan TIDAK
+    // disertakan — persis seperti sebelumnya. Berita Acara periode sebelum
+    // September 2026 tidak boleh berubah bentuknya sedikit pun.
+    const displayBarisHtml = barisDisplayHtml(dUnit, {
+      esc, labelKondisi, labelPerlakuan,
+      tglAudit: auditDate,
+      kelasOk: "status-ok", kelasBad: "status-bad",
+      sertakanCatatan: false,
+    });
 
     // Lampiran foto — semua foto ikut dicetak. Video dilewati: tidak bisa dicetak.
     const displayFotoHtml = dUnit.map((r) => {
@@ -668,6 +662,17 @@ export default function BeritaAcara({ profile }) {
       const stokBarisHtml = (barisStok("Kategori 1", stockKat1) + barisStok("Kategori 2", stockKat2))
         || `<tr><td colspan="4" style="text-align:center;color:#999;padding:9px">Tidak ada baris diisi</td></tr>`;
 
+      // Kelas warnanya WAJIB k-ok/k-bad: gaya cetak format baru hanya
+      // mendefinisikan itu. Dengan status-* kolom umur tercetak tanpa
+      // warna dan unit yang lewat batas berhenti menonjol merah —
+      // tanpa galat, tanpa yang kosong.
+      const displayBarisBaru = barisDisplayHtml(dUnit, {
+        esc, labelKondisi, labelPerlakuan,
+        tglAudit: auditDate,
+        kelasOk: "k-ok", kelasBad: "k-bad",
+        sertakanCatatan: true,
+      });
+
       const htmlBaru = cetakBaruHtml({
         cabang: selectedBranch.name,
         periodeTeks: namaPeriode(viewPeriod),
@@ -683,7 +688,7 @@ export default function BeritaAcara({ profile }) {
         stokPct,
         kat1Pct,
         kat2Pct,
-        displayBarisHtml,
+        displayBarisHtml: displayBarisBaru,
         displayFotoHtml,
         displayDipajang: dDipajang.length,
         displayLewat: dLewat.length,

@@ -43,8 +43,11 @@ if (diubah === asli) throw new Error("penunjuk impor tidak ketemu — susunan be
 if (diubah.length !== asli.length + 4) throw new Error("perubahan lebih dari sekadar ekstensi impor");
 fs.writeFileSync(path.join(tmp, "components", "BeritaAcaraCetakBaru.mjs"), diubah);
 
+fs.copyFileSync(path.join(repo, "lib", "baris-display.js"), path.join(tmp, "lib", "baris-display.mjs"));
+
 const M = await import("file://" + path.join(tmp, "components", "BeritaAcaraCetakBaru.mjs").replace(/\\/g, "/"));
 const FB = await import("file://" + path.join(tmp, "lib", "format-ba.mjs").replace(/\\/g, "/"));
+const BD = await import("file://" + path.join(tmp, "lib", "baris-display.mjs").replace(/\\/g, "/"));
 
 let lolos = 0, gagal = 0;
 function cek(nama, syarat, info) {
@@ -73,7 +76,25 @@ const dasar = {
   inventaris: inventarisContoh(),
   stokBarisHtml: "<tr><td><b>KATEGORI 1</b></td><td>LAPTOP GAMING</td><td class=\"k-ok\">LENGKAP</td><td>-</td></tr>",
   stokTotal: 5, stokSelisih: 1, stokPct: 80, kat1Pct: 67, kat2Pct: 100,
-  displayBarisHtml: "<tr><td>ASUS ROG Strix G16</td><td>4KN0CV02X</td><td>2026-07-09</td><td class=\"k-bad\">72 hr / 60</td><td>Lecet ringan</td><td>-</td></tr>",
+  // Dibangun oleh PEMBANGUN ASLI, bukan diketik di sini. Versi sebelumnya
+  // menyuapkan barisnya sendiri dengan kelas "k-bad" yang benar, sehingga
+  // cacat sungguhan lolos: aplikasi memakai "status-bad" yang tidak
+  // didefinisikan di gaya cetak baru, dan kolom umur tercetak tanpa warna.
+  displayBarisHtml: BD.barisDisplayHtml([{
+    brand: "ASUS", model: "ROG Strix G16", serial_number: "4KN0CV02X",
+    tanggal_pajang: "2026-07-09", batas_hari: 60, turun: false,
+    kondisi_kode: "lecet_ringan", kondisi_catatan: "",
+  }, {
+    brand: "MSI", model: "Katana 15", serial_number: "K1552089",
+    tanggal_pajang: "2026-06-20", batas_hari: 60, turun: true,
+    perlakuan_kode: "dijual_display", harga_jual_display: 11450000,
+    perlakuan_catatan: "Diskon 18% dari harga normal",
+  }], {
+    tglAudit: "2026-09-19",
+    labelKondisi: (k) => (k === "lecet_ringan" ? "Lecet ringan" : "—"),
+    labelPerlakuan: () => "Dijual sebagai unit display (harga khusus)",
+    kelasOk: "k-ok", kelasBad: "k-bad", sertakanCatatan: true,
+  }),
   displayFotoHtml: "",
   displayDipajang: 20, displayLewat: 3, displayBatas: 60,
   skorD: { skor_display: 81, skor_umur: 85, skor_kondisi: 72, unit_dalam_batas: 17, unit_dinilai: 20 },
@@ -114,6 +135,17 @@ cek("dua tabel kolom", (h.match(/<th style="width:30%">Kategori<\/th>/g) || []).
 cek("AC ruang display tercetak RUSAK", h.includes("AC RUANG DISPLAY</td><td class=\"k-bad\">RUSAK"));
 cek("APAR tercetak TIDAK ADA", h.includes("APAR</td><td class=\"k-netral\">TIDAK ADA"));
 cek("item baik tetap BERFUNGSI", h.includes("ROUTER UTAMA</td><td class=\"k-ok\">BERFUNGSI"));
+
+console.log("\n=== 3b. Tabel display: warna & catatan sampai ke dokumen ===");
+// Kelas yang tidak didefinisikan tidak menimbulkan galat — ia hanya membuat
+// penandanya padam. Karena itu diperiksa dua arah.
+cek("memakai kelas yang memang ada di gaya cetak ini",
+  h.includes('class="k-bad">72 hr / 60'), (h.match(/class="[a-z-]+">\d+ hr[^<]*/g) || []).join(" | "));
+cek("tidak ada kelas status-* yang tak terdefinisi", !h.includes("status-bad") && !h.includes("status-ok"));
+cek("gaya cetak memang tidak punya .status-*", !h.includes(".status-bad{"));
+cek("unit lewat batas ditandai lewat berapa hari", h.includes("· lewat 12"));
+cek("catatan perlakuan sampai ke dokumen", h.includes("Diskon 18% dari harga normal"),
+  (h.match(/Dijual sebagai[^<]*/) || ["(tidak ada)"])[0]);
 
 console.log("\n=== 4. Blok BELUM TERSEDIA ===");
 cek("bloknya ada", h.includes("BELUM TERSEDIA DI CABANG INI"));
