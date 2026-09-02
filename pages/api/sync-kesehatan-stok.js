@@ -97,7 +97,12 @@ export default async function handler(req, res) {
 
     const admin = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
     const { data: profile } = await admin.from("profiles").select("role").eq("id", userData.user.id).single();
-    if (profile?.role !== "super_admin") return res.status(403).json({ error: "Cuma Super Admin yang boleh sync." });
+    // Pengecualian: akun Fuad boleh sync juga walau rolenya bukan super_admin (sheet yang lagi
+    // dipakai sekarang emang punya dia). Auditor lain tetep ke-block. Harus sama persis kayak
+    // pengecualian di UI (StokKesehatan.js) — kalau salah satu diubah, ubah dua-duanya.
+    const FUAD_USER_ID = "61f8e921-ac98-4d74-8dbd-de2d69cff096";
+    const canSync = profile?.role === "super_admin" || userData.user.id === FUAD_USER_ID;
+    if (!canSync) return res.status(403).json({ error: "Cuma Super Admin yang boleh sync." });
 
     const auth = new google.auth.GoogleAuth({
       credentials: {
@@ -141,28 +146,60 @@ export default async function handler(req, res) {
       const skorTotal = skorTemuan + sRugi * 5;
       const kesehatanPct = Math.max(0, 1 - skorTotal / 100);
 
-      const { error: upsertErr } = await admin.from("audit_generic").upsert({
-        module: "stok_kesehatan",
-        branch_id: branchId,
-        period,
-        status: "submitted",
-        submitted_by: userId || null,
-        data: {
-          tidak_visit: false,
-          temuan_count: temuanCount,
-          bonus_count: bonusCount,
-          untung_rugi: untungRugi,
-          skor_temuan: skorTemuan,
-          skor_rugi: sRugi,
-          skor_total: skorTotal,
-          kesehatan_pct: kesehatanPct,
-          sumber: "google_sheet",
-          synced_at: new Date().toISOString(),
-        },
-      }, { onConflict: "module,branch_id,period" });
+      // Nggak ada penanda pasti di sheet buat bedain "belum sempet diisi" vs "beneran diperiksa,
+      // 0 temuan" — jadi dipatoki: kalau ke-3 angka nol semua, dianggep belum diisi (Tidak Visit),
+      // BUKAN dipaksa jadi skor 100% sempurna. Biar konsisten sama semua modul lain: cabang Tidak
+      // Visit dikecualikan dari rata-rata company-wide, bukan nyumbang skor palsu.
+      const kemungkinanBelumDiisi = temuanCount === 0 && bonusCount === 0 && untungRugi === 0;
+
+      const dataPayload = kemungkinanBelumDiisi
+        ? { tidak_visit: true, sumber: "google_sheet", synced_at: new Date().toISOString() }
+        : {
+            tidak_visit: false,
+            temuan_count: temuanCount,
+            bonus_count: bonusCount,
+            untung_rugi: untungRugi,
+            skor_temuan: skorTemuan,
+            skor_rugi: sRugi,
+            skor_total: skorTotal,
+            kesehatan_pct: kesehatanPct,
+            sumber: "google_sheet",
+            synced_at: new Date().toISOString(),
+          };
+
+      // Nggak pakai upsert(onConflict) lagi — constraint unik (module,branch_id,period) buat
+      // stok_kesehatan udah sengaja dilepas (fitur multi-audit per bulan), jadi Postgres nolak
+      // ON CONFLICT itu. Sekarang cek manual: ada row hasil sync SEBELUMNYA (submitted_by =
+      // user yang sync ini) buat cabang+periode ini? Update row itu; kalau nggak ada, insert baru
+      // (nggak nimpa audit manual auditor lain buat cabang+periode yang sama).
+      const { data: existingRow } = await admin.from("audit_generic")
+        .select("id")
+        .eq("module", "stok_kesehatan")
+        .eq("branch_id", branchId)
+        .eq("period", period)
+        .eq("submitted_by", userData.user.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      let upsertErr;
+      if (existingRow) {
+        const { error } = await admin.from("audit_generic").update({ data: dataPayload, status: "submitted" }).eq("id", existingRow.id);
+        upsertErr = error;
+      } else {
+        const { error } = await admin.from("audit_generic").insert({
+          module: "stok_kesehatan", branch_id: branchId, period, status: "submitted", submitted_by: userData.user.id, data: dataPayload,
+        });
+        upsertErr = error;
+      }
 
       if (upsertErr) { logs.push(`Gagal simpan "${cabangName}": ${upsertErr.message}`); totalSkipped++; }
-      else { totalSynced++; logs.push(`"${cabangName}": ${temuanCount} temuan barang, ${bonusCount} bonus hilang, untung/rugi Rp${untungRugi.toLocaleString("id-ID")}.`); }
+      else {
+        totalSynced++;
+        logs.push(kemungkinanBelumDiisi
+          ? `"${cabangName}": tab kosong, ditandai Tidak Visit (bukan skor 100%).`
+          : `"${cabangName}": ${temuanCount} temuan barang, ${bonusCount} bonus hilang, untung/rugi Rp${untungRugi.toLocaleString("id-ID")}.`);
+      }
     }
 
     return res.status(200).json({ success: true, totalSynced, totalSkipped, logs });

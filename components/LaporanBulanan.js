@@ -189,30 +189,43 @@ export default function LaporanBulanan({ profile }) {
       const trendPeriods = [];
       for (let i = 5; i >= 0; i--) trendPeriods.push(addMonths(period, -i));
 
+      // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua
+      // kayak biasa) — sama pola kayak modul lain. isoEq buat query yang di-pin ke 1 periode
+      // spesifik (Cur/Prev); isoOr buat query tren (.in beberapa bulan sekaligus).
+      const isolate = profile?.role === "auditor";
+      const ISOLATION_START_PERIOD = "2026-08";
+      const isPersonalView = isolate && period >= ISOLATION_START_PERIOD;
+      function isoEq(q, p, ownerField = "submitted_by") {
+        return isolate && p >= ISOLATION_START_PERIOD ? q.eq(ownerField, profile.id) : q;
+      }
+      function isoOr(q, ownerField = "submitted_by") {
+        return isolate ? q.or(`period.lt.${ISOLATION_START_PERIOD},${ownerField}.eq.${profile.id}`) : q;
+      }
+
       const [
         brRes, sopCurRes, sopPrevRes, svcCurRes, svcPrevRes,
         kesCurRes, kesPrevRes, keuCurRes, keuPrevRes, invCurRes, invPrevRes, kpiRes, profRes, keuSettingsRes,
         kesTrendRes, svcTrendRes, keuTrendRes, sopTrendRes, invTrendRes,
       ] = await Promise.all([
         supabase.from("branches").select("*").order("name"),
-        supabase.from("audit_generic").select("*").eq("module", "sop").eq("period", period),
-        supabase.from("audit_generic").select("*").eq("module", "sop").eq("period", prevPeriod),
-        supabase.from("audit_generic").select("*").eq("module", "stok_service").eq("period", period),
-        supabase.from("audit_generic").select("*").eq("module", "stok_service").eq("period", prevPeriod),
-        supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("period", period),
-        supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("period", prevPeriod),
-        supabase.from("audit_keuangan").select("*").eq("period", period),
-        supabase.from("audit_keuangan").select("*").eq("period", prevPeriod),
-        supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("period", period),
-        supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("period", prevPeriod),
-        supabase.from("audit_kpi").select("*").eq("period", period),
+        isoEq(supabase.from("audit_generic").select("*").eq("module", "sop").eq("period", period), period),
+        isoEq(supabase.from("audit_generic").select("*").eq("module", "sop").eq("period", prevPeriod), prevPeriod),
+        isoEq(supabase.from("audit_generic").select("*").eq("module", "stok_service").eq("period", period), period),
+        isoEq(supabase.from("audit_generic").select("*").eq("module", "stok_service").eq("period", prevPeriod), prevPeriod),
+        isoEq(supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("period", period), period),
+        isoEq(supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("period", prevPeriod), prevPeriod),
+        isoEq(supabase.from("audit_keuangan").select("*").eq("period", period), period),
+        isoEq(supabase.from("audit_keuangan").select("*").eq("period", prevPeriod), prevPeriod),
+        isoEq(supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("period", period), period),
+        isoEq(supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("period", prevPeriod), prevPeriod),
+        isoEq(supabase.from("audit_kpi").select("*").eq("period", period), period, "auditor_id"),
         supabase.from("profiles").select("*"),
         supabase.from("settings_keuangan").select("*").eq("id", 1).maybeSingle(),
-        supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").in("period", trendPeriods),
-        supabase.from("audit_generic").select("*").eq("module", "stok_service").in("period", trendPeriods),
-        supabase.from("audit_keuangan").select("*").in("period", trendPeriods),
-        supabase.from("audit_generic").select("*").eq("module", "sop").in("period", trendPeriods),
-        supabase.from("audit_generic").select("*").eq("module", "inventaris").in("period", trendPeriods),
+        isoOr(supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").in("period", trendPeriods)),
+        isoOr(supabase.from("audit_generic").select("*").eq("module", "stok_service").in("period", trendPeriods)),
+        isoOr(supabase.from("audit_keuangan").select("*").in("period", trendPeriods)),
+        isoOr(supabase.from("audit_generic").select("*").eq("module", "sop").in("period", trendPeriods)),
+        isoOr(supabase.from("audit_generic").select("*").eq("module", "inventaris").in("period", trendPeriods)),
       ]);
       const keuSettings = keuSettingsRes.data || { terkendali: 70, efisien: 95, monitoring: 105 };
 
@@ -490,6 +503,17 @@ export default function LaporanBulanan({ profile }) {
             }
           }));
         }
+        // Item Inventaris (dari Berita Acara) yang ditandain "Rusak" — foto buktinya ikut
+        // ditampilin di slide Temuan, sama kayak temuan checklist SOP.
+        if (invCur && !invCur.data?.tidak_visit) {
+          const invCats = invCur.data?.categories || {};
+          Object.keys(invCats).forEach((catName) => {
+            const item = invCats[catName];
+            if (item?.status === "Rusak") {
+              findings.push({ text: catName, note: item.keterangan || "", media: item.photos || [], cat: "Inventaris" });
+            }
+          });
+        }
 
         return {
           branch: b, sopCur, sopScore, sopScorePrev, tidakVisitSOP,
@@ -720,6 +744,14 @@ export default function LaporanBulanan({ profile }) {
           { text: periodeLabel(period), options: { fontSize: 18, color: WHITE, bold: true } },
         ], { x: 0, y: 3.85, w: 13.33, h: 0.45, align: "center", margin: 0 });
 
+        if (isPersonalView) {
+          const badgeLabel = `HASIL AUDITOR ${(profile?.full_name || "").toUpperCase()}`;
+          const badgeW = Math.min(6.5, Math.max(2.6, badgeLabel.length * 0.088 + 0.5));
+          const badgeX = (13.33 - badgeW) / 2;
+          s.addShape(pptx.ShapeType.roundRect, { x: badgeX, y: 4.32, w: badgeW, h: 0.4, rectRadius: 0.2, fill: { color: GOLD } });
+          s.addText(badgeLabel, { x: badgeX, y: 4.32, w: badgeW, h: 0.4, align: "center", valign: "middle", fontSize: 11, bold: true, color: PURPLE, margin: 0 });
+        }
+
         s.addShape(pptx.ShapeType.rect, { x: 5.9, y: 4.42, w: 0.6, h: 0.014, fill: { color: "6b5f96" } });
         s.addShape(pptx.ShapeType.ellipse, { x: 6.62, y: 4.395, w: 0.09, h: 0.09, fill: { color: GOLD } });
         s.addShape(pptx.ShapeType.rect, { x: 6.83, y: 4.42, w: 0.6, h: 0.014, fill: { color: "6b5f96" } });
@@ -787,7 +819,7 @@ export default function LaporanBulanan({ profile }) {
           { icon: "\u{1F4CB}", text: "Audit Inventaris" },
           { icon: "\u{1F4B5}", text: "Audit Kas Kecil" },
           { icon: "\u2705", text: "Audit Kepatuhan SOP" },
-          { icon: "\u{1F3E2}", text: `Audit pada ${branches.length} Cabang` },
+          { icon: "\u{1F3E2}", text: `Audit pada ${auditedRows.length} Cabang` },
         ]);
       }
 
@@ -799,7 +831,7 @@ export default function LaporanBulanan({ profile }) {
         s.addText([
           { text: `\u{1F4C5} Periode Audit: ${periodeLabel(period)}`, options: { fontSize: 12, color: "E4DCFF", bold: true } },
           { text: "     |     ", options: { fontSize: 12, color: "8A7BC2" } },
-          { text: `\u{1F3EA} Total Cabang di Audit: ${branches.length} Cabang`, options: { fontSize: 12, color: "E4DCFF", bold: true } },
+          { text: `\u{1F3EA} Total Cabang di Audit: ${auditedRows.length} Cabang`, options: { fontSize: 12, color: "E4DCFF", bold: true } },
         ], { x: 0.4, y: 0.72, w: 9, h: 0.35, margin: 0 });
         addLogo(s, 11.3, 0.32);
 
@@ -848,10 +880,11 @@ export default function LaporanBulanan({ profile }) {
         s.addText("\u2757", { x: 6.9, y: 1.45, w: 0.55, h: 0.55, fontSize: 16, align: "center", valign: "middle", margin: 0, color: WHITE });
         s.addText("TEMUAN TERBANYAK", { x: 7.55, y: 1.5, w: 5.3, h: 0.45, fontSize: 16, bold: true, color: PURPLE, margin: 0 });
         s.addShape(pptx.ShapeType.line, { x: 7.55, y: 1.98, w: 1.6, h: 0, line: { color: PURPLE, width: 1.5 } });
+        s.addText("Item checklist yang paling sering TIDAK terpenuhi", { x: 7.55, y: 2.02, w: 5.3, h: 0.28, fontSize: 9, italic: true, color: GREY, margin: 0 });
 
         if (top5Temuan.length) {
           top5Temuan.forEach((item, i) => {
-            const yy = 2.3 + i * 0.98;
+            const yy = 2.55 + i * 0.98;
             s.addShape(pptx.ShapeType.roundRect, { x: 6.9, y: yy, w: 0.48, h: 0.48, rectRadius: 0.1, fill: { color: PURPLE } });
             s.addText(String(i + 1), { x: 6.9, y: yy, w: 0.48, h: 0.48, fontSize: 16, bold: true, color: WHITE, align: "center", valign: "middle", margin: 0 });
             s.addText(item.text, { x: 7.58, y: yy - 0.03, w: 5.25, h: 0.6, fontSize: 12.5, bold: true, color: "222222", valign: "middle", margin: 0 });
@@ -860,7 +893,7 @@ export default function LaporanBulanan({ profile }) {
             }
           });
         } else {
-          s.addText("Tidak ada temuan signifikan bulan ini.", { x: 6.9, y: 2.3, w: 5.8, h: 0.6, fontSize: 12, color: "666666" });
+          s.addText("Tidak ada temuan signifikan bulan ini.", { x: 6.9, y: 2.55, w: 5.8, h: 0.6, fontSize: 12, color: "666666" });
         }
       }
 
@@ -1485,7 +1518,7 @@ export default function LaporanBulanan({ profile }) {
             const cy = gridTopAdj + row * (cellH + gap);
             s.addShape(pptx.ShapeType.rect, { x: cx, y: cy, w: cellW, h: cellH, fill: { color: "F5F3FA" }, line: { color: "E5E0F0", width: 1 } });
             if (media.type === "video") {
-              s.addText("\u25B6 Video", { x: cx, y: cy, w: cellW, h: cellH, align: "center", valign: "middle", fontSize: 13, color: PURPLE });
+              s.addText("\u25B6 Klik buat nonton", { x: cx, y: cy, w: cellW, h: cellH, align: "center", valign: "middle", fontSize: 12, color: PURPLE, hyperlink: { url: media.url } });
             } else {
               // "contain" — foto ditampilin utuh (nggak dipotong), sisa ruang kosong di kotak dibiarin aja.
               try { s.addImage({ path: media.url, x: cx, y: cy, w: cellW, h: cellH, sizing: { type: "contain", w: cellW, h: cellH } }); } catch (e) { /* skip broken image */ }
@@ -1542,7 +1575,7 @@ export default function LaporanBulanan({ profile }) {
                 if (mediaList.length === 1) {
                   const media = mediaList[0];
                   if (media.type === "video") {
-                    s.addText("\u25B6 Video", { x, y: mediaY, w: colW, h: mediaH, align: "center", valign: "middle", fontSize: 14, color: PURPLE });
+                    s.addText("\u25B6 Klik buat nonton", { x, y: mediaY, w: colW, h: mediaH, align: "center", valign: "middle", fontSize: 14, color: PURPLE, hyperlink: { url: media.url } });
                   } else {
                     try { s.addImage({ path: media.url, x, y: mediaY, w: colW, h: mediaH, sizing: { type: "contain", w: colW, h: mediaH } }); } catch (e) { /* skip broken image */ }
                   }
@@ -1559,7 +1592,7 @@ export default function LaporanBulanan({ profile }) {
                     const cy = mediaY + row * (cellH + cellGap);
                     if (media.type === "video") {
                       s.addShape(pptx.ShapeType.rect, { x: cx, y: cy, w: cellW, h: cellH, fill: { color: "EDE9F5" } });
-                      s.addText("\u25B6", { x: cx, y: cy, w: cellW, h: cellH, align: "center", valign: "middle", fontSize: 16, color: PURPLE, margin: 0 });
+                      s.addText("\u25B6", { x: cx, y: cy, w: cellW, h: cellH, align: "center", valign: "middle", fontSize: 16, color: PURPLE, margin: 0, hyperlink: { url: media.url } });
                     } else {
                       try { s.addImage({ path: media.url, x: cx, y: cy, w: cellW, h: cellH, sizing: { type: "contain", w: cellW, h: cellH } }); } catch (e) { /* skip broken image */ }
                     }
@@ -1746,7 +1779,7 @@ export default function LaporanBulanan({ profile }) {
         s.addText([
           { text: `\u{1F4C5}  Periode Audit: ${periodeLabel(period)}`, options: { fontSize: 12, color: "E4DCFF", bold: true } },
           { text: "     |     ", options: { fontSize: 12, color: "8A7BC2" } },
-          { text: `\u{1F3EA}  Total Cabang Diaudit: ${branches.length} Cabang`, options: { fontSize: 12, color: "E4DCFF", bold: true } },
+          { text: `\u{1F3EA}  Total Cabang Diaudit: ${auditedRows.length} Cabang`, options: { fontSize: 12, color: "E4DCFF", bold: true } },
         ], { x: 0.4, y: 0.72, w: 9, h: 0.35, margin: 0 });
         addLogo(s, 11.3, 0.32);
 
@@ -1764,7 +1797,7 @@ export default function LaporanBulanan({ profile }) {
 
         s.addText("KONDISI UMUM", { x: lx + 0.2, y: 2.08, w: lw - 0.4, h: 0.25, fontSize: 10, bold: true, color: PURPLE, margin: 0 });
         const kondisiUmum = [
-          { b: `${branches.length} cabang`, r: " diaudit sesuai ruang lingkup audit." },
+          { b: `${auditedRows.length} cabang`, r: " diaudit sesuai ruang lingkup audit." },
           { b: `${kondisiSangatBaik + kondisiBaik}/${auditedRows.length} cabang`, r: " kondisi baik (stok & inventaris)." },
           { b: kepatuhanAvg !== null ? `${Math.round(kepatuhanAvg * 100)}%` : "\u2014", r: " kepatuhan SOP operasional." },
         ];
@@ -1779,7 +1812,7 @@ export default function LaporanBulanan({ profile }) {
 
         s.addText("HASIL AUDIT", { x: lx + 0.2, y: 3.72, w: lw - 0.4, h: 0.25, fontSize: 10, bold: true, color: PURPLE, margin: 0 });
         const hasilAudit = [
-          { c: PURPLE, n: branches.length, l: "Cabang Diaudit" },
+          { c: PURPLE, n: auditedRows.length, l: "Cabang Diaudit" },
           { c: GREEN, n: kondisiSangatBaik + kondisiBaik, l: "Cabang Kondisi Baik" },
           { c: AMBER, n: kondisiPerhatian, l: "Cabang Perlu Perhatian" },
           { c: RED, n: kondisiBerisiko, l: "Cabang Risiko Tinggi" },
