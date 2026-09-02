@@ -7,7 +7,7 @@ import {
   nowPeriode, addMonthsToPeriod,
 } from "../../lib/stokConfig";
 
-const EMPTY_FORM = { laptop: "", aksesoris: "", user: "", stok_service: "", total_unit_cabang: "" };
+const EMPTY_FORM = { laptop: "", aksesoris: "", user: "", total_unit_laptop: "", total_unit_aksesoris: "" };
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -52,6 +52,8 @@ export default function StokServiceRatio({ profile }) {
   const [fullHistory, setFullHistory] = useState([]);
 
   const [form, setForm] = useState(EMPTY_FORM);
+  const [isLegacyEntry, setIsLegacyEntry] = useState(false); // true kalau buka audit lama (pre-split, cuma punya total_unit_cabang gabungan)
+  const [entryOwnerId, setEntryOwnerId] = useState(null); // submitted_by dari record yang lagi dibuka, buat cek "boleh hapus sendiri"
   const [catatan, setCatatan] = useState("");
   const [cabangBaru, setCabangBaru] = useState(false);
   const [tidakVisit, setTidakVisit] = useState(false);
@@ -89,27 +91,33 @@ export default function StokServiceRatio({ profile }) {
   }
 
   function applyEntryToForm(entry) {
+    // Data lama (sebelum split Laptop/Aksesoris) cuma punya total_unit_cabang gabungan —
+    // dibiarin apa adanya (nggak direkonstruksi jadi 2 angka), field baru tetep kosong.
     setForm({
       laptop: entry.data?.laptop ?? "",
       aksesoris: entry.data?.aksesoris ?? "",
       user: entry.data?.user ?? "",
-      stok_service: entry.data?.stok_service ?? "",
-      total_unit_cabang: entry.data?.total_unit_cabang ?? "",
+      total_unit_laptop: entry.data?.total_unit_laptop ?? "",
+      total_unit_aksesoris: entry.data?.total_unit_aksesoris ?? "",
     });
+    setIsLegacyEntry(entry.data?.total_unit_laptop == null && entry.data?.total_unit_cabang != null);
     setCatatan(entry.data?.catatan || "");
     setCabangBaru(!!entry.data?.cabang_baru);
     setTidakVisit(!!entry.data?.tidak_visit);
     setAuditDate(entry.data?.audit_date || todayInputValue());
     setSelectedEntryId(entry.id);
+    setEntryOwnerId(entry.submitted_by || null);
   }
 
   function startNewEntry(period) {
     setForm(EMPTY_FORM);
+    setIsLegacyEntry(false);
     setCatatan("");
     setCabangBaru(false);
     setTidakVisit(false);
     setAuditDate(period === nowPeriode() ? todayInputValue() : period + "-01");
     setSelectedEntryId(null);
+    setEntryOwnerId(null);
     setSaved(false);
   }
 
@@ -157,13 +165,17 @@ export default function StokServiceRatio({ profile }) {
     startNewEntry(viewPeriod);
   }
 
-  const ratio = calcServiceRatio(form.stok_service, form.total_unit_cabang);
-  const status = serviceStatusInfo(ratio);
+  const ratioLaptop = calcServiceRatio(form.laptop, form.total_unit_laptop);
+  const statusLaptop = serviceStatusInfo(ratioLaptop);
+  const ratioAksesoris = calcServiceRatio(form.aksesoris, form.total_unit_aksesoris);
+  const statusAksesoris = serviceStatusInfo(ratioAksesoris);
   const period = periodFromDate(auditDate);
   const selectedEntry = entriesThisPeriod.find((e) => e.id === selectedEntryId) || null;
 
   async function deleteRecord() {
-    if (!selectedEntry || profile?.role !== "super_admin") return;
+    if (!selectedEntry) return;
+    const isOwner = profile?.role === "auditor" && selectedEntry.submitted_by === profile?.id;
+    if (profile?.role !== "super_admin" && !isOwner) return;
     if (!window.confirm(`Hapus audit ${selectedBranch.name} tanggal ${shortDate(selectedEntry.data?.audit_date)}? Aksi ini tidak bisa dibatalkan.`)) return;
     setSaving(true);
     setError(null);
@@ -204,10 +216,18 @@ export default function StokServiceRatio({ profile }) {
               laptop: parseInt(form.laptop, 10) || 0,
               aksesoris: parseInt(form.aksesoris, 10) || 0,
               user: parseInt(form.user, 10) || 0,
-              stok_service: parseInt(form.stok_service, 10) || 0,
-              total_unit_cabang: parseInt(form.total_unit_cabang, 10) || 0,
-              ratio,
-              indikator: status.lbl,
+              total_unit_laptop: parseInt(form.total_unit_laptop, 10) || 0,
+              total_unit_aksesoris: parseInt(form.total_unit_aksesoris, 10) || 0,
+              ratio_laptop: ratioLaptop,
+              ratio_aksesoris: ratioAksesoris,
+              // "ratio" gabungan (rata-rata Laptop & Aksesoris) — DIPERTAHANKAN buat kompatibilitas
+              // sama tempat lain (kartu ringkasan, PDF Laporan Audit Stok, Dashboard Audit) yang
+              // masih narik 1 angka `ratio`. Nanti kalau tempat2 itu udah diupdate nampilin 2 angka
+              // terpisah, field ini bisa dihapus.
+              ratio: (ratioLaptop + ratioAksesoris) / 2,
+              indikator_laptop: statusLaptop.lbl,
+              indikator_aksesoris: statusAksesoris.lbl,
+              indikator: statusLaptop.lbl === "Perlu Perhatian" || statusAksesoris.lbl === "Perlu Perhatian" ? "Perlu Perhatian" : (statusLaptop.lbl === "Monitoring" || statusAksesoris.lbl === "Monitoring" ? "Monitoring" : "Terkendali"),
               catatan,
               cabang_baru: cabangBaru,
               auditor_name: profile?.full_name || null,
@@ -311,9 +331,13 @@ export default function StokServiceRatio({ profile }) {
       <div class="content">
         <p><b>Cabang:</b> ${esc(selectedBranch.name)} &nbsp;&middot;&nbsp; <b>Audit tanggal:</b> ${esc(shortDate(auditDate))}${cabangBaru ? '<span class="baru-badge">CABANG BARU</span>' : ""}</p>
         <div class="metric-row">
-          <div class="metric-card"><div class="l">Stok Service</div><div class="v">${form.stok_service || 0} unit</div></div>
-          <div class="metric-card"><div class="l">% Ratio Service</div><div class="v" style="color:${status.color};">${formatRatioPct(ratio)}</div></div>
-          <div class="metric-card"><div class="l">Status</div><div class="v" style="font-size:14px;color:${status.color};">${esc(status.lbl)}</div></div>
+          <div class="metric-card"><div class="l">Ratio Laptop</div><div class="v" style="color:${statusLaptop.color};">${formatRatioPct(ratioLaptop)}</div></div>
+          <div class="metric-card"><div class="l">Ratio Aksesoris</div><div class="v" style="color:${statusAksesoris.color};">${formatRatioPct(ratioAksesoris)}</div></div>
+          <div class="metric-card"><div class="l">User Service</div><div class="v">${form.user || 0} unit</div></div>
+        </div>
+        <div class="metric-row">
+          <div class="metric-card"><div class="l">Status Laptop</div><div class="v" style="font-size:14px;color:${statusLaptop.color};">${esc(statusLaptop.lbl)}</div></div>
+          <div class="metric-card"><div class="l">Status Aksesoris</div><div class="v" style="font-size:14px;color:${statusAksesoris.color};">${esc(statusAksesoris.lbl)}</div></div>
         </div>
         <table>
           <thead><tr><th>Tanggal Audit</th><th>% Ratio</th><th>Status</th></tr></thead>
@@ -462,7 +486,7 @@ export default function StokServiceRatio({ profile }) {
             <button className="btn" disabled={saving || !canEdit} onClick={saveRecord} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
               {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan" : "Hanya Lihat"}
             </button>
-            {profile?.role === "super_admin" && selectedEntryId && (
+            {(profile?.role === "super_admin" || (profile?.role === "auditor" && entryOwnerId === profile?.id)) && selectedEntryId && (
               <button className="btn-ghost" disabled={saving} onClick={deleteRecord} style={{ color: "var(--danger-text)", borderColor: "var(--danger-text)" }}>
                 Hapus Data
               </button>
@@ -554,24 +578,30 @@ export default function StokServiceRatio({ profile }) {
                   <IconField label="Unit Laptop diservice" icon={ICON.laptop} unit="unit">
                     <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.laptop} onChange={(e) => setField("laptop", e.target.value)} disabled={!canEdit} />
                   </IconField>
+                  <IconField label="Total Unit Laptop" icon={ICON.building} unit="unit">
+                    <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.total_unit_laptop} onChange={(e) => setField("total_unit_laptop", e.target.value)} disabled={!canEdit} />
+                  </IconField>
                   <IconField label="Unit Aksesoris diservice" icon={ICON.bag} unit="unit">
                     <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.aksesoris} onChange={(e) => setField("aksesoris", e.target.value)} disabled={!canEdit} />
+                  </IconField>
+                  <IconField label="Total Unit Aksesoris" icon={ICON.building} unit="unit">
+                    <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.total_unit_aksesoris} onChange={(e) => setField("total_unit_aksesoris", e.target.value)} disabled={!canEdit} />
                   </IconField>
                   <IconField label="User Service" icon={ICON.user} unit="unit">
                     <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.user} onChange={(e) => setField("user", e.target.value)} disabled={!canEdit} />
                   </IconField>
-                  <IconField label="Stok Service" icon={ICON.box} unit="unit">
-                    <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.stok_service} onChange={(e) => setField("stok_service", e.target.value)} disabled={!canEdit} />
-                  </IconField>
                 </div>
-                <IconField label="Total Unit / Cabang" icon={ICON.building} unit="unit">
-                  <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.total_unit_cabang} onChange={(e) => setField("total_unit_cabang", e.target.value)} disabled={!canEdit} />
-                </IconField>
 
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 18, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px" }}>
+                {isLegacyEntry && (
+                  <div style={{ fontSize: 11, color: "var(--text-faint)", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 8, padding: "8px 12px", marginBottom: 14 }}>
+                    Audit lama ini masih pakai format gabungan (sebelum Service Ratio dipecah Laptop/Aksesoris) — datanya dibiarin apa adanya, nggak direkonstruksi.
+                  </div>
+                )}
+
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 4, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px" }}>
                   <div style={{ display: "flex", gap: 8, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5 }}>
                     <span style={{ color: "#7c3aed", flexShrink: 0, width: 15, height: 15 }}>{ICON.info}</span>
-                    <span>Laptop, Aksesoris &amp; User Service dipakai buat pencatatan. Rasio = Stok Service &divide; Total Unit/Cabang &times; 100%.</span>
+                    <span>Rasio Laptop = Unit Laptop Diservice &divide; Total Unit Laptop. Rasio Aksesoris = Unit Aksesoris Diservice &divide; Total Unit Aksesoris. User Service dipakai buat pencatatan aja.</span>
                   </div>
                   <button className="btn" style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }} onClick={() => setSaved(false)}>
                     <span style={{ width: 14, height: 14 }}>{ICON.calc}</span> Hitung Ratio
@@ -584,30 +614,28 @@ export default function StokServiceRatio({ profile }) {
                 <div style={{ fontWeight: 700, fontSize: 14.5, color: "#7c3aed", marginBottom: 2 }}>2. HASIL PERHITUNGAN</div>
                 <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 16 }}>Hasil perhitungan otomatis berdasarkan data di samping</div>
 
-                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 16 }}>
-                  <div>
-                    <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 4 }}>Stok Service</div>
-                    <div style={{ fontSize: 26, fontWeight: 800 }}>{form.stok_service || 0} <span style={{ fontSize: 12, fontWeight: 400, color: "var(--text-faint)" }}>unit</span></div>
+                {[
+                  { label: "Laptop", ratio: ratioLaptop, status: statusLaptop },
+                  { label: "Aksesoris", ratio: ratioAksesoris, status: statusAksesoris },
+                ].map((r, i) => (
+                  <div key={r.label} style={{ marginBottom: i === 0 ? 16 : 0, paddingBottom: i === 0 ? 16 : 0, borderBottom: i === 0 ? "1px solid var(--border)" : "none" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text-secondary)" }}>{r.label}</div>
+                      <div style={{ fontSize: 20, fontWeight: 800, color: r.status.color }}>{formatRatioPct(r.ratio)}</div>
+                    </div>
+                    <div style={{ height: 6, background: "var(--border)", borderRadius: 4, overflow: "hidden", marginBottom: 8 }}>
+                      <div style={{ height: "100%", width: `${Math.min((r.ratio / SERVICE_THRESHOLDS.monitoring) * 100, 100)}%`, background: r.status.color, transition: "width .2s" }} />
+                    </div>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, background: `${r.status.color}18`, border: `1px solid ${r.status.color}55`, borderRadius: 20, padding: "5px 12px", width: "fit-content" }}>
+                      <span style={{ width: 13, height: 13, color: r.status.color }}>{ICON.eye}</span>
+                      <span style={{ fontWeight: 800, fontSize: 11.5, color: r.status.color, letterSpacing: "0.03em" }}>{r.status.lbl.toUpperCase()}</span>
+                    </div>
                   </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 4 }}>% Ratio Service</div>
-                    <div style={{ fontSize: 26, fontWeight: 800, color: status.color }}>{formatRatioPct(ratio)}</div>
-                  </div>
-                </div>
-                <div style={{ height: 6, background: "var(--border)", borderRadius: 4, overflow: "hidden", marginBottom: 16 }}>
-                  <div style={{ height: "100%", width: `${Math.min((ratio / SERVICE_THRESHOLDS.monitoring) * 100, 100)}%`, background: status.color, transition: "width .2s" }} />
-                </div>
+                ))}
 
-                <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 6 }}>Status</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 8, background: `${status.color}18`, border: `1px solid ${status.color}55`, borderRadius: 20, padding: "6px 14px", width: "fit-content", marginBottom: 8 }}>
-                  <span style={{ width: 15, height: 15, color: status.color }}>{ICON.eye}</span>
-                  <span style={{ fontWeight: 800, fontSize: 12.5, color: status.color, letterSpacing: "0.03em" }}>{status.lbl.toUpperCase()}</span>
-                </div>
-                <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginBottom: 16, lineHeight: 1.5 }}>{statusDesc(status.lbl)}</div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 14 }}>
-                  <ThresholdLegend color="#1a9e6e" label="Terkendali" range="0 \u2013 0,22%" />
-                  <ThresholdLegend color="#b07212" label="Monitoring" range="0,22 \u2013 0,33%" />
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 14, marginTop: 16 }}>
+                  <ThresholdLegend color="#1a9e6e" label="Terkendali" range="0 – 0,22%" />
+                  <ThresholdLegend color="#b07212" label="Monitoring" range="0,22 – 0,33%" />
                   <ThresholdLegend color="#a32020" label="Perlu Perhatian" range="> 0,33%" />
                 </div>
               </div>

@@ -233,8 +233,10 @@ export default function SopAuditCabang({ profile }) {
   const period = periodFromDate(auditDate);
 
   async function deleteAudit() {
-    if (!selectedEntryId || profile?.role !== "super_admin") return;
+    if (!selectedEntryId) return;
     const entry = entriesThisPeriod.find((e) => e.id === selectedEntryId);
+    const isOwner = profile?.role === "auditor" && entry?.submitted_by === profile?.id;
+    if (profile?.role !== "super_admin" && !isOwner) return;
     if (!window.confirm(`Hapus audit SOP ${selectedBranch.name} tanggal ${shortDate(entry?.data?.audit_date)}? Aksi ini tidak bisa dibatalkan.`)) return;
     setSaving(true);
     setError(null);
@@ -488,7 +490,7 @@ export default function SopAuditCabang({ profile }) {
             <button className="btn" disabled={saving || !canEdit} onClick={saveAudit} style={{ alignSelf: "flex-end" }} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
               {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan Hasil Audit" : "Hanya Lihat"}
             </button>
-            {profile?.role === "super_admin" && selectedEntryId && (
+            {(profile?.role === "super_admin" || (profile?.role === "auditor" && entriesThisPeriod.find((e) => e.id === selectedEntryId)?.submitted_by === profile?.id)) && selectedEntryId && (
               <button className="btn-ghost" disabled={saving} onClick={deleteAudit} style={{ alignSelf: "flex-end", color: "var(--danger-text)", borderColor: "var(--danger-border, rgba(239,68,68,0.35))" }}>
                 Hapus Data
               </button>
