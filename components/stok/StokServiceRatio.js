@@ -36,7 +36,9 @@ function statusDesc(lbl) {
 }
 
 export default function StokServiceRatio({ profile }) {
-  const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
+  // Mode "lihat sebagai": seluruh isian dikunci. Pagar sungguhannya ada di
+  // RLS — submitted_by wajib sama dengan pengguna yang benar-benar login.
+  const canEdit = (profile?.role === "auditor" || profile?.role === "super_admin") && !profile?.liatSebagai;
   // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua kayak biasa).
   const ISOLATION_START_PERIOD = "2026-08";
   const [branches, setBranches] = useState([]);

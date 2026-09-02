@@ -32,7 +32,9 @@ function shortDate(d) {
 }
 
 export default function SopAuditCabang({ profile }) {
-  const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
+  // Mode "lihat sebagai": seluruh isian dikunci. Pagar sungguhannya ada di
+  // RLS — submitted_by wajib sama dengan pengguna yang benar-benar login.
+  const canEdit = (profile?.role === "auditor" || profile?.role === "super_admin") && !profile?.liatSebagai;
   const [branches, setBranches] = useState([]);
   const [loadingBranches, setLoadingBranches] = useState(true);
   const [latestByBranchPeriod, setLatestByBranchPeriod] = useState({}); // buat kartu ringkasan & pilih-cabang

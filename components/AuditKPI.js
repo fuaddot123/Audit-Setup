@@ -17,7 +17,9 @@ export default function AuditKPI({ profile }) {
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState(false);
 
-  const canEdit = profile?.role === "super_admin" || (profile?.role === "auditor" && selectedAuditor?.id === profile?.id);
+  // Mode "lihat sebagai": seluruh isian dikunci. Pagar sungguhannya ada di
+  // RLS — submitted_by wajib sama dengan pengguna yang benar-benar login.
+  const canEdit = (profile?.role === "super_admin" || (profile?.role === "auditor" && selectedAuditor?.id === profile?.id)) && !profile?.liatSebagai;
   // Isolasi per-auditor — role "auditor" cuma bisa liat kartunya sendiri di daftar pilih-auditor,
   // nama auditor lain nggak ditampilin sama sekali (bukan cuma di-gate per periode kayak
   // sebelumnya — balik ke versi "sembunyiin orangnya" sesuai permintaan user).

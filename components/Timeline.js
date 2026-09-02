@@ -78,7 +78,9 @@ export default function Timeline({ profile, onSelect }) {
   const [holidays, setHolidays] = useState({}); // { "2026-08-17": "Hari Kemerdekaan Republik Indonesia", ... }
 
   // Auditor bikin jadwalnya sendiri-sendiri; super_admin cuma mantau (read-only, liat semua).
-  const canManage = profile?.role === "auditor";
+  // Mode "lihat sebagai": seluruh isian dikunci. Pagar sungguhannya ada di
+  // RLS — submitted_by wajib sama dengan pengguna yang benar-benar login.
+  const canManage = profile?.role === "auditor" && !profile?.liatSebagai;
   const isolate = profile?.role === "auditor";
 
   useEffect(() => { loadAll(); }, []);

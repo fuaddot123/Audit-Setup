@@ -28,7 +28,9 @@ function fmtDate(d) { if (!d) return "\u2014"; return new Date(d + "T00:00:00").
 
 export default function BiayaDinas({ profile }) {
   // Auditor bikin pengajuannya sendiri; super_admin bisa liat semua (oversight) & edit siapa aja.
-  const canManage = profile?.role === "auditor" || profile?.role === "super_admin";
+  // Mode "lihat sebagai": seluruh isian dikunci. Pagar sungguhannya ada di
+  // RLS — submitted_by wajib sama dengan pengguna yang benar-benar login.
+  const canManage = (profile?.role === "auditor" || profile?.role === "super_admin") && !profile?.liatSebagai;
   const isolate = profile?.role === "auditor";
 
   const [list, setList] = useState([]);

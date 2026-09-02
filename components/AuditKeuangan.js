@@ -129,7 +129,9 @@ export default function AuditKeuangan({ profile }) {
   const [exportAllPeriod, setExportAllPeriod] = useState(null);
   const [exportBranchIds, setExportBranchIds] = useState([]);
 
-  const canEdit = profile.role === "auditor" || profile.role === "super_admin";
+  // Mode "lihat sebagai": seluruh isian dikunci. Pagar sungguhannya ada di
+  // RLS — submitted_by wajib sama dengan pengguna yang benar-benar login.
+  const canEdit = (profile.role === "auditor" || profile.role === "super_admin") && !profile?.liatSebagai;
 
   useEffect(() => { loadAll(); }, []);
 

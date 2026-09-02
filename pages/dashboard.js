@@ -12,10 +12,13 @@ import BeritaAcara from "../components/BeritaAcara";
 import LaporanBulanan from "../components/LaporanBulanan";
 import BiayaDinas from "../components/BiayaDinas";
 import DashboardAudit from "../components/DashboardAudit";
+import MasterDisplay from "../components/MasterDisplay";
 
 export default function Dashboard() {
   const router = useRouter();
   const [profile, setProfile] = useState(null);
+  // Akun yang sedang "dilihat" lewat tombol pindah akun. null = akun sendiri.
+  const [liatSebagai, setLiatSebagai] = useState(null);
   const [loading, setLoading] = useState(true);
 
   // Menu aktif sekarang ditarik dari URL (?m=...&sub=...), bukan state React doang — biar
@@ -40,6 +43,17 @@ export default function Dashboard() {
     })();
   }, [router]);
 
+  // Profil yang dioper ke seluruh modul. Saat melihat akun orang lain,
+  // id-nya ditukar supaya query menampilkan data orang itu, dan penanda
+  // liatSebagai membuat setiap modul mengunci isiannya.
+  //
+  // roleAsli sengaja dibawa terpisah: gerbang "menu ini khusus Super Admin"
+  // harus melihat peran SUNGGUHAN, bukan peran orang yang sedang dilihat.
+  const profileEfektif = profile && liatSebagai
+    ? { ...profile, id: liatSebagai.id, full_name: liatSebagai.full_name,
+        role: liatSebagai.role || "auditor", roleAsli: profile.role, liatSebagai }
+    : profile && { ...profile, roleAsli: profile.role, liatSebagai: null };
+
   if (loading || !profile || !router.isReady) {
     return (
       <div style={{ minHeight: "100vh", background: "var(--bg-page)", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 16, color: "var(--text-secondary)" }}>
@@ -51,25 +65,29 @@ export default function Dashboard() {
 
   return (
     <div style={{ display: "flex", minHeight: "100vh" }}>
-      <Sidebar active={active} activeSub={activeSub} onSelect={handleSelect} profile={profile} />
+      <Sidebar active={active} activeSub={activeSub} onSelect={handleSelect}
+        profile={profileEfektif} profileAsli={profile}
+        liatSebagai={liatSebagai} onGantiAkun={setLiatSebagai} />
       {active === "dashboard_audit" ? (
-        <DashboardAudit profile={profile} />
+        <DashboardAudit profile={profileEfektif} />
       ) : active === "keuangan" ? (
-        <AuditKeuangan profile={profile} />
+        <AuditKeuangan profile={profileEfektif} />
       ) : active === "timeline" ? (
-        <Timeline profile={profile} onSelect={handleSelect} />
+        <Timeline profile={profileEfektif} onSelect={handleSelect} />
       ) : active === "sop" ? (
-        <AuditSOP profile={profile} sub={activeSub || "cabang"} />
+        <AuditSOP profile={profileEfektif} sub={activeSub || "cabang"} />
       ) : active === "stok" ? (
-        <AuditStok profile={profile} sub={activeSub || "service"} />
+        <AuditStok profile={profileEfektif} sub={activeSub || "service"} />
       ) : active === "kpi" ? (
-        <AuditKPI profile={profile} />
+        <AuditKPI profile={profileEfektif} />
       ) : active === "berita_acara" ? (
-        <BeritaAcara profile={profile} />
+        <BeritaAcara profile={profileEfektif} />
       ) : active === "biaya_dinas" ? (
-        <BiayaDinas profile={profile} />
+        <BiayaDinas profile={profileEfektif} />
+      ) : active === "master" ? (
+        <MasterDisplay profile={profileEfektif} />
       ) : active === "laporan_bulanan" ? (
-        <LaporanBulanan profile={profile} />
+        <LaporanBulanan profile={profileEfektif} />
       ) : (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-faint)", flexDirection: "column" }}>
           <div className="display" style={{ fontSize: 19, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>Modul ini belum dibuat</div>

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { supabase } from "../lib/supabaseClient";
 import { useTheme } from "../lib/ThemeContext";
 import RadarLogo from "./RadarLogo";
+import AkunSwitcher from "./AkunSwitcher";
 
 const MODULES = [
   { key: "dashboard_audit", label: "Dashboard Audit", ready: true },
@@ -29,6 +30,8 @@ const MODULES = [
   { key: "laporan_bulanan", label: "Laporan Bulanan", ready: true },
   { key: "laporan_tahunan", label: "Laporan Tahunan", ready: false },
   { key: "timeline", label: "Timeline", ready: true },
+  // Hanya muncul untuk Super Admin — lihat penyaringan di bawah.
+  { key: "master", label: "Master Data", ready: true, hanyaSuperAdmin: true },
 ];
 
 function ChevronIcon({ open }) {
@@ -50,7 +53,7 @@ function hrefForSub(m, s) {
   return `/dashboard?m=${m.key}&sub=${s.key}`;
 }
 
-export default function Sidebar({ active, activeSub, onSelect, profile }) {
+export default function Sidebar({ active, activeSub, onSelect, profile, profileAsli, liatSebagai, onGantiAkun }) {
   const router = useRouter();
   const { theme, toggleTheme } = useTheme();
   const [expanded, setExpanded] = useState({ [active]: true });
@@ -68,7 +71,7 @@ export default function Sidebar({ active, activeSub, onSelect, profile }) {
     if (active !== m.key) onSelect(m.key, m.subs[0].key);
   }
 
-  const roleLabel = { super_admin: "Super Admin", auditor: "Auditor", ceo: "CEO", viewer: "Viewer" }[profile?.role] || "\u2026";
+  const roleLabel = { super_admin: "Super Admin", auditor: "Auditor", ceo: "CEO", viewer: "Viewer" }[(profileAsli || profile)?.role] || "\u2026";
 
   return (
     <div style={{ width: 240, flexShrink: 0, background: "var(--sidebar-bg)", height: "100vh", position: "sticky", top: 0, alignSelf: "flex-start", padding: "22px 14px", display: "flex", flexDirection: "column", borderRight: "1px solid var(--border)", overflowY: "auto" }}>
@@ -77,7 +80,7 @@ export default function Sidebar({ active, activeSub, onSelect, profile }) {
         <div className="display" style={{ color: "var(--sidebar-text)", fontSize: 18, fontWeight: 600 }}>KLA Radar</div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, overflowY: "auto" }}>
-        {MODULES.map((m) => {
+        {MODULES.filter((m) => !m.hanyaSuperAdmin || profileAsli?.role === "super_admin").map((m) => {
           const isActive = active === m.key;
           const isOpen = !!expanded[m.key];
           return (
@@ -131,8 +134,9 @@ export default function Sidebar({ active, activeSub, onSelect, profile }) {
           );
         })}
       </div>
+      <AkunSwitcher profileAsli={profileAsli || profile} liatSebagai={liatSebagai} onGanti={onGantiAkun} />
       <div style={{ borderTop: "1px solid var(--sidebar-border)", paddingTop: 14, marginTop: 14 }}>
-        <div style={{ color: "var(--sidebar-text)", fontSize: 13, fontWeight: 500 }}>{profile?.full_name || "\u2026"}</div>
+        <div style={{ color: "var(--sidebar-text)", fontSize: 13, fontWeight: 500 }}>{(profileAsli || profile)?.full_name || "\u2026"}</div>
         <div style={{ color: "var(--sidebar-text-muted)", fontSize: 11.5, marginBottom: 10 }}>Peran: {roleLabel}</div>
         <button className="btn-ghost" onClick={toggleTheme} style={{ width: "100%", marginBottom: 8, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, color: "var(--sidebar-text-muted)", borderColor: "var(--sidebar-border)" }}>
           {theme === "dark" ? (
