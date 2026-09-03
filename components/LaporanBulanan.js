@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
-import { calcWeightedFromRecord, CATS, CONDITION_ITEMS, nowPeriode, periodeLabel, addMonthsToPeriod } from "../lib/sopConfig";
+import { calcWeightedFromRecord, CATS, CONDITION_ITEMS, isLegacyChecklistRecord, listFailedItems, nowPeriode, periodeLabel, addMonthsToPeriod } from "../lib/sopConfig";
 import { kesehatanStatusInfo, serviceStatusInfo, laptopStatusInfo } from "../lib/stokConfig";
 import { INVENTARIS_CATEGORIES } from "./AuditInventaris";
 import BranchMultiSelect from "./BranchMultiSelect";
@@ -80,10 +80,9 @@ function kategoriInfo(pct) {
 }
 function countSopTemuan(sopRecord) {
   if (!sopRecord) return 0;
-  const checks = sopRecord.data?.checks || {};
-  let count = 0;
-  CATS.forEach((c) => c.items.forEach((_, i) => { if (!checks[c.id + "_" + i]) count++; }));
-  return count;
+  // listFailedItems() otomatis milih daftar kategori yang PAS (baru/lama), jadi audit lama
+  // ikut kehitung bener (bukan salah nyasar/nol), bukan cuma di-skip.
+  return listFailedItems(sopRecord.data).length;
 }
 function countStokTemuan(stokRecord) {
   if (!stokRecord || stokRecord.data?.tidak_visit) return 0;
@@ -511,6 +510,7 @@ export default function LaporanBulanan({ profile }) {
           if (!sopRec) return { hasData: false, tidakVisit: false };
           if (sopRec.data?.tidak_visit) return { hasData: true, tidakVisit: true };
           const sopTemuan = countSopTemuan(sopRec);
+          if (sopTemuan === null) return { hasData: true, tidakVisit: false, isLegacy: true };
           const stokTemuan = countStokTemuan(stokRec);
           const keuanganTemuan = keuSisa !== null && keuSisa < 0 ? 1 : 0;
           const invTemuan = invRec && !invRec.data?.tidak_visit ? countRusakNonOverlap(invRec.data?.categories) : 0;
@@ -522,21 +522,19 @@ export default function LaporanBulanan({ profile }) {
         }
         const kepCurDetail = kepDetail(sopCur, kesCur, sisa, invCur);
         const kepPrevDetail = kepDetail(sopPrev, kesPrev, sisaPrev, invPrev);
-        const kepatuhan = kepCurDetail.hasData && !kepCurDetail.tidakVisit ? kepCurDetail.pct : null;
-        const totalTemuanBranch = kepCurDetail.hasData && !kepCurDetail.tidakVisit ? kepCurDetail.totalTemuan : null;
+        const kepatuhan = kepCurDetail.hasData && !kepCurDetail.tidakVisit && !kepCurDetail.isLegacy ? kepCurDetail.pct : null;
+        const totalTemuanBranch = kepCurDetail.hasData && !kepCurDetail.tidakVisit && !kepCurDetail.isLegacy ? kepCurDetail.totalTemuan : null;
 
-        // Temuan (foto+catatan) buat slide per-cabang
+        // Temuan (foto+catatan) buat slide per-cabang — listFailedItems() otomatis milih
+        // kategori yang pas (baru/lama), jadi audit lama tetep muncul temuan+fotonya, bukan
+        // di-skip total kayak sebelumnya.
         const findings = [];
         if (sopCur && !tidakVisitSOP) {
-          const checks = sopCur.data?.checks || {};
           const notes = sopCur.data?.notes || {};
           const photos = sopCur.data?.photos || {};
-          CATS.forEach((c) => c.items.forEach((text, i) => {
-            const key = c.id + "_" + i;
-            if (!checks[key]) {
-              findings.push({ text, note: notes[key] || "", media: photos[key] || [], cat: c.label });
-            }
-          }));
+          listFailedItems(sopCur.data).forEach(({ key, text, catLabel }) => {
+            findings.push({ text, note: notes[key] || "", media: photos[key] || [], cat: catLabel });
+          });
         }
         // Item Inventaris (dari Berita Acara) yang ditandain "Rusak" — foto buktinya ikut
         // ditampilin di slide Temuan, sama kayak temuan checklist SOP.
@@ -589,16 +587,15 @@ export default function LaporanBulanan({ profile }) {
       // Cabang Baru dikecualikan dari ranking ini (datanya tetap ada, cuma nggak ikut nyumbang ke Temuan Terbanyak).
       const itemFailCount = {};
       auditedRows.filter((r) => !r.sopCur?.data?.cabang_baru).forEach((r) => {
-        const checks = r.sopCur?.data?.checks || {};
-        CATS.forEach((c) => c.items.forEach((text, i) => {
-          const key = c.id + "_" + i;
-          if (!checks[key]) itemFailCount[key] = (itemFailCount[key] || 0) + 1;
-        }));
+        // Digabung pakai TEKS pertanyaan (bukan key catId_index) — soalnya beberapa kategori
+        // punya ID sama persis antara checklist lama & baru (Gudang, Kasir, dst) tapi ISI
+        // pertanyaannya beda, jadi kalau digabung pakai key doang bisa ketuker/campur.
+        listFailedItems(r.sopCur?.data).forEach(({ text }) => {
+          itemFailCount[text] = (itemFailCount[text] || 0) + 1;
+        });
       });
-      const itemTextMap = {};
-      CATS.forEach((c) => c.items.forEach((text, i) => { itemTextMap[c.id + "_" + i] = text; }));
       const top5Temuan = Object.entries(itemFailCount).sort((a, b) => b[1] - a[1]).slice(0, 5)
-        .map(([key, n]) => ({ text: itemTextMap[key] || key, count: n }));
+        .map(([text, n]) => ({ text, count: n }));
 
       const avgSvc = (list) => { const v = list.filter((x) => x !== null); return v.length ? v.reduce((s, x) => s + x, 0) / v.length : null; };
       const svcNow = avgSvc(rows.filter((r) => !r.svcCurDetail?.cabangBaru).map((r) => r.svcRatio));

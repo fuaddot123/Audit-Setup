@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { sortBranches } from "../../lib/branchOrder";
 import {
-  CATS, TOTAL_ITEMS, TIER_WEIGHTS, TIER1_CATS, TIER3_CATS, ALERT_THRESHOLD, CONDITION_ITEMS,
+  CATS, TOTAL_ITEMS, TOTAL_POINTS, ALERT_THRESHOLD, CONDITION_ITEMS, CRITICAL_ITEMS,
   calcWeightedScore, calcWeightedFromRecord, scoreColor, periodFromDate, todayInputValue, periodeLabel,
   nowPeriode, addMonthsToPeriod,
 } from "../../lib/sopConfig";
@@ -225,10 +225,16 @@ export default function SopAuditCabang({ profile }) {
 
   function catScore(catId) {
     const cat = CATS.find((c) => c.id === catId);
-    return cat.items.filter((_, i) => checklist[catId + "_" + i]).length;
+    // Poin item yang dicentang, bukan jumlah item — konsisten sama skema baru (skor = total poin lolos).
+    return cat.items.reduce((sum, _, i) => (checklist[catId + "_" + i] ? sum + cat.points[i] : sum), 0);
+  }
+  function catMaxPoints(catId) {
+    const cat = CATS.find((c) => c.id === catId);
+    return cat.points.reduce((s, p) => s + p, 0);
   }
 
   const totalDone = useMemo(() => CATS.reduce((s, c) => s + catScore(c.id), 0), [checklist]);
+  const itemsChecked = useMemo(() => CATS.reduce((s, c) => s + c.items.filter((_, i) => checklist[c.id + "_" + i]).length, 0), [checklist]);
   const weightedPct = useMemo(() => calcWeightedScore(checklist), [checklist]);
   const period = periodFromDate(auditDate);
 
@@ -269,7 +275,7 @@ export default function SopAuditCabang({ profile }) {
     setError(null);
     try {
       const cats = {};
-      CATS.forEach((c) => { cats[c.id] = { score: catScore(c.id), total: c.items.length }; });
+      CATS.forEach((c) => { cats[c.id] = { score: catScore(c.id), total: catMaxPoints(c.id) }; });
       const cleanNotes = {};
       Object.keys(notes).forEach((k) => { if (notes[k] && notes[k].trim()) cleanNotes[k] = notes[k].trim(); });
 
@@ -352,15 +358,22 @@ export default function SopAuditCabang({ profile }) {
 
             const total = branches.length;
             const tidakVisitCount = branches.filter((b) => rowsByBranch[b.id]?.data?.tidak_visit).length;
+            // Audit format LAMA (checklist sebelum diganti) dikecualikan dari daftar ini —
+            // skornya nggak bisa dihitung ulang pakai kategori baru (bakal ngasal/nyesatin
+            // kalau dipaksa), jadi nggak ikut rata-rata/ranking/Top Temuan sama sekali.
             const curList = branches.map((b) => {
               const row = rowsByBranch[b.id];
               if (!row || row.data?.tidak_visit) return null;
-              return { branch: b, row, score: calcWeightedFromRecord(row.data) };
+              const score = calcWeightedFromRecord(row.data);
+              if (score === null) return null;
+              return { branch: b, row, score };
             }).filter(Boolean);
             const prevList = branches.map((b) => {
               const row = prevRowsByBranch[b.id];
               if (!row || row.data?.tidak_visit) return null;
-              return { branch: b, row, score: calcWeightedFromRecord(row.data) };
+              const score = calcWeightedFromRecord(row.data);
+              if (score === null) return null;
+              return { branch: b, row, score };
             }).filter(Boolean);
 
             const auditedCount = curList.length;
@@ -451,6 +464,11 @@ export default function SopAuditCabang({ profile }) {
                     </div>
                     {isTidakVisit ? (
                       <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: "#88888822", color: "#888", fontSize: 11, fontWeight: 600 }}>Tidak Visit</span>
+                    ) : row && score === null ? (
+                      <>
+                        <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: "#88888822", color: "#888", fontSize: 11, fontWeight: 600 }}>Format Lama</span>
+                        <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 6 }}>Checklist sebelum diganti &middot; {shortDate(row.data?.audit_date)}</div>
+                      </>
                     ) : row ? (
                       <>
                         <div style={{ fontSize: 24, fontWeight: 800, color: scoreColor(score) }}>{score}%</div>
@@ -528,6 +546,8 @@ export default function SopAuditCabang({ profile }) {
                     {e.data?.cabang_baru && <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>⭐ Baru</span>}
                     {isTV ? (
                       <span style={{ fontSize: 11, fontWeight: 700, color: "#888" }}>Tidak Visit</span>
+                    ) : sc === null ? (
+                      <span style={{ fontSize: 10.5, fontWeight: 700, color: "#888" }}>Format Lama</span>
                     ) : (
                       <span style={{ fontSize: 11.5, fontWeight: 700, color: scoreColor(sc) }}>{sc}%</span>
                     )}
@@ -567,7 +587,7 @@ export default function SopAuditCabang({ profile }) {
           <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
             <div style={{ fontSize: 26, fontWeight: 800, color: scoreColor(weightedPct) }}>{weightedPct}%</div>
             <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 4 }}>{totalDone} dari {TOTAL_ITEMS} poin terpenuhi (skor tertimbang)</div>
+              <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 4 }}>{itemsChecked} dari {TOTAL_ITEMS} item dicentang &middot; {totalDone} dari {TOTAL_POINTS} poin terpenuhi</div>
               <div style={{ height: 6, background: "var(--bg-page)", borderRadius: 4, overflow: "hidden" }}>
                 <div style={{ height: "100%", width: `${weightedPct}%`, background: scoreColor(weightedPct), transition: "width .2s" }} />
               </div>
@@ -592,9 +612,9 @@ export default function SopAuditCabang({ profile }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             {CATS.map((c) => {
               const done = catScore(c.id);
+              const maxPoints = catMaxPoints(c.id);
+              const doneItems = c.items.filter((_, i) => checklist[c.id + "_" + i]).length;
               const isOpen = openCats[c.id] ?? false;
-              const w = TIER_WEIGHTS[c.id];
-              const tierTag = TIER3_CATS.includes(c.id) ? "T3" : TIER1_CATS.includes(c.id) ? "T1" : "T2";
               return (
                 <div key={c.id} style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden" }}>
                   <div
@@ -604,11 +624,11 @@ export default function SopAuditCabang({ profile }) {
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <span style={{ width: 9, height: 9, borderRadius: "50%", background: c.color, flexShrink: 0 }} />
                       <span style={{ fontWeight: 600, fontSize: 14 }}>{c.label}</span>
-                      <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-faint)", border: "1px solid var(--border)", borderRadius: 5, padding: "1px 6px" }}>{tierTag} &middot; {Math.round(w * 100)}%</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, color: "var(--text-faint)", border: "1px solid var(--border)", borderRadius: 5, padding: "1px 6px" }}>{maxPoints} poin</span>
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                      <span style={{ fontSize: 13, fontWeight: 600, color: done === c.items.length ? "#1a9e6e" : "var(--text-secondary)" }}>{done}/{c.items.length}</span>
-                      {canEdit && done < c.items.length && (
+                      <span style={{ fontSize: 13, fontWeight: 600, color: doneItems === c.items.length ? "#1a9e6e" : "var(--text-secondary)" }}>{doneItems}/{c.items.length} item &middot; {done}/{maxPoints} poin</span>
+                      {canEdit && doneItems < c.items.length && (
                         <button
                           onClick={(e) => { e.stopPropagation(); checkAllInCategory(c); }}
                           className="btn-ghost"
@@ -637,10 +657,18 @@ export default function SopAuditCabang({ profile }) {
                               }}>
                                 {checked && <span style={{ color: "#fff", fontSize: 12, lineHeight: 1 }}>&#10003;</span>}
                               </div>
-                              <div style={{ fontSize: 13, color: checked ? "var(--text-faint)" : "var(--text-primary)", textDecoration: checked ? "line-through" : "none" }}>
+                              <div style={{ fontSize: 13, color: checked ? "var(--text-faint)" : "var(--text-primary)", textDecoration: checked ? "line-through" : "none", flex: 1 }}>
                                 {txt}
+                                <span style={{ marginLeft: 7, fontSize: 9.5, fontWeight: 700, color: "var(--text-faint)", background: "var(--surface-alt)", padding: "1.5px 7px", borderRadius: 20, whiteSpace: "nowrap" }}>
+                                  {c.points[i]} poin
+                                </span>
+                                {CRITICAL_ITEMS[c.id]?.includes(i) && (
+                                  <span style={{ marginLeft: 5, fontSize: 9.5, fontWeight: 700, color: "#a32020", background: "#a3202022", padding: "1.5px 7px", borderRadius: 20, whiteSpace: "nowrap" }}>
+                                    &#10071; Critical
+                                  </span>
+                                )}
                                 {CONDITION_ITEMS.has(id) && (
-                                  <span style={{ marginLeft: 7, fontSize: 9.5, fontWeight: 700, color: "#d97706", background: "#d9770622", padding: "1.5px 7px", borderRadius: 20, whiteSpace: "nowrap" }}>
+                                  <span style={{ marginLeft: 5, fontSize: 9.5, fontWeight: 700, color: "#d97706", background: "#d9770622", padding: "1.5px 7px", borderRadius: 20, whiteSpace: "nowrap" }}>
                                     &#128295; Kondisi Aset/Fasilitas
                                   </span>
                                 )}

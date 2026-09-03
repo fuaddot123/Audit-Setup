@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { sortBranches } from "../../lib/branchOrder";
 import {
-  CATS, TOTAL_ITEMS, ALERT_THRESHOLD, calcWeightedFromRecord, calcTierScores,
+  CATS, TOTAL_ITEMS, TOTAL_POINTS, ALERT_THRESHOLD, calcWeightedFromRecord,
   scoreInfo, scoreColor, formatRupiah, nowPeriode, periodeLabel,
 } from "../../lib/sopConfig";
 import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
@@ -82,8 +82,7 @@ export default function SopLaporan({ profile }) {
       if (!rec) return "";
       const w = calcWeightedFromRecord(rec.data);
       const s = scoreInfo(w);
-      const tiers = calcTierScores(rec.data);
-      return buildExecutiveSummaryHtml(b, rec, w, s, tiers) + buildBranchPageHtml(b, rec, w, s, tiers);
+      return buildExecutiveSummaryHtml(b, rec, w, s) + buildBranchPageHtml(b, rec, w, s);
     }).join("");
 
     const win = window.open("", "_blank");
@@ -177,7 +176,7 @@ export default function SopLaporan({ profile }) {
   }
 
   // ── Halaman Executive Summary per cabang (halaman pertama, sebelum lampiran checklist) ──
-  function buildExecutiveSummaryHtml(branch, rec, weightedScore, statusInfo, tiers) {
+  function buildExecutiveSummaryHtml(branch, rec, weightedScore, statusInfo) {
     const printDate = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
     const printTime = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
     const inputDate = rec.data?.audit_date ? formatDate(rec.data.audit_date) : "\u2014";
@@ -210,11 +209,11 @@ export default function SopLaporan({ profile }) {
       ? "Cabang dalam kondisi baik, tetap perlu pemantauan rutin untuk mempertahankan dan meningkatkan standar."
       : "Cabang memerlukan perhatian serius dan tindak lanjut mendesak dari manajemen.";
 
-    const tierRows = [
-      { label: "Tier 1 \u2014 Customer Experience Excellence", bobot: "60%", skor: tiers?.tier1 },
-      { label: "Tier 2 \u2014 Operational Foundation", bobot: "25%", skor: tiers?.tier2 },
-      { label: "Tier 3 \u2014 Compliance & Critical", bobot: "15%", skor: tiers?.tier3 },
-    ];
+    const tierRows = CATS.map((c) => {
+      const bd = rec.data?.cats?.[c.id];
+      const total = c.points.reduce((s, p) => s + p, 0);
+      return { label: c.label, score: bd?.score ?? 0, total, color: c.color };
+    });
 
     return `<div class="page" style="position:relative;">
       <div class="hdr2">
@@ -241,16 +240,16 @@ export default function SopLaporan({ profile }) {
 
       <div class="score-row">
         <div class="score-card" style="background:${statusInfo.color}12;border-color:${statusInfo.color}55;">
-          <div class="l">SOP Audit</div><div class="v" style="color:${statusInfo.color}">${weightedScore}%</div><div class="s" style="color:${statusInfo.color}">${esc(statusInfo.lbl)}</div>
+          <div class="l">Skor SOP</div><div class="v" style="color:${statusInfo.color}">${weightedScore}%</div><div class="s" style="color:${statusInfo.color}">${esc(statusInfo.lbl)}</div>
         </div>
-        <div class="score-card" style="background:#7c3aed12;border-color:#7c3aed55;">
-          <div class="l">Tier 1</div><div class="v" style="color:#7c3aed">${tiers?.tier1 ?? "\u2014"}%</div><div class="s" style="color:#7c3aed">Customer Experience</div>
-        </div>
-        <div class="score-card" style="background:#b0721212;border-color:#b0721255;">
-          <div class="l">Tier 2</div><div class="v" style="color:#b07212">${tiers?.tier2 ?? "\u2014"}%</div><div class="s" style="color:#b07212">Operational</div>
+        <div class="score-card" style="background:#a3202012;border-color:#a3202055;">
+          <div class="l">Total Temuan</div><div class="v" style="color:#a32020">${failedItems.length}</div><div class="s" style="color:#a32020">dari ${TOTAL_ITEMS} item</div>
         </div>
         <div class="score-card" style="background:#1a9e6e12;border-color:#1a9e6e55;">
-          <div class="l">Tier 3</div><div class="v" style="color:#1a9e6e">${tiers?.tier3 ?? "\u2014"}%</div><div class="s" style="color:#1a9e6e">Compliance</div>
+          <div class="l">Kategori Sempurna</div><div class="v" style="color:#1a9e6e">${sempurna.length}</div><div class="s" style="color:#1a9e6e">dari ${CATS.length} kategori</div>
+        </div>
+        <div class="score-card" style="background:#b0721212;border-color:#b0721255;">
+          <div class="l">Kategori Bermasalah</div><div class="v" style="color:#b07212">${bermasalah.length}</div><div class="s" style="color:#b07212">perlu tindak lanjut</div>
         </div>
       </div>
 
@@ -280,10 +279,13 @@ export default function SopLaporan({ profile }) {
         </div>
       </div>
 
-      <div class="box2-title" style="color:#2A1F52;margin-bottom:8px;">SOP Audit &mdash; Tier Compact</div>
+      <div class="box2-title" style="color:#2A1F52;margin-bottom:8px;">Skor per Kategori</div>
       <table class="tier-tbl">
-        <thead><tr><th>Tier</th><th style="text-align:center;">Bobot</th><th style="text-align:center;">Skor</th></tr></thead>
-        <tbody>${tierRows.map((t) => `<tr><td>${t.label}</td><td style="text-align:center;">${t.bobot}</td><td style="text-align:center;color:${scoreColor(t.skor)}">${t.skor ?? "\u2014"}%</td></tr>`).join("")}</tbody>
+        <thead><tr><th>Kategori</th><th style="text-align:center;">Poin</th><th style="text-align:center;">%</th></tr></thead>
+        <tbody>${tierRows.map((t) => {
+          const pct = t.total ? Math.round((t.score / t.total) * 100) : 0;
+          return `<tr><td>${esc(t.label)}</td><td style="text-align:center;">${t.score}/${t.total}</td><td style="text-align:center;color:${scoreColor(pct)}">${pct}%</td></tr>`;
+        }).join("")}</tbody>
       </table>
 
       <div class="box2" style="background:#fdfaf1;border:1px solid #eadfc4;">
@@ -311,8 +313,7 @@ export default function SopLaporan({ profile }) {
       const rec = latestFor(b.id, pdfPeriod);
       if (!rec || rec.data?.tidak_visit) return { branch: b, rec: null, tidakVisit: !!rec?.data?.tidak_visit };
       const w = calcWeightedFromRecord(rec.data);
-      const tiers = calcTierScores(rec.data);
-      return { branch: b, rec, score: w, tiers, info: scoreInfo(w) };
+      return { branch: b, rec, score: w, info: scoreInfo(w) };
     });
 
     const audited = rowsData.filter((r) => r.rec);
@@ -331,16 +332,13 @@ export default function SopLaporan({ profile }) {
     const tableRows = scopeBranches.map((b, i) => {
       const row = rowsData.find((r) => r.branch.id === b.id);
       if (!row.rec) {
-        return { cells: [String(i + 1), b.name, null, null, null, null, null, null, "\u00A0"], badge: null };
+        return { cells: [String(i + 1), b.name, null, null, null, "\u00A0"], badge: null };
       }
       return {
         cells: [
           String(i + 1), b.name,
           formatDate(row.rec.data?.audit_date),
           row.score + "%",
-          (row.tiers?.tier1 ?? "\u2014") + "%",
-          (row.tiers?.tier2 ?? "\u2014") + "%",
-          (row.tiers?.tier3 ?? "\u2014") + "%",
           row.info.lbl,
           "\u00A0", // kolom Tanda Tangan — sengaja dikosongin, buat ditandatangani manual di kertas
         ],
@@ -363,8 +361,8 @@ export default function SopLaporan({ profile }) {
         { icon: "alertCircle", label: "BAIK", value: String(grouped.Baik), sub: `Cabang (${audited.length ? Math.round((grouped.Baik / audited.length) * 100) : 0}%)`, color: "#b07212" },
         { icon: "alertTriangle", label: "PERLU PERBAIKAN", value: String(grouped["Perlu Perbaikan"]), sub: `Cabang (${audited.length ? Math.round((grouped["Perlu Perbaikan"] / audited.length) * 100) : 0}%)`, color: "#a32020" },
       ],
-      tableHeaders: ["No", "Cabang", "Tanggal Audit", "Skor SOP", "Tier 1", "Tier 2", "Tier 3", "Status", "Tanda Tangan"],
-      badgeCol: 7,
+      tableHeaders: ["No", "Cabang", "Tanggal Audit", "Skor SOP", "Status", "Tanda Tangan"],
+      badgeCol: 4,
       tableRows,
       donutSegments,
       donutCenterLines: [String(total), "Cabang"],
@@ -383,7 +381,7 @@ export default function SopLaporan({ profile }) {
         isPersonalView
           ? "Laporan ini cuma isi cabang yang kamu audit sendiri \u2014 BUKAN ringkasan resmi seluruh cabang perusahaan."
           : "Laporan ini merupakan ringkasan hasil audit SOP untuk seluruh cabang pada periode yang dipilih.",
-        "Status indikator berdasarkan skor tertimbang checklist SOP (Tier 1: Customer Experience, Tier 2: Operasional, Tier 3: Compliance).",
+        "Status indikator berdasarkan skor checklist SOP (jumlah poin item yang lolos, dari total 100 poin).",
         `Harap lakukan tindak lanjut untuk cabang dengan indikator "Perlu Perbaikan".`,
       ],
       pageLabel: "Halaman 1 dari 1",
@@ -464,7 +462,7 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
-function buildBranchPageHtml(branch, rec, weightedScore, statusInfo, tiers) {
+function buildBranchPageHtml(branch, rec, weightedScore, statusInfo) {
   const printDate = new Date().toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
   const catRows = CATS.map((c) => {
     const bd = rec.data?.cats?.[c.id];
@@ -507,10 +505,8 @@ function buildBranchPageHtml(branch, rec, weightedScore, statusInfo, tiers) {
       <div><span>Auditor</span><strong>${esc(rec.data?.auditor_name || "\u2014")}</strong></div>
     </div>
     <div class="scores">
-      <div class="sbox"><div class="l">SOP Audit</div><div class="v" style="color:${statusInfo.color}">${weightedScore}%</div><div style="font-size:9px;color:${statusInfo.color}">${esc(statusInfo.lbl)}</div></div>
-      <div class="sbox"><div class="l">Tier 1</div><div class="v" style="color:#7c3aed">${tiers?.tier1 ?? "\u2014"}%</div><div style="font-size:9px;color:#999">Customer Experience</div></div>
-      <div class="sbox"><div class="l">Tier 2</div><div class="v" style="color:#b07212">${tiers?.tier2 ?? "\u2014"}%</div><div style="font-size:9px;color:#999">Operational</div></div>
-      <div class="sbox"><div class="l">Tier 3</div><div class="v" style="color:#1a9e6e">${tiers?.tier3 ?? "\u2014"}%</div><div style="font-size:9px;color:#999">Compliance</div></div>
+      <div class="sbox"><div class="l">Skor SOP</div><div class="v" style="color:${statusInfo.color}">${weightedScore}%</div><div style="font-size:9px;color:${statusInfo.color}">${esc(statusInfo.lbl)}</div></div>
+      <div class="sbox"><div class="l">Total Poin</div><div class="v" style="color:#2A1F52">${weightedScore}/${TOTAL_POINTS}</div><div style="font-size:9px;color:#999">poin terpenuhi</div></div>
     </div>
     ${weightedScore < ALERT_THRESHOLD ? `<div class="alert">Total skor SOP di bawah ${ALERT_THRESHOLD}% &mdash; perlu tindakan korektif.</div>` : ""}
     <div class="sect">Lampiran Checklist Lengkap</div>

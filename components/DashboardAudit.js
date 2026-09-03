@@ -15,10 +15,13 @@ function gradeInfo(score) {
   return { grade: "D", color: RED };
 }
 function riskInfo(score) {
-  // Disamain persis sama batas Grade (90/70), biar nggak ada 1 grade yang kepotong jadi 2 Risk
-  // Level beda (kayak kasus Grade C 70-79 dulu kebelah Medium/High di tengah).
+  // 90/75 (bukan 90/70) — dihitung ulang dari data cabang asli: 90/75 kasih sebaran Risk Level
+  // yang lebih rata (Low/Medium/High kebagi wajar), 90/70 bikin "High" nyaris kosong (kurang
+  // berguna). Konsekuensinya: Grade C (70-79) bisa kepotong jadi 2 Risk Level beda di tengah
+  // rentangnya — itu diterima, Grade & Risk Level emang beda tujuan (Grade=nilai detail per
+  // cabang, Risk Level=prioritas tindak lanjut), wajar nggak align 100%.
   if (score >= 90) return { label: "Low", color: GREEN };
-  if (score >= 70) return { label: "Medium", color: GOLD };
+  if (score >= 75) return { label: "Medium", color: GOLD };
   return { label: "High", color: RED };
 }
 

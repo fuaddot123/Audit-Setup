@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../lib/supabaseClient";
-import { CATS, CONDITION_ITEMS, nowPeriode, periodeLabel, addMonthsToPeriod } from "../../lib/sopConfig";
+import { CATS, CONDITION_ITEMS, listFailedItems, nowPeriode, periodeLabel, addMonthsToPeriod } from "../../lib/sopConfig";
 import { INVENTARIS_CATEGORIES, statusKategori } from "../../lib/format-ba";
 import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
 import { sortBranches } from "../../lib/branchOrder";
@@ -17,10 +17,10 @@ function kategoriInfo(pct) {
 
 function countSopTemuan(sopRecord) {
   if (!sopRecord) return 0;
-  const checks = sopRecord.data?.checks || {};
-  let count = 0;
-  CATS.forEach((c) => c.items.forEach((_, i) => { if (!checks[c.id + "_" + i]) count++; }));
-  return count;
+  // listFailedItems() otomatis milih daftar kategori yang PAS (checklist baru/lama), jadi
+  // audit lama ikut kehitung skornya bener (bukan "Format Lama" lagi), sama kayak Laporan
+  // Bulanan/Ranking/dst — konsisten di semua modul.
+  return listFailedItems(sopRecord.data).length;
 }
 
 function countStokTemuan(stokRecord) {
@@ -122,6 +122,7 @@ export default function SopKepatuhan({ profile }) {
       if (sopRec.data?.tidak_visit) return { branch: b, status: "tidak_visit" };
 
       const sopTemuan = countSopTemuan(sopRec);
+      if (sopTemuan === null) return { branch: b, status: "format_lama" };
       const stokTemuan = countStokTemuan(stokRec);
       const sisa = keuanganSisa(keuEntry);
       const keuanganTemuan = sisa !== null && sisa < 0 ? 1 : 0;
@@ -142,11 +143,12 @@ export default function SopKepatuhan({ profile }) {
     const visitedRows = rows.filter((r) => r.status === "audited");
     const tidakVisitRows = rows.filter((r) => r.status === "tidak_visit");
     const belumRows = rows.filter((r) => r.status === "belum");
+    const formatLamaRows = rows.filter((r) => r.status === "format_lama");
     const cabangBaruRows = visitedRows.filter((r) => r.isCabangBaru);
     const scorableRows = visitedRows.filter((r) => !r.isCabangBaru);
     const avgPct = scorableRows.length ? scorableRows.reduce((s, r) => s + r.pct, 0) / scorableRows.length : null;
 
-    return { rows, visitedRows, tidakVisitRows, belumRows, cabangBaruRows, avgPct };
+    return { rows, visitedRows, tidakVisitRows, belumRows, formatLamaRows, cabangBaruRows, avgPct };
   }
 
   const current = useMemo(() => computeForPeriod(period), [branches, sopRecords, stokRecords, keuanganEntries, inventarisRecords, period]);
@@ -175,7 +177,7 @@ export default function SopKepatuhan({ profile }) {
 
     const tableRows = current.rows.map((r) => {
       if (r.status !== "audited") {
-        return { cells: [r.branch.name, null, null, null, null, null, null], badge: { label: r.status === "tidak_visit" ? "Tidak Visit" : "Belum Diaudit", color: "#888" } };
+        return { cells: [r.branch.name, null, null, null, null, null, null], badge: { label: r.status === "tidak_visit" ? "Tidak Visit" : r.status === "format_lama" ? "Format Lama" : "Belum Diaudit", color: "#888" } };
       }
       const info = kategoriInfo(r.pct);
       return {
@@ -282,7 +284,7 @@ export default function SopKepatuhan({ profile }) {
           <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px" }}>
             <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", marginBottom: 8 }}>Cabang Diaudit</div>
             <div style={{ fontSize: 30, fontWeight: 800 }}>{current.visitedRows.length} / {branches.length}</div>
-            <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>Tidak Visit: {current.tidakVisitRows.length} &middot; Belum Diaudit: {current.belumRows.length}{current.cabangBaruRows.length > 0 && <> &middot; Cabang Baru: {current.cabangBaruRows.length}</>}</div>
+            <div style={{ fontSize: 11.5, color: "var(--text-faint)", marginTop: 4 }}>Tidak Visit: {current.tidakVisitRows.length} &middot; Belum Diaudit: {current.belumRows.length}{current.formatLamaRows.length > 0 && <> &middot; Format Lama: {current.formatLamaRows.length}</>}{current.cabangBaruRows.length > 0 && <> &middot; Cabang Baru: {current.cabangBaruRows.length}</>}</div>
           </div>
         </div>
 
@@ -326,7 +328,7 @@ export default function SopKepatuhan({ profile }) {
                       </>
                     ) : (
                       <td colSpan={7} style={{ ...td, textAlign: "center", color: "var(--text-faint)" }}>
-                        {r.status === "tidak_visit" ? "Tidak Visit" : "Belum Diaudit"}
+                        {r.status === "tidak_visit" ? "Tidak Visit" : r.status === "format_lama" ? "Format Lama \u2014 checklist sebelum diganti" : "Belum Diaudit"}
                       </td>
                     )}
                   </tr>
