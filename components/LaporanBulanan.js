@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { calcWeightedFromRecord, CATS, CONDITION_ITEMS, nowPeriode, periodeLabel, addMonthsToPeriod } from "../lib/sopConfig";
-import { kesehatanStatusInfo, serviceStatusInfo } from "../lib/stokConfig";
+import { kesehatanStatusInfo, serviceStatusInfo, laptopStatusInfo } from "../lib/stokConfig";
 import { INVENTARIS_CATEGORIES } from "./AuditInventaris";
 import BranchMultiSelect from "./BranchMultiSelect";
 import { sortBranches } from "../lib/branchOrder";
@@ -274,6 +274,31 @@ export default function LaporanBulanan({ profile }) {
       }
       const kesTrend = monthlyAvg(kesTrendRes.data || [], "kesehatan_pct", true, "kes");
       const svcTrend = monthlyAvg(svcTrendRes.data || [], "ratio", true, "svc");
+      // Tren KHUSUS Laptop/Aksesoris — dipisah dari svcTrend di atas, dan sengaja EXCLUDE audit
+      // lama (pre-split) biar bulan lama nggak kebaca "0%" palsu (monthlyAvg generik nganggep
+      // field kosong = 0, padahal maksudnya "belum ada data buat metrik ini").
+      function monthlyAvgSplit(records, valueKey) {
+        return trendPeriods.map((p) => {
+          const inMonth = records.filter((r) => r.period === p && selectedBranchIdSet.has(r.branch_id));
+          const byBranch = {};
+          const dateOf = (rec) => rec.data?.audit_date || "";
+          inMonth.forEach((r) => { const key = r.branch_id; if (isNewerAudit(r, byBranch[key], dateOf)) byBranch[key] = r; });
+          if (p === period) {
+            Object.keys(byBranch).forEach((branchId) => {
+              const chosenId = choices[`${branchId}|svc`];
+              if (!chosenId) return;
+              const match = inMonth.find((r) => String(r.branch_id) === String(branchId) && String(r.id) === String(chosenId));
+              if (match) byBranch[branchId] = match;
+            });
+          }
+          const valid = Object.values(byBranch).filter((r) => r.data && !r.data.tidak_visit && !r.data.cabang_baru && r.data.ratio_laptop != null);
+          if (!valid.length) return null;
+          const sum = valid.reduce((s, r) => s + (Number(r.data[valueKey]) || 0), 0);
+          return sum / valid.length;
+        });
+      }
+      const svcLaptopTrend = monthlyAvgSplit(svcTrendRes.data || [], "ratio_laptop");
+      const svcAksesorisTrend = monthlyAvgSplit(svcTrendRes.data || [], "ratio_aksesoris");
       const keuTrend = (() => {
         // Audit Keuangan nggak nyimpen "posisi" langsung, jadi dihitung dari field mentah dulu per baris.
         return trendPeriods.map((p) => {
@@ -725,6 +750,60 @@ export default function LaporanBulanan({ profile }) {
         });
       }
 
+      // Versi 2-garis KHUSUS Service Ratio (Laptop vs Aksesoris) — fungsi TERPISAH dari
+      // addTrendChart di atas (yang dipake banyak slide lain: Kesehatan/Keuangan/SOP), biar
+      // nggak ada resiko ganggu slide lain kalau ada yang salah di sini.
+      function addTrendChartDual(s, x, y, w, h, trendArr1, trendArr2, label1, label2, decimals, fallbackArr) {
+        const pts1 = trendPeriods.map((p, i) => ({ label: shortMonth(p), value: trendArr1[i] }));
+        const pts2 = trendPeriods.map((p, i) => ({ label: shortMonth(p), value: trendArr2[i] }));
+        const bothValid = pts1.filter((pt, i) => pt.value !== null && pts2[i].value !== null);
+        if (bothValid.length < 2) {
+          // Belum ada 2 bulan data format baru (Laptop/Aksesoris terpisah) — daripada kotak
+          // kosong pas presentasi transisi, tampilin garis TUNGGAL dari data gabungan lama
+          // (kalau ada cukup), dikasih catatan biar jelas ini masih data lama. Otomatis ganti
+          // balik ke 2 garis begitu data baru udah cukup 2 bulan.
+          if (fallbackArr) {
+            addTrendChart(s, x, y, w, h - 0.22, fallbackArr, decimals);
+            s.addText(`Data gabungan (sebelum ${label1}/${label2} dipisah) \u2014 grafik 2 garis muncul otomatis begitu data baru sudah 2 bulan.`, { x, y: y + h - 0.22, w, h: 0.22, fontSize: 7, italic: true, color: "999999", align: "center", valign: "middle" });
+            return;
+          }
+          s.addText("Data histori belum cukup buat nampilin tren.", { x, y, w, h, fontSize: 9, color: "999999", align: "center", valign: "middle" });
+          return;
+        }
+        const labels = trendPeriods.map((p) => shortMonth(p));
+        const vals1 = trendPeriods.map((p, i) => trendArr1[i] === null ? null : Number((trendArr1[i] * 100).toFixed(decimals)));
+        const vals2 = trendPeriods.map((p, i) => trendArr2[i] === null ? null : Number((trendArr2[i] * 100).toFixed(decimals)));
+        const allVals = [...vals1, ...vals2].filter((v) => v !== null);
+        const vMin = Math.min(...allVals), vMax = Math.max(...allVals);
+        const pad = Math.max((vMax - vMin) * 0.25, decimals > 0 ? 0.05 : 3);
+        const axisMin = Math.max(0, Math.floor((vMin - pad) * 100) / 100);
+        const axisMax = Math.ceil((vMax + pad) * 100) / 100;
+        const cx = x + 0.05, cy = y + 0.05, cw = w - 0.1, ch = h - 0.1;
+        const fmtCode = decimals > 0 ? "0." + "0".repeat(decimals) : "0";
+
+        s.addShape(pptx.ShapeType.roundRect, { x, y, w, h, rectRadius: 0.05, fill: { color: "1A1530" } });
+
+        s.addChart(pptx.ChartType.line, [
+          { name: label1, labels, values: vals1 },
+          { name: label2, labels, values: vals2 },
+        ], {
+          x: cx, y: cy, w: cw, h: ch,
+          chartColors: ["8B5CF6", "F4B740"],
+          lineSize: 2, lineDataSymbol: "circle", lineDataSymbolSize: 6,
+          lineDataSymbolLineColor: "FFFFFF", lineDataSymbolLineSize: 1.5,
+          showLegend: true, legendPos: "b", legendColor: "D8D0F0", legendFontSize: 8,
+          showTitle: false, showValue: true,
+          dataLabelPosition: "t", dataLabelColor: "FFFFFF", dataLabelFontFace: "Arial",
+          dataLabelFontSize: 8, dataLabelFontBold: true, dataLabelFormatCode: fmtCode,
+          catAxisLabelFontSize: 8, catAxisLabelColor: "9D94C0", catAxisLineColor: "3A2F5A",
+          valAxisLabelFontSize: 7, valAxisLabelColor: "9D94C0", valAxisLineColor: "3A2F5A",
+          valAxisMinVal: axisMin, valAxisMaxVal: axisMax,
+          valGridLine: { color: "342A52", style: "dash", size: 0.75 },
+          catGridLine: { style: "none" },
+          chartArea: { fill: { color: "1A1530" } }, plotArea: { fill: { color: "1A1530" } },
+        });
+      }
+
       function addGradientBackground(slide) {
         const steps = 40;
         for (let i = 0; i < steps; i++) {
@@ -1081,7 +1160,7 @@ export default function LaporanBulanan({ profile }) {
                 { text: infoLegacy.lbl, options: { fontSize: 10, align: "center", bold: true, color: WHITE, fill: { color: infoLegacy.color.replace("#", "") } } },
               ];
             }
-            const infoLaptop = serviceStatusInfo(d.ratioLaptop);
+            const infoLaptop = laptopStatusInfo(d.ratioLaptop);
             const infoAksesoris = serviceStatusInfo(d.ratioAksesoris);
             // Status gabungan = yang TERBURUK dari dua-duanya (bukan rata-rata) — biar nggak ada
             // kategori yang "ketutupan" sama kategori lain yang lebih bagus.
@@ -1097,12 +1176,15 @@ export default function LaporanBulanan({ profile }) {
             ];
           });
           const valid = svcRowsAll.map((r) => r[detailKey]).filter((d) => d && d.hasData && !d.tidakVisit && !d.isLegacy);
-          const avgLaptop = valid.length ? valid.reduce((s2, d) => s2 + d.ratioLaptop, 0) / valid.length : 0;
-          const avgAksesoris = valid.length ? valid.reduce((s2, d) => s2 + d.ratioAksesoris, 0) / valid.length : 0;
+          const avgLaptop = valid.length ? valid.reduce((s2, d) => s2 + d.ratioLaptop, 0) / valid.length : null;
+          const avgAksesoris = valid.length ? valid.reduce((s2, d) => s2 + d.ratioAksesoris, 0) / valid.length : null;
+          // Kalau nggak ada data format baru sama sekali bulan ini (semua masih "Data lama"),
+          // rata-ratanya harus keliatan "belum ada data" — bukan "0.00%" (itu keliatan kayak
+          // beneran sempurna 0%, padahal maksudnya emang belum ada yang bisa dirata-ratain).
           body.push([
             { text: "RATA-RATA", options: { colspan: 2, fontSize: 10.5, bold: true, fill: { color: PURPLE }, color: WHITE } },
-            { text: `${(avgLaptop * 100).toFixed(2)}%`, options: { fontSize: 10.5, bold: true, align: "center", fill: { color: PURPLE }, color: WHITE } },
-            { text: `${(avgAksesoris * 100).toFixed(2)}%`, options: { fontSize: 10.5, bold: true, align: "center", fill: { color: PURPLE }, color: WHITE } },
+            { text: avgLaptop === null ? "\u2014" : `${(avgLaptop * 100).toFixed(2)}%`, options: { fontSize: 10.5, bold: true, align: "center", fill: { color: PURPLE }, color: WHITE } },
+            { text: avgAksesoris === null ? "\u2014" : `${(avgAksesoris * 100).toFixed(2)}%`, options: { fontSize: 10.5, bold: true, align: "center", fill: { color: PURPLE }, color: WHITE } },
             { text: "", options: { fill: { color: PURPLE } } },
           ]);
           return body;
@@ -1151,11 +1233,16 @@ export default function LaporanBulanan({ profile }) {
         if (svcPrevAvg !== null && svcNow !== null) {
           s.addText(`${svcTrendGood ? "\u25BC" : "\u25B2"} ${Math.abs((svcNow - svcPrevAvg) * 100).toFixed(2)}%`, { x: cardX + 3.3, y: 2.78, w: 2.2, h: 0.32, fontSize: 12.5, bold: true, color: svcTrendGood ? GREEN : RED, align: "right", margin: 0 });
         }
-        addTrendChart(s, cardX + 0.1, 3.2, cardW - 0.2, 1.5, svcTrend, 2);
+        addTrendChartDual(s, cardX + 0.1, 3.2, cardW - 0.2, 1.5, svcLaptopTrend, svcAksesorisTrend, "Laptop", "Aksesoris", 2, svcTrend);
 
         s.addShape(pptx.ShapeType.roundRect, { x: cardX, y: 5.0, w: cardW, h: 2.15, rectRadius: 0.08, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
         s.addText("RINGKASAN", { x: cardX + 0.2, y: 5.13, w: 4, h: 0.32, fontSize: 13, bold: true, color: PURPLE, margin: 0 });
-        const svcBermasalahBranches = rows.filter((r) => r.svcRatio !== null && r.svcRatio >= 0.0033).map((r) => r.branch.name);
+        const svcBermasalahBranches = rows.filter((r) => {
+          const d = r.svcCurDetail;
+          if (!d || !d.hasData || d.tidakVisit) return false;
+          if (d.isLegacy) return serviceStatusInfo(d.ratio || 0).lbl === "Perlu Perhatian";
+          return laptopStatusInfo(d.ratioLaptop || 0).lbl === "Perlu Perhatian" || serviceStatusInfo(d.ratioAksesoris || 0).lbl === "Perlu Perhatian";
+        }).map((r) => r.branch.name);
         const svcRingkasanLines = [
           ...(svcPrevAvg !== null && svcNow !== null
             ? boldBullet(`${(svcPrevAvg * 100).toFixed(2)}% \u2192 ${(svcNow * 100).toFixed(2)}%`, ` \u2014 ${svcTrendGood ? "membaik" : "meningkat"}`, svcTrendGood ? GREEN : RED)
@@ -1190,16 +1277,16 @@ export default function LaporanBulanan({ profile }) {
         s.addShape(pptx.ShapeType.roundRect, { x: cardX2, y: 1.15, w: cardW2, h: 6.0, rectRadius: 0.08, fill: { color: "F7F6FB" }, line: { color: "E4DFF2", width: 0.75 } });
         s.addText("KETERANGAN INDIKATOR", { x: cardX2 + 0.2, y: 1.3, w: 5, h: 0.3, fontSize: 13, bold: true, color: PURPLE, margin: 0 });
         const svcLegendItems = [
-          { c: GREEN, icon: "\u{1F6E1}\u{FE0F}", l: "Terkendali", r: "\u22640,22%", d: "Rasio service sehat" },
-          { c: AMBER, icon: "\u{1F50D}", l: "Monitoring", r: "0,22-0,33%", d: "Perlu dipantau berkala" },
-          { c: RED, icon: "\u26A0\uFE0F", l: "Perlu Perhatian", r: "\u22650,33%", d: "Perlu tindak lanjut" },
+          { c: GREEN, icon: "\u{1F6E1}\u{FE0F}", l: "Terkendali", r: "Laptop \u22641% \u00b7 Aksesoris \u22640,22%", d: "Rasio service sehat" },
+          { c: AMBER, icon: "\u{1F50D}", l: "Monitoring", r: "Laptop 1-2% \u00b7 Aksesoris 0,22-0,33%", d: "Perlu dipantau berkala" },
+          { c: RED, icon: "\u26A0\uFE0F", l: "Perlu Perhatian", r: "Laptop >2% \u00b7 Aksesoris >0,33%", d: "Perlu tindak lanjut" },
         ];
         svcLegendItems.forEach((it, i) => {
           const yy = 1.85 + i * 1.15;
           s.addShape(pptx.ShapeType.ellipse, { x: cardX2 + 0.25, y: yy, w: 0.6, h: 0.6, fill: { color: it.c } });
           s.addText(it.icon, { x: cardX2 + 0.25, y: yy, w: 0.6, h: 0.6, fontSize: 20, align: "center", valign: "middle", margin: 0 });
           s.addText(it.l, { x: cardX2 + 1.05, y: yy - 0.02, w: 2.3, h: 0.32, fontSize: 13, bold: true, color: "222222", margin: 0 });
-          s.addText(it.r, { x: cardX2 + 1.05, y: yy + 0.3, w: 1.4, h: 0.3, fontSize: 11.5, color: "666666", margin: 0 });
+          s.addText(it.r, { x: cardX2 + 1.05, y: yy + 0.3, w: 4.3, h: 0.3, fontSize: 9.5, color: "666666", margin: 0 });
           s.addText(it.d, { x: cardX2 + 1.05, y: yy + 0.6, w: 4.3, h: 0.3, fontSize: 10, color: "777777", margin: 0 });
           if (i < svcLegendItems.length - 1) s.addShape(pptx.ShapeType.rect, { x: cardX2 + 0.25, y: yy + 0.92, w: cardW2 - 0.5, h: 0.012, fill: { color: "EEEAF5" } });
         });

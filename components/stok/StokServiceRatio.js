@@ -2,12 +2,12 @@ import { useState, useEffect, cloneElement } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { sortBranches } from "../../lib/branchOrder";
 import {
-  calcServiceRatio, serviceStatusInfo, formatRatioPct,
-  periodFromDate, todayInputValue, periodeLabel, SERVICE_THRESHOLDS,
+  calcServiceRatio, serviceStatusInfo, laptopStatusInfo, formatRatioPct,
+  periodFromDate, todayInputValue, periodeLabel, SERVICE_THRESHOLDS, LAPTOP_THRESHOLDS,
   nowPeriode, addMonthsToPeriod,
 } from "../../lib/stokConfig";
 
-const EMPTY_FORM = { laptop: "", aksesoris: "", user: "", total_unit_laptop: "", total_unit_aksesoris: "" };
+const EMPTY_FORM = { laptop: "", aksesoris: "", aksesoris_customer: "", user: "", total_unit_laptop: "", total_unit_aksesoris: "" };
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -36,9 +36,7 @@ function statusDesc(lbl) {
 }
 
 export default function StokServiceRatio({ profile }) {
-  // Mode "lihat sebagai": seluruh isian dikunci. Pagar sungguhannya ada di
-  // RLS — submitted_by wajib sama dengan pengguna yang benar-benar login.
-  const canEdit = (profile?.role === "auditor" || profile?.role === "super_admin") && !profile?.liatSebagai;
+  const canEdit = profile?.role === "auditor" || profile?.role === "super_admin";
   // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua kayak biasa).
   const ISOLATION_START_PERIOD = "2026-08";
   const [branches, setBranches] = useState([]);
@@ -96,6 +94,7 @@ export default function StokServiceRatio({ profile }) {
     setForm({
       laptop: entry.data?.laptop ?? "",
       aksesoris: entry.data?.aksesoris ?? "",
+      aksesoris_customer: entry.data?.aksesoris_customer ?? "",
       user: entry.data?.user ?? "",
       total_unit_laptop: entry.data?.total_unit_laptop ?? "",
       total_unit_aksesoris: entry.data?.total_unit_aksesoris ?? "",
@@ -166,7 +165,7 @@ export default function StokServiceRatio({ profile }) {
   }
 
   const ratioLaptop = calcServiceRatio(form.laptop, form.total_unit_laptop);
-  const statusLaptop = serviceStatusInfo(ratioLaptop);
+  const statusLaptop = laptopStatusInfo(ratioLaptop);
   const ratioAksesoris = calcServiceRatio(form.aksesoris, form.total_unit_aksesoris);
   const statusAksesoris = serviceStatusInfo(ratioAksesoris);
   const period = periodFromDate(auditDate);
@@ -174,10 +173,6 @@ export default function StokServiceRatio({ profile }) {
 
   async function deleteRecord() {
     if (!selectedEntry) return;
-    // Mode "lihat sebagai" hanya hak baca. Tanpa baris ini, tombol Hapus
-    // muncul untuk catatan orang yang sedang dilihat — perannya memang
-    // "auditor" dan profile.id memang id orang itu.
-    if (profile?.liatSebagai) return;
     const isOwner = profile?.role === "auditor" && selectedEntry.submitted_by === profile?.id;
     if (profile?.role !== "super_admin" && !isOwner) return;
     if (!window.confirm(`Hapus audit ${selectedBranch.name} tanggal ${shortDate(selectedEntry.data?.audit_date)}? Aksi ini tidak bisa dibatalkan.`)) return;
@@ -219,6 +214,11 @@ export default function StokServiceRatio({ profile }) {
               tidak_visit: false,
               laptop: parseInt(form.laptop, 10) || 0,
               aksesoris: parseInt(form.aksesoris, 10) || 0,
+              // Terpisah dari laptop/aksesoris di atas — itu KHUSUS stok toko (dipakai buat
+              // hitung rasio). Ini murni pencatatan servis punya customer, NGGAK masuk ke rumus
+              // rasio sama sekali (beda populasi sama Total Unit Aksesoris). Buat Laptop,
+              // "user" di bawah INI yang perannya (User Service = servis laptop customer).
+              aksesoris_customer: parseInt(form.aksesoris_customer, 10) || 0,
               user: parseInt(form.user, 10) || 0,
               total_unit_laptop: parseInt(form.total_unit_laptop, 10) || 0,
               total_unit_aksesoris: parseInt(form.total_unit_aksesoris, 10) || 0,
@@ -337,7 +337,10 @@ export default function StokServiceRatio({ profile }) {
         <div class="metric-row">
           <div class="metric-card"><div class="l">Ratio Laptop</div><div class="v" style="color:${statusLaptop.color};">${formatRatioPct(ratioLaptop)}</div></div>
           <div class="metric-card"><div class="l">Ratio Aksesoris</div><div class="v" style="color:${statusAksesoris.color};">${formatRatioPct(ratioAksesoris)}</div></div>
-          <div class="metric-card"><div class="l">User Service</div><div class="v">${form.user || 0} unit</div></div>
+        </div>
+        <div class="metric-row">
+          <div class="metric-card"><div class="l">Laptop Customer (di luar rasio)</div><div class="v" style="font-size:14px;">${form.user || 0} unit</div></div>
+          <div class="metric-card"><div class="l">Aksesoris Customer (di luar rasio)</div><div class="v" style="font-size:14px;">${form.aksesoris_customer || 0} unit</div></div>
         </div>
         <div class="metric-row">
           <div class="metric-card"><div class="l">Status Laptop</div><div class="v" style="font-size:14px;color:${statusLaptop.color};">${esc(statusLaptop.lbl)}</div></div>
@@ -490,7 +493,7 @@ export default function StokServiceRatio({ profile }) {
             <button className="btn" disabled={saving || !canEdit} onClick={saveRecord} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
               {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan" : "Hanya Lihat"}
             </button>
-            {!profile?.liatSebagai && (profile?.role === "super_admin" || (profile?.role === "auditor" && entryOwnerId === profile?.id)) && selectedEntryId && (
+            {(profile?.role === "super_admin" || (profile?.role === "auditor" && entryOwnerId === profile?.id)) && selectedEntryId && (
               <button className="btn-ghost" disabled={saving} onClick={deleteRecord} style={{ color: "var(--danger-text)", borderColor: "var(--danger-text)" }}>
                 Hapus Data
               </button>
@@ -579,21 +582,26 @@ export default function StokServiceRatio({ profile }) {
                 <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 16 }}>{selectedEntryId ? "Kamu sedang mengedit salah satu audit bulan ini" : "Masukkan data audit baru"}</div>
 
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
-                  <IconField label="Unit Laptop diservice" icon={ICON.laptop} unit="unit">
+                  <IconField label="Unit Laptop Diservice (Stok Toko)" icon={ICON.laptop} unit="unit">
                     <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.laptop} onChange={(e) => setField("laptop", e.target.value)} disabled={!canEdit} />
                   </IconField>
                   <IconField label="Total Unit Laptop" icon={ICON.building} unit="unit">
                     <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.total_unit_laptop} onChange={(e) => setField("total_unit_laptop", e.target.value)} disabled={!canEdit} />
                   </IconField>
-                  <IconField label="Unit Aksesoris diservice" icon={ICON.bag} unit="unit">
+                  <IconField label="Unit Laptop Diservice (Customer)" icon={ICON.user} unit="unit">
+                    <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.user} onChange={(e) => setField("user", e.target.value)} disabled={!canEdit} />
+                  </IconField>
+                  <div />
+                  <IconField label="Unit Aksesoris Diservice (Stok Toko)" icon={ICON.bag} unit="unit">
                     <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.aksesoris} onChange={(e) => setField("aksesoris", e.target.value)} disabled={!canEdit} />
                   </IconField>
                   <IconField label="Total Unit Aksesoris" icon={ICON.building} unit="unit">
                     <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.total_unit_aksesoris} onChange={(e) => setField("total_unit_aksesoris", e.target.value)} disabled={!canEdit} />
                   </IconField>
-                  <IconField label="User Service" icon={ICON.user} unit="unit">
-                    <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.user} onChange={(e) => setField("user", e.target.value)} disabled={!canEdit} />
+                  <IconField label="Unit Aksesoris Diservice (Customer)" icon={ICON.user} unit="unit">
+                    <input className="input" type="text" inputMode="numeric" placeholder="0" value={form.aksesoris_customer} onChange={(e) => setField("aksesoris_customer", e.target.value)} disabled={!canEdit} />
                   </IconField>
+                  <div />
                 </div>
 
                 {isLegacyEntry && (
@@ -605,7 +613,7 @@ export default function StokServiceRatio({ profile }) {
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginTop: 4, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 14px" }}>
                   <div style={{ display: "flex", gap: 8, fontSize: 11, color: "var(--text-secondary)", lineHeight: 1.5 }}>
                     <span style={{ color: "#7c3aed", flexShrink: 0, width: 15, height: 15 }}>{ICON.info}</span>
-                    <span>Rasio Laptop = Unit Laptop Diservice &divide; Total Unit Laptop. Rasio Aksesoris = Unit Aksesoris Diservice &divide; Total Unit Aksesoris. User Service dipakai buat pencatatan aja.</span>
+                    <span><b>PENTING:</b> "Diservice (Stok Toko)" cuma buat laptop/aksesoris milik TOKO, JANGAN campur sama punya customer &mdash; itu isi ke kolom "(Customer)" yang terpisah, nggak masuk ke rumus rasio. Rasio Laptop = Stok Toko Laptop &divide; Total Unit Laptop. Rasio Aksesoris = Stok Toko Aksesoris &divide; Total Unit Aksesoris.</span>
                   </div>
                   <button className="btn" style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 6, whiteSpace: "nowrap" }} onClick={() => setSaved(false)}>
                     <span style={{ width: 14, height: 14 }}>{ICON.calc}</span> Hitung Ratio
@@ -637,10 +645,19 @@ export default function StokServiceRatio({ profile }) {
                   </div>
                 ))}
 
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, borderTop: "1px solid var(--border)", paddingTop: 14, marginTop: 16 }}>
-                  <ThresholdLegend color="#1a9e6e" label="Terkendali" range="0 – 0,22%" />
-                  <ThresholdLegend color="#b07212" label="Monitoring" range="0,22 – 0,33%" />
-                  <ThresholdLegend color="#a32020" label="Perlu Perhatian" range="> 0,33%" />
+                <div style={{ borderTop: "1px solid var(--border)", paddingTop: 12, marginTop: 16 }}>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", marginBottom: 6 }}>AMBANG BATAS LAPTOP</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginBottom: 12 }}>
+                    <ThresholdLegend color="#1a9e6e" label="Terkendali" range="0 – 1%" />
+                    <ThresholdLegend color="#b07212" label="Monitoring" range="1% – 2%" />
+                    <ThresholdLegend color="#a32020" label="Perlu Perhatian" range="> 2%" />
+                  </div>
+                  <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--text-faint)", marginBottom: 6 }}>AMBANG BATAS AKSESORIS</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
+                    <ThresholdLegend color="#1a9e6e" label="Terkendali" range="0 – 0,22%" />
+                    <ThresholdLegend color="#b07212" label="Monitoring" range="0,22 – 0,33%" />
+                    <ThresholdLegend color="#a32020" label="Perlu Perhatian" range="> 0,33%" />
+                  </div>
                 </div>
               </div>
             </div>

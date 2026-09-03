@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { sortBranches } from "../lib/branchOrder";
 import { CATS, calcWeightedFromRecord, periodeLabel, addMonthsToPeriod, nowPeriode } from "../lib/sopConfig";
-import { calcKesehatanPct, formatKesehatanPct, calcServiceRatio, formatRatioPct, SERVICE_THRESHOLDS } from "../lib/stokConfig";
+import { calcKesehatanPct, formatKesehatanPct, calcServiceRatio, formatRatioPct, SERVICE_THRESHOLDS, LAPTOP_THRESHOLDS } from "../lib/stokConfig";
 
 const ISOLATION_START_PERIOD = "2026-08";
 const BOBOT = { sop: 0.3, kesehatan: 0.3, service: 0.2, keuangan: 0.2 };
@@ -61,11 +61,35 @@ function keuanganOverLimit(entry) {
 // (SERVICE_THRESHOLDS) super kecil (0.22%/0.33%), bukan skala 0-100%. Angka ratio KECIL itu
 // BAGUS (dikit yang perlu diservis), jadi dipetain dari tingkatan status asli, bukan dibalik
 // jadi persentase buatan sendiri.
-function serviceScoreOf(ratio) {
-  if (ratio == null) return null;
+// Threshold Laptop & Aksesoris SEKARANG BEDA (Laptop 1%/2%, Aksesoris 0,22%/0,33% — Laptop
+// barang lebih kompleks jadi wajar rate servisnya lebih tinggi), jadi butuh 2 fungsi tier.
+function tierScoreOfAksesoris(ratio) {
   if (ratio <= SERVICE_THRESHOLDS.terkendali) return 100;
   if (ratio <= SERVICE_THRESHOLDS.monitoring) return 70;
   return 40;
+}
+function tierScoreOfLaptop(ratio) {
+  if (ratio <= LAPTOP_THRESHOLDS.terkendali) return 100;
+  if (ratio <= LAPTOP_THRESHOLDS.monitoring) return 70;
+  return 40;
+}
+// Data BARU (udah dipisah Laptop/Aksesoris): klasifikasi skor MASING-MASING dulu (Laptop &
+// Aksesoris kena tier sendiri-sendiri, threshold beda), BARU dirata-ratain skornya — bukan
+// rata-ratain ratio mentahnya dulu baru diklasifikasi 1x (itu bisa nutupin kalau salah satu
+// kategori jelek tapi yang lain bagus, mirip kasus "rata-rata nutupin masalah" yang udah dibahas).
+// Data LAMA (pre-split, cuma punya `ratio` gabungan): fallback ke threshold Aksesoris (yang
+// lama emang dikalibrasi buat ratio gabungan itu).
+function serviceScoreOf(rec) {
+  const d = rec?.data;
+  if (!d) return null;
+  if (d.ratio_laptop != null || d.ratio_aksesoris != null) {
+    const scores = [];
+    if (d.ratio_laptop != null) scores.push(tierScoreOfLaptop(d.ratio_laptop));
+    if (d.ratio_aksesoris != null) scores.push(tierScoreOfAksesoris(d.ratio_aksesoris));
+    return scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+  }
+  if (d.ratio != null) return tierScoreOfAksesoris(d.ratio);
+  return null;
 }
 
 function latestFor(records, branchId, period) {
@@ -134,7 +158,7 @@ export default function DashboardAudit({ profile }) {
 
     const sopScore = sopOk ? calcWeightedFromRecord(sopRec.data) : null;
     const kesScore = kesOk ? (kesRec.data?.kesehatan_pct != null ? kesRec.data.kesehatan_pct * 100 : null) : null;
-    const svcScore = svcOk ? serviceScoreOf(svcRec.data?.ratio) : null;
+    const svcScore = svcOk ? serviceScoreOf(svcRec) : null;
     const keuScore = keuOk ? keuanganScoreOf(keuRec, keuSettings) : null;
     const keuOverLimit = keuOk ? keuanganOverLimit(keuRec) : false;
 
@@ -211,7 +235,7 @@ export default function DashboardAudit({ profile }) {
   const svcTrend = useMemo(() => moduleTrend((bid, p) => {
     const rec = latestFor(svcRecords, bid, p);
     if (!rec || rec.data?.tidak_visit || rec.data?.cabang_baru) return null;
-    return serviceScoreOf(rec.data?.ratio);
+    return serviceScoreOf(rec);
   }), [trendPeriods, branches, svcRecords]);
   const keuTrend = useMemo(() => moduleTrend((bid, p) => {
     const entry = keuEntries.filter((e) => e.branch_id === bid && e.period === p).sort((a, b) => (b.created_at || "").localeCompare(a.created_at || ""))[0];

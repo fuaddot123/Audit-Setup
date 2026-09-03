@@ -2,11 +2,27 @@ import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { sortBranches } from "../../lib/branchOrder";
 import {
-  serviceStatusInfo, formatRatioPct, kesehatanStatusInfo, formatKesehatanPct,
-  nowPeriode, periodeLabel,
+  serviceStatusInfo, laptopStatusInfo, formatRatioPct, kesehatanStatusInfo, formatKesehatanPct,
+  nowPeriode, periodeLabel, SERVICE_THRESHOLDS, LAPTOP_THRESHOLDS,
 } from "../../lib/stokConfig";
 import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
 import BranchMultiSelect from "../BranchMultiSelect";
+
+// Skor tier per kategori (Laptop/Aksesoris diklasifikasi SENDIRI-SENDIRI dulu, threshold BEDA
+// per kategori — Laptop 1%/2%, Aksesoris 0,22%/0,33% — konsisten sama pola yang dipakai di
+// Dashboard Audit & Laporan Bulanan) — dari situ ambil status TERBURUK dari dua-duanya buat
+// badge kolom (bukan rata-rata, biar nggak ada kategori yang ketutupan).
+function worstServiceStatus(ratioLaptop, ratioAksesoris) {
+  const infoLaptop = laptopStatusInfo(ratioLaptop);
+  const infoAksesoris = serviceStatusInfo(ratioAksesoris);
+  if (infoLaptop.lbl === "Perlu Perhatian" || infoAksesoris.lbl === "Perlu Perhatian") {
+    return infoAksesoris.lbl === "Perlu Perhatian" ? infoAksesoris : infoLaptop;
+  }
+  if (infoLaptop.lbl === "Monitoring" || infoAksesoris.lbl === "Monitoring") {
+    return infoLaptop.lbl === "Monitoring" ? infoLaptop : infoAksesoris;
+  }
+  return infoLaptop;
+}
 
 export default function StokLaporan({ profile }) {
   const [branches, setBranches] = useState([]);
@@ -89,8 +105,9 @@ export default function StokLaporan({ profile }) {
     const rows = scopeBranches.map((b) => {
       const rec = latestFor(serviceRecords, b.id, servicePeriod);
       if (!rec) return { branch: b, rec: null };
-      const status = serviceStatusInfo(rec.data.ratio || 0);
-      return { branch: b, rec, status, isBaru: !!rec.data.cabang_baru };
+      const isLegacy = rec.data?.ratio_laptop == null && rec.data?.total_unit_cabang != null;
+      const status = isLegacy ? serviceStatusInfo(rec.data.ratio || 0) : worstServiceStatus(rec.data.ratio_laptop || 0, rec.data.ratio_aksesoris || 0);
+      return { branch: b, rec, status, isLegacy, isBaru: !!rec.data.cabang_baru };
     });
     const audited = rows.filter((r) => r.rec);
     if (!audited.length) { setError("Belum ada data Service Ratio pada periode ini."); return; }
@@ -105,10 +122,17 @@ export default function StokLaporan({ profile }) {
 
     const tableRows = scopeBranches.map((b, i) => {
       const row = rows.find((r) => r.branch.id === b.id);
-      if (!row.rec) return { cells: [String(i + 1), b.name, null, null, null, null, null, null], badge: null };
+      if (!row.rec) return { cells: [String(i + 1), b.name, null, null, null, null], badge: null };
       const d = row.rec.data;
+      const namaCell = row.isBaru ? `\u2b50 ${b.name} (CABANG BARU)` : b.name;
+      if (row.isLegacy) {
+        return {
+          cells: [String(i + 1), namaCell, `Data lama (gabungan): ${formatRatioPct(d.ratio || 0)}`, "\u2014", "\u2014", "\u2014"],
+          badge: row.isBaru ? { label: "CABANG BARU", color: BARU_COLOR } : { label: row.status.lbl, color: colorMap[row.status.lbl] },
+        };
+      }
       return {
-        cells: [String(i + 1), row.isBaru ? `\u2b50 ${b.name} (CABANG BARU)` : b.name, String(d.laptop ?? "\u2014"), String(d.aksesoris ?? "\u2014"), String(d.user ?? "\u2014"), String(d.stok_service ?? "\u2014"), String(d.total_unit_cabang ?? "\u2014"), formatRatioPct(d.ratio || 0)],
+        cells: [String(i + 1), namaCell, formatRatioPct(d.ratio_laptop || 0), formatRatioPct(d.ratio_aksesoris || 0), String(d.user ?? "\u2014"), ""],
         badge: row.isBaru ? { label: "CABANG BARU", color: BARU_COLOR } : { label: row.status.lbl, color: colorMap[row.status.lbl] },
       };
     });
@@ -118,11 +142,20 @@ export default function StokLaporan({ profile }) {
       ...(countBaru > 0 ? [{ label: "Cabang Baru", count: countBaru, pct: Math.round((countBaru / audited.length) * 100), color: BARU_COLOR }] : []),
     ];
 
+    // Ratio terbaik/terburuk: gabungin dari Laptop & Aksesoris (data baru) + ratio gabungan
+    // (data lama) jadi 1 daftar, biar tetep bisa dibandingin walau formatnya beda-beda.
     let top = null, low = null;
     scorable.forEach((r) => {
-      const ratio = r.rec.data.ratio || 0;
-      if (!top || ratio < top.ratio) top = { ...r, ratio }; // ratio terbaik = paling kecil
-      if (!low || ratio > low.ratio) low = { ...r, ratio };
+      const candidates = r.isLegacy
+        ? [{ label: r.branch.name, ratio: r.rec.data.ratio || 0 }]
+        : [
+            { label: `${r.branch.name} (Laptop)`, ratio: r.rec.data.ratio_laptop || 0 },
+            { label: `${r.branch.name} (Aksesoris)`, ratio: r.rec.data.ratio_aksesoris || 0 },
+          ];
+      candidates.forEach((c) => {
+        if (!top || c.ratio < top.ratio) top = c;
+        if (!low || c.ratio > low.ratio) low = c;
+      });
     });
 
     const html = buildSummaryReportHtml({
@@ -137,26 +170,28 @@ export default function StokLaporan({ profile }) {
         { icon: "alertTriangle", label: "PERLU PERHATIAN", value: String(grouped["Perlu Perhatian"]), sub: `Cabang (${scorable.length ? Math.round((grouped["Perlu Perhatian"] / scorable.length) * 100) : 0}%)`, color: "#a32020" },
         ...(countBaru > 0 ? [{ icon: "building", label: "CABANG BARU", value: String(countBaru), sub: "Belum masuk itungan indikator", color: BARU_COLOR }] : []),
       ],
-      tableHeaders: ["No", "Cabang", "Laptop", "Aksesoris", "User Service", "Stok Service", "Total Unit/Cabang", "% Ratio"],
+      tableHeaders: ["No", "Cabang", "Ratio Laptop", "Ratio Aksesoris", "User Service", "Status"],
+      badgeCol: 5,
       tableRows,
       donutSegments,
       donutCenterLines: [String(total), "Cabang"],
       legendItems: [
-        { icon: "shieldCheck", color: "#1a9e6e", title: "TERKENDALI", desc: "% Ratio Service \u2264 0,22%" },
-        { icon: "alertCircle", color: "#b07212", title: "MONITORING", desc: "% Ratio Service 0,22% s.d. 0,33%" },
-        { icon: "alertTriangle", color: "#a32020", title: "PERLU PERHATIAN", desc: "% Ratio Service \u2265 0,33%" },
+        { icon: "shieldCheck", color: "#1a9e6e", title: "TERKENDALI", desc: "Laptop \u22641% \u00b7 Aksesoris \u22640,22%" },
+        { icon: "alertCircle", color: "#b07212", title: "MONITORING", desc: "Laptop 1-2% \u00b7 Aksesoris 0,22-0,33%" },
+        { icon: "alertTriangle", color: "#a32020", title: "PERLU PERHATIAN", desc: "Laptop >2% \u00b7 Aksesoris >0,33%" },
         ...(countBaru > 0 ? [{ icon: "building", color: BARU_COLOR, title: "CABANG BARU", desc: "Cabang baru dibuka, belum ikut dihitung ke indikator" }] : []),
       ],
       summaryList: [
         { icon: "shieldCheck", label: isServicePersonal ? "Cabang yang Saya Audit" : "Cabang Sudah Diaudit", value: `${audited.length} / ${total}` },
-        { icon: "arrowDown", label: "Ratio Terbaik (terkecil)", value: top ? `${top.branch.name} (${formatRatioPct(top.ratio)})` : "\u2014" },
-        { icon: "arrowUp", label: "Ratio Terburuk (terbesar)", value: low ? `${low.branch.name} (${formatRatioPct(low.ratio)})` : "\u2014", strong: true },
+        { icon: "arrowDown", label: "Ratio Terbaik (terkecil)", value: top ? `${top.label} (${formatRatioPct(top.ratio)})` : "\u2014" },
+        { icon: "arrowUp", label: "Ratio Terburuk (terbesar)", value: low ? `${low.label} (${formatRatioPct(low.ratio)})` : "\u2014", strong: true },
       ],
       notes: [
         isServicePersonal
           ? "Laporan ini cuma isi cabang yang kamu audit sendiri \u2014 BUKAN ringkasan resmi seluruh cabang perusahaan."
           : "Laporan ini merupakan ringkasan Service Ratio seluruh cabang pada periode yang dipilih.",
-        "% Ratio Service dihitung dari Stok Service dibagi Total Unit per Cabang. Makin kecil ratio, makin baik.",
+        "Ratio Laptop & Ratio Aksesoris dihitung terpisah (unit diservice \u00f7 total unit kategori itu). Status = yang terburuk dari dua-duanya. Makin kecil ratio, makin baik.",
+        "Audit sebelum periode split (Laptop/Aksesoris dipisah) ditandai \"Data lama (gabungan)\" \u2014 datanya dibiarin apa adanya, nggak direkonstruksi jadi 2 angka.",
         `Harap lakukan tindak lanjut untuk cabang dengan indikator "Perlu Perhatian".`,
         ...(countBaru > 0 ? [`${countBaru} cabang ditandai "CABANG BARU" \u2014 datanya belum ikut dihitung ke persentase distribusi indikator di atas.`] : []),
       ],
@@ -176,11 +211,15 @@ export default function StokLaporan({ profile }) {
         const rec = latestFor(serviceRecords, b.id, servicePeriod);
         if (!rec) return { Cabang: b.name, Periode: periodeLabel(servicePeriod), Status: "Belum diaudit" };
         const d = rec.data;
-        const status = serviceStatusInfo(d.ratio || 0);
+        const isLegacy = d.ratio_laptop == null && d.total_unit_cabang != null;
+        const status = isLegacy ? serviceStatusInfo(d.ratio || 0) : worstServiceStatus(d.ratio_laptop || 0, d.ratio_aksesoris || 0);
         return {
           Cabang: b.name, Periode: periodeLabel(servicePeriod), "Tanggal Audit": formatDate(d.audit_date),
-          Laptop: d.laptop, Aksesoris: d.aksesoris, "User Service": d.user, "Stok Service": d.stok_service,
-          "Total Unit/Cabang": d.total_unit_cabang, "% Ratio": formatRatioPct(d.ratio || 0), Indikator: d.cabang_baru ? "Cabang Baru" : status.lbl,
+          "Unit Laptop Diservice": d.laptop ?? "\u2014", "Total Unit Laptop": isLegacy ? "\u2014" : (d.total_unit_laptop ?? "\u2014"), "Ratio Laptop": isLegacy ? "\u2014" : formatRatioPct(d.ratio_laptop || 0),
+          "Unit Aksesoris Diservice": d.aksesoris ?? "\u2014", "Total Unit Aksesoris": isLegacy ? "\u2014" : (d.total_unit_aksesoris ?? "\u2014"), "Ratio Aksesoris": isLegacy ? "\u2014" : formatRatioPct(d.ratio_aksesoris || 0),
+          "User Service": d.user ?? "\u2014",
+          "Data Lama (Ratio Gabungan)": isLegacy ? formatRatioPct(d.ratio || 0) : "\u2014",
+          Status: d.cabang_baru ? "Cabang Baru" : status.lbl,
           Auditor: d.auditor_name || "\u2014",
         };
       });
