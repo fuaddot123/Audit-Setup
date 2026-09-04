@@ -830,14 +830,6 @@ export default function LaporanBulanan({ profile }) {
           { text: periodeLabel(period), options: { fontSize: 18, color: WHITE, bold: true } },
         ], { x: 0, y: 3.85, w: 13.33, h: 0.45, align: "center", margin: 0 });
 
-        if (isPersonalView) {
-          const badgeLabel = `HASIL AUDITOR ${(profile?.full_name || "").toUpperCase()}`;
-          const badgeW = Math.min(6.5, Math.max(2.6, badgeLabel.length * 0.088 + 0.5));
-          const badgeX = (13.33 - badgeW) / 2;
-          s.addShape(pptx.ShapeType.roundRect, { x: badgeX, y: 4.32, w: badgeW, h: 0.4, rectRadius: 0.2, fill: { color: GOLD } });
-          s.addText(badgeLabel, { x: badgeX, y: 4.32, w: badgeW, h: 0.4, align: "center", valign: "middle", fontSize: 11, bold: true, color: PURPLE, margin: 0 });
-        }
-
         s.addShape(pptx.ShapeType.rect, { x: 5.9, y: 4.42, w: 0.6, h: 0.014, fill: { color: "6b5f96" } });
         s.addShape(pptx.ShapeType.ellipse, { x: 6.62, y: 4.395, w: 0.09, h: 0.09, fill: { color: GOLD } });
         s.addShape(pptx.ShapeType.rect, { x: 6.83, y: 4.42, w: 0.6, h: 0.014, fill: { color: "6b5f96" } });
@@ -845,18 +837,18 @@ export default function LaporanBulanan({ profile }) {
         s.addText("Divisi Audit Internal \u2014 PT. KLA Teknologi Indonesia", { x: 0, y: 4.6, w: 13.33, h: 0.4, align: "center", fontSize: 13, color: "CFC7E6", margin: 0 });
 
         // Nilai perusahaan
-        const values = [
+        const values0 = [
           { icon: "\u{1F6E1}\u{FE0F}", label: "INTEGRITAS" },
           { icon: "\u{1F50D}", label: "PROFESIONAL" },
           { icon: "\u{1F4C8}", label: "AKUNTABEL" },
           { icon: "\u{1F465}", label: "KOLABORATIF" },
         ];
-        const vw = 2.3, vStartX = (13.33 - vw * values.length) / 2, vY = 5.55;
-        values.forEach((v, i) => {
-          const vx = vStartX + i * vw;
-          s.addText(v.icon, { x: vx, y: vY, w: vw, h: 0.45, align: "center", fontSize: 22, margin: 0 });
-          s.addText(v.label, { x: vx, y: vY + 0.5, w: vw, h: 0.3, align: "center", fontSize: 10.5, bold: true, color: "CFC7E6", charSpacing: 1, margin: 0 });
-          if (i > 0) s.addShape(pptx.ShapeType.rect, { x: vx, y: vY + 0.05, w: 0.012, h: 0.65, fill: { color: "6b5f96" } });
+        const vw0 = 2.3, vStartX0 = (13.33 - vw0 * values0.length) / 2, vY0 = 5.55;
+        values0.forEach((v, i) => {
+          const vx = vStartX0 + i * vw0;
+          s.addText(v.icon, { x: vx, y: vY0, w: vw0, h: 0.45, align: "center", fontSize: 22, margin: 0 });
+          s.addText(v.label, { x: vx, y: vY0 + 0.5, w: vw0, h: 0.3, align: "center", fontSize: 10.5, bold: true, color: "CFC7E6", charSpacing: 1, margin: 0 });
+          if (i > 0) s.addShape(pptx.ShapeType.rect, { x: vx, y: vY0 + 0.05, w: 0.012, h: 0.65, fill: { color: "6b5f96" } });
         });
       }
 
@@ -1393,7 +1385,7 @@ export default function LaporanBulanan({ profile }) {
 
         const keuValid = keuTrend.map((v, i) => ({ v, p: trendPeriods[i] })).filter((o) => o.v !== null);
         if (keuValid.length) {
-          const lowO = keuValid.reduce((a, b) => (b.v < a.v ? b : a)); // makin kecil makin bagus
+          const lowO = keuValid.reduce((a, b) => (b.v < a.v ? b : a));
           const highO = keuValid.reduce((a, b) => (b.v > a.v ? b : a));
           const delta = Math.round((keuValid[keuValid.length - 1].v - keuValid[0].v) * 100);
           const stats = [
@@ -1744,32 +1736,36 @@ export default function LaporanBulanan({ profile }) {
 
         function rankingStatusInfo(score) {
           if (score >= 90) return { lbl: "Sangat Baik", color: "1a9e6e", bg: "E3F6EC", icon: "\u2713" };
-          if (score >= 80) return { lbl: "Baik", color: "2f9e46", bg: "E9F6E9", icon: "\u2713" };
-          if (score >= 70) return { lbl: "Cukup", color: "b07212", bg: "FDF3E0", icon: "\u25D1" };
-          return { lbl: "Perlu Perbaikan", color: RED, bg: "FBE4E4", icon: "\u2717" };
+          return { lbl: "Cukup", color: "b07212", bg: "FDF3E0", icon: "\u25D1" };
         }
-        const medals = ["\uD83D\uDC51", "\uD83E\uDD48", "\uD83E\uDD49", "\uD83C\uDFC5", "\uD83C\uDFC5"];
-        const tabColors = ["F4B400", "C9CDD6", "CC9966", "E4DCFF", "E4DCFF"];
-        const top5 = rankedSOP.slice(0, 5);
+        const medals = ["\uD83D\uDC51", "\uD83E\uDD48", "\uD83E\uDD49"];
+        const allRankedSOP = rankedSOP;
 
-        top5.forEach((r, i) => {
-          const y = 1.4 + i * 1.0;
-          const info = rankingStatusInfo(r.sopScore);
-          s.addShape(pptx.ShapeType.roundRect, { x: 0.5, y, w: 12.33, h: 0.85, fill: { color: i === 0 ? "FFFBF0" : "FBFAFD" }, line: { color: i === 0 ? GOLD : "EDEAF5", width: 1 }, rectRadius: 0.06 });
-          s.addShape(pptx.ShapeType.roundRect, { x: 0.5, y: y + 0.04, w: 0.14, h: 0.77, rectRadius: 0.04, fill: { color: tabColors[i] || "E4DCFF" } });
-          s.addShape(pptx.ShapeType.roundRect, { x: 0.62, y: y + 0.1, w: 0.65, h: 0.65, rectRadius: 0.08, fill: { color: tabColors[i] || "E4DCFF" } });
-          s.addText(String(i + 1), { x: 0.62, y: y + 0.1, w: 0.65, h: 0.65, fontSize: 20, bold: true, color: i <= 2 ? "FFFFFF" : PURPLE, align: "center", valign: "middle", margin: 0 });
-          s.addText(medals[i] || "\u2B50", { x: 1.4, y: y + 0.1, w: 0.6, h: 0.65, fontSize: 24, align: "center", valign: "middle", margin: 0 });
-          s.addText(r.branch.name, { x: 2.1, y: y + 0.1, w: 4.3, h: 0.65, fontSize: 15, bold: true, color: PURPLE, valign: "middle", margin: 0 });
-          // Progress bar
-          const barX = 6.5, barW = 3.4, barY = y + 0.42;
-          s.addShape(pptx.ShapeType.roundRect, { x: barX, y: barY, w: barW, h: 0.1, rectRadius: 0.05, fill: { color: "E5E1EF" } });
-          s.addShape(pptx.ShapeType.roundRect, { x: barX, y: barY, w: barW * Math.min(1, r.sopScore / 100), h: 0.1, rectRadius: 0.05, fill: { color: PURPLE } });
-          s.addText(`${r.sopScore}%`, { x: 10.05, y: y + 0.1, w: 1.0, h: 0.65, fontSize: 19, bold: true, color: GREEN, align: "right", valign: "middle", margin: 0 });
-          s.addShape(pptx.ShapeType.roundRect, { x: 11.2, y: y + 0.22, w: 1.5, h: 0.42, rectRadius: 0.21, fill: { color: info.bg } });
-          s.addText(`${info.icon} ${info.lbl}`, { x: 11.2, y: y + 0.22, w: 1.5, h: 0.42, fontSize: 9.5, bold: true, color: info.color, align: "center", valign: "middle", margin: 0 });
+        const noDataBranches = branches.filter((b) => !allRankedSOP.find((r) => r.branch.id === b.id));
+        const fullList = [...allRankedSOP, ...noDataBranches.map((b) => ({ branch: b, sopScore: null }))];
+
+        const rowH = 0.42, colGap = 0.35;
+        const perCol = Math.ceil(fullList.length / 2);
+        const colW = (12.33 - colGap) / 2;
+        fullList.forEach((r, i) => {
+          const col = i < perCol ? 0 : 1;
+          const rowIdx = i < perCol ? i : i - perCol;
+          const x0 = 0.5 + col * (colW + colGap);
+          const y = 1.5 + rowIdx * rowH;
+          const hasData = r.sopScore != null;
+          const info = hasData ? rankingStatusInfo(r.sopScore) : null;
+          s.addShape(pptx.ShapeType.roundRect, { x: x0, y, w: colW, h: rowH - 0.05, rectRadius: 0.05, fill: { color: i < 3 ? "FFFBF0" : "FBFAFD" }, line: { color: i < 3 ? GOLD : "EDEAF5", width: 0.75 } });
+          s.addText(medals[i] || String(i + 1), { x: x0 + 0.08, y, w: 0.42, h: rowH - 0.05, fontSize: medals[i] ? 13 : 10.5, bold: true, color: PURPLE, align: "center", valign: "middle", margin: 0 });
+          s.addText(r.branch.name, { x: x0 + 0.52, y, w: colW * 0.42, h: rowH - 0.05, fontSize: 10, bold: true, color: PURPLE, valign: "middle", margin: 0 });
+          if (hasData) {
+            s.addShape(pptx.ShapeType.roundRect, { x: x0 + colW * 0.5, y: y + 0.11, w: colW * 0.3, h: 0.14, rectRadius: 0.04, fill: { color: "E5E1EF" } });
+            s.addShape(pptx.ShapeType.roundRect, { x: x0 + colW * 0.5, y: y + 0.11, w: colW * 0.3 * Math.min(1, r.sopScore / 100), h: 0.14, rectRadius: 0.04, fill: { color: PURPLE } });
+            s.addText(`${r.sopScore}%`, { x: x0 + colW * 0.82, y, w: colW * 0.18, h: rowH - 0.05, fontSize: 10, bold: true, color: info.color, align: "right", valign: "middle", margin: 0 });
+          } else {
+            s.addText("Belum ada data", { x: x0 + colW * 0.5, y, w: colW * 0.5, h: rowH - 0.05, fontSize: 8.5, italic: true, color: "999999", valign: "middle", margin: 0 });
+          }
         });
-        if (!top5.length) s.addText("Belum ada cabang yang diaudit periode ini.", { x: 0.6, y: 1.7, w: 12, h: 0.6, fontSize: 14, color: GREY });
+        if (!fullList.length) s.addText("Belum ada cabang yang diaudit periode ini.", { x: 0.6, y: 1.7, w: 12, h: 0.6, fontSize: 14, color: GREY });
 
         // ── Bar bawah ──
         const barBotY = 6.55;
@@ -1783,12 +1779,10 @@ export default function LaporanBulanan({ profile }) {
         s.addText("KETERANGAN INDIKATOR", { x: 6.25, y: barBotY + 0.06, w: 3, h: 0.25, fontSize: 8.5, bold: true, color: "CFC7E6", margin: 0 });
         const legendKeys = [
           { icon: "\u2713", c: "1a9e6e", l: "\u226590%", d: "Sangat Baik" },
-          { icon: "\u2713", c: "2f9e46", l: "80-89%", d: "Baik" },
-          { icon: "\u25D1", c: GOLD, l: "70-79%", d: "Cukup" },
-          { icon: "\u2717", c: "e05555", l: "<70%", d: "Perlu Perbaikan" },
+          { icon: "\u25D1", c: GOLD, l: "<90%", d: "Cukup" },
         ];
         legendKeys.forEach((it, i) => {
-          const lx = 6.15 + i * 1.62;
+          const lx = 6.15 + i * 2.2;
           s.addShape(pptx.ShapeType.ellipse, { x: lx, y: barBotY + 0.35, w: 0.24, h: 0.24, fill: { color: it.c } });
           s.addText(it.icon, { x: lx, y: barBotY + 0.35, w: 0.24, h: 0.24, fontSize: 8, align: "center", valign: "middle", color: WHITE, margin: 0 });
           s.addText(`${it.l} ${it.d}`, { x: lx + 0.28, y: barBotY + 0.34, w: 1.4, h: 0.28, fontSize: 7.8, bold: true, color: WHITE, valign: "middle", margin: 0 });

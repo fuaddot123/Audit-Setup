@@ -28,7 +28,7 @@ const MODULES = [
   { key: "kpi", label: "KPI", ready: true },
   { key: "biaya_dinas", label: "Biaya Dinas", ready: true },
   { key: "laporan_bulanan", label: "Laporan Bulanan", ready: true },
-  { key: "laporan_tahunan", label: "Laporan Tahunan", ready: false },
+  { key: "laporan_tahunan", label: "Laporan Tahunan", ready: true },
   { key: "timeline", label: "Timeline", ready: true },
   // Hanya muncul untuk Super Admin — lihat penyaringan di bawah.
   { key: "master", label: "Master Data", ready: true, hanyaSuperAdmin: true },

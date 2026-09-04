@@ -46,6 +46,13 @@ function computeStatus(entry, settings) {
   const sisa = hasManualSisa ? (parseFloat(entry.sisa_saldo) || 0) : total - pk;
   const terpakai = sm > 0 ? pk / sm : 0;
   const posisi = total > 0 ? pk / total : 0;
+  // "Posisi murni" = seolah-olah saldo sebelumnya nggak pernah minus (dianggap 0) — buat
+  // misahin efek domino carry-forward dari performa bulan ini sendiri. Cuma beda kalau saldo
+  // sebelumnya beneran minus; kalau nggak minus, sama aja kayak posisi biasa.
+  const sbBersih = Math.max(0, sb);
+  const totalBersih = sbBersih + sm;
+  const posisiMurni = totalBersih > 0 ? pk / totalBersih : 0;
+  const bawaanMinus = sb < 0 ? sb : 0; // negatif kalau ada bawaan minus, 0 kalau nggak ada
   let indikator, keterangan, tone;
   if (sisa < 0) { indikator = "Pengecekan"; keterangan = "Kas kecil minus"; tone = "bad"; }
   else if (posisi * 100 <= settings.terkendali) { indikator = "Terkendali"; keterangan = "Saldo masih longgar dan aman"; tone = "good"; }
@@ -53,7 +60,7 @@ function computeStatus(entry, settings) {
   else if (posisi * 100 <= settings.monitoring) { indikator = "Monitoring"; keterangan = "Perlu dipantau, posisi kas mendekati limit"; tone = "warn"; }
   else { indikator = "Tindak Lanjut"; keterangan = "Posisi kas melebihi ambang, perlu tindak lanjut"; tone = "bad"; }
   if (lim > 0 && sm > lim && sisa >= 0) keterangan += " \u00b7 saldo masuk melebihi limit";
-  return { sisa, terpakai, posisi, indikator, keterangan, tone };
+  return { sisa, terpakai, posisi, posisiMurni, bawaanMinus, indikator, keterangan, tone };
 }
 
 function formatThousands(v) {
@@ -366,8 +373,12 @@ export default function AuditKeuangan({ profile }) {
       ["Sisa saldo kas kecil", rupiah(c.sisa)],
       ["% Terpakai", pct(c.terpakai)],
       ["% Posisi kas", pct(c.posisi)],
+      ...(c.bawaanMinus < 0 ? [["% Posisi Murni (tanpa bawaan minus)", pct(c.posisiMurni)]] : []),
     ];
     const rowsHtml = rows.map(([k, v]) => `<tr><td style="padding:9px 4px;color:#5B6270;border-bottom:1px solid #E4E5E9">${k}</td><td style="padding:9px 4px;font-weight:600;text-align:right;border-bottom:1px solid #E4E5E9">${v}</td></tr>`).join("");
+    const bawaanMinusHtml = c.bawaanMinus < 0
+      ? `<div style="background:#a3202014;border:1px solid #a3202055;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:11.5px;color:#a32020;"><b>\u26a0\ufe0f Bawaan minus dari bulan lalu: ${rupiah(c.bawaanMinus)}</b> \u2014 ikut ngurangin kas tersedia bulan ini, % Posisi Kas di atas lebih tinggi dari performa bulan ini doang.</div>`
+      : "";
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Laporan Audit</title><style>
       body{font-family:Arial,Helvetica,sans-serif;color:#1A1D24;padding:40px;-webkit-print-color-adjust:exact;print-color-adjust:exact;}
       table{width:100%;border-collapse:collapse;font-size:13.5px;margin-bottom:20px;}
@@ -375,6 +386,7 @@ export default function AuditKeuangan({ profile }) {
     </style></head><body><div id="pdfZoom">
       <h1>Laporan Audit Kas Kecil</h1>
       <div style="font-size:13px;color:#5B6270;margin-bottom:20px">Cabang: ${esc(selectedBranch.name)} &middot; Bulan: ${esc(monthLabel(selectedPeriod))}</div>
+      ${bawaanMinusHtml}
       <table>${rowsHtml}</table>
       <div class="status">${esc(c.indikator)} &mdash; ${esc(c.keterangan)}</div>
       </div>
@@ -424,7 +436,7 @@ export default function AuditKeuangan({ profile }) {
     const colorMap = { good: "#1a9e6e", warn: "#b07212", bad: "#a32020", none: "#888" };
     const BARU_COLOR = "#F4B740";
     const TV_COLOR = "#888";
-    let totalSb = 0, totalSm = 0, totalLim = 0, totalPk = 0, totalSisa = 0, countFilled = 0, countBaru = 0, countTV = 0;
+    let totalSb = 0, totalSm = 0, totalLim = 0, totalPk = 0, totalSisa = 0, countFilled = 0, countBaru = 0, countTV = 0, countMinus = 0;
     const groupCount = { good: 0, warn: 0, bad: 0 };
 
     const tableRows = exportBranches.map((b, i) => {
@@ -447,6 +459,7 @@ export default function AuditKeuangan({ profile }) {
       totalPk += parseFloat(e.pengeluaran) || 0;
       totalSisa += c.sisa;
       countFilled++;
+      if (c.sisa < 0) countMinus++;
       if (isBaru) countBaru++;
       else groupCount[c.tone]++;
       return {
@@ -502,6 +515,7 @@ export default function AuditKeuangan({ profile }) {
         `Laporan ini merupakan ringkasan hasil audit kas kecil untuk seluruh cabang pada bulan yang dipilih (${countFilled} dari ${total} cabang terisi).`,
         "Status indikator berdasarkan persentase posisi kas (pengeluaran dibanding total saldo tersedia) terhadap ambang batas yang ditetapkan.",
         `Harap lakukan tindak lanjut untuk cabang dengan indikator "Pengecekan" atau "Tindak Lanjut".`,
+        ...(countMinus > 0 ? [`${countMinus} cabang punya Sisa Saldo minus bulan ini \u2014 nilai minus ini otomatis jadi "Saldo Sebelumnya" bulan berikutnya, ikut ngurangin kas tersedia dan bikin % Posisi Kas bulan depan keliatan lebih tinggi meski pengeluarannya belum tentu naik.`] : []),
         ...(countBaru > 0 ? [`${countBaru} cabang ditandai "CABANG BARU" \u2014 datanya masih nol/minim karena baru dibuka, tidak ikut dihitung ke persentase distribusi indikator di atas.`] : []),
       ],
       pageLabel: "Halaman 1 dari 1",
@@ -650,11 +664,11 @@ export default function AuditKeuangan({ profile }) {
                   </div>
                 </div>
               ) : (
-                <div style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 12px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div style={{ background: "var(--surface-alt)", border: `1px solid ${(parseFloat(form.saldo_sebelumnya) || 0) < 0 ? "rgba(239,68,68,0.4)" : "var(--border)"}`, borderRadius: 10, padding: "10px 12px", marginBottom: 16, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
                   <span style={{ fontSize: 11.5, color: "var(--text-secondary)", display: "flex", alignItems: "center", gap: 5 }}>
                     <Icon name="history" size={13} /> Saldo sebelumnya <span style={{ color: "var(--text-faint)" }}>(otomatis)</span>
                   </span>
-                  <span className="mono" style={{ fontSize: 13.5, fontWeight: 600 }}>{rupiah(form.saldo_sebelumnya)}</span>
+                  <span className="mono" style={{ fontSize: 13.5, fontWeight: 600, color: (parseFloat(form.saldo_sebelumnya) || 0) < 0 ? "var(--danger-text)" : "var(--text-primary)" }}>{rupiah(form.saldo_sebelumnya)}</span>
                 </div>
               )}
 
@@ -739,6 +753,12 @@ export default function AuditKeuangan({ profile }) {
                 <div style={{ fontWeight: 700, fontSize: 14.5, color: "#7c3aed", marginBottom: 2 }}>2. HASIL PERHITUNGAN</div>
                 <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 16 }}>Dihitung otomatis dari data di samping</div>
 
+                {current.bawaanMinus < 0 && (
+                  <div style={{ background: "var(--danger-bg)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, padding: "9px 12px", marginBottom: 14, fontSize: 11.5, color: "var(--danger-text)" }}>
+                    <b>\u26a0\ufe0f Bawaan minus dari bulan lalu: {rupiah(current.bawaanMinus)}</b> \u2014 ini ikut ngurangin kas tersedia bulan ini, jadi % Posisi Kas di bawah keliatan lebih tinggi dari performa bulan ini doang. Lihat "% Posisi Murni" buat angka tanpa efek ini.
+                  </div>
+                )}
+
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 16 }}>
                   <div>
                     <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 4 }}>Sisa Saldo</div>
@@ -749,9 +769,15 @@ export default function AuditKeuangan({ profile }) {
                     <div style={{ fontSize: 26, fontWeight: 800, color: TONE[current.tone].dot }}>{pct(current.posisi)}</div>
                   </div>
                 </div>
-                <div style={{ height: 6, background: "var(--border)", borderRadius: 4, overflow: "hidden", marginBottom: 16 }}>
+                <div style={{ height: 6, background: "var(--border)", borderRadius: 4, overflow: "hidden", marginBottom: current.bawaanMinus < 0 ? 10 : 16 }}>
                   <div style={{ height: "100%", width: `${Math.min(current.posisi * 100, 100)}%`, background: TONE[current.tone].dot, transition: "width .2s" }} />
                 </div>
+                {current.bawaanMinus < 0 && (
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--surface-alt)", borderRadius: 8, padding: "8px 12px", marginBottom: 16, fontSize: 12 }}>
+                    <span style={{ color: "var(--text-secondary)" }}>% Posisi Murni <span style={{ color: "var(--text-faint)" }}>(tanpa bawaan minus)</span></span>
+                    <span style={{ fontWeight: 800, fontSize: 14 }} className="mono">{pct(current.posisiMurni)}</span>
+                  </div>
+                )}
 
                 <div style={{ background: TONE[current.tone].bg, borderRadius: 8, padding: "9px 12px", marginBottom: 16 }}>
                   <div style={{ fontWeight: 700, color: TONE[current.tone].text, marginBottom: 2 }}>{current.indikator}</div>
@@ -924,7 +950,9 @@ function KeuanganHistoryChart({ entriesByBranch, branchId, settings }) {
     .sort()
     .map((period) => {
       const latest = latestOf(byPeriod[period]);
-      return latest ? { period, posisi: computeStatus(latest, settings)?.posisi || 0 } : null;
+      if (!latest) return null;
+      const st = computeStatus(latest, settings);
+      return { period, posisi: st?.posisi || 0, sisa: st?.sisa ?? 0 };
     })
     .filter(Boolean);
 
@@ -965,15 +993,37 @@ function KeuanganHistoryChart({ entriesByBranch, branchId, settings }) {
         {shown.map((p, i) => {
           const isLast = i === shown.length - 1;
           const showLabel = i % labelEvery === 0 || isLast;
+          const isMinus = p.sisa < 0;
           return (
             <g key={i}>
-              <circle cx={xAt(i)} cy={yAt(p.posisi)} r={isLast ? 4 : 3} fill={isLast ? "#F4B740" : "#7c3aed"} />
-              {showLabel && <text x={xAt(i)} y={yAt(p.posisi) - 10} textAnchor="middle" fontSize="10" fontWeight="700" fill={isLast ? "#F4B740" : "var(--text-secondary)"}>{(p.posisi * 100).toFixed(0)}%</text>}
+              <circle cx={xAt(i)} cy={yAt(p.posisi)} r={isLast ? 4 : 3} fill={isMinus ? "#a32020" : isLast ? "#F4B740" : "#7c3aed"} />
+              {showLabel && <text x={xAt(i)} y={yAt(p.posisi) - 10} textAnchor="middle" fontSize="10" fontWeight="700" fill={isMinus ? "#a32020" : isLast ? "#F4B740" : "var(--text-secondary)"}>{(p.posisi * 100).toFixed(0)}%</text>}
               {showLabel && <text x={xAt(i)} y={H - 10} textAnchor="middle" fontSize="9.5" fill="var(--text-faint)">{monthLabel(p.period)}</text>}
             </g>
           );
         })}
       </svg>
+      {/* Baris Sisa Saldo per bulan — bulan yang minus ditandain merah, biar keliatan
+          jelas efek "domino" yang ngerembet ke bulan berikutnya. */}
+      <div style={{ display: "flex", gap: 6, marginTop: 10, minWidth: W, paddingLeft: padL - 6 }}>
+        {shown.map((p, i) => (
+          <div key={i} style={{ flex: 1, textAlign: "center", minWidth: 58 }}>
+            <div style={{ fontSize: 9, color: "var(--text-faint)", marginBottom: 2 }}>{monthLabel(p.period).split(" ")[0].slice(0, 3)}</div>
+            <div style={{
+              fontSize: 10, fontWeight: 700, borderRadius: 6, padding: "3px 4px",
+              color: p.sisa < 0 ? "#a32020" : "var(--text-secondary)",
+              background: p.sisa < 0 ? "#a3202018" : "transparent",
+            }}>
+              {rupiah(p.sisa)}
+            </div>
+          </div>
+        ))}
+      </div>
+      {shown.some((p) => p.sisa < 0) && (
+        <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 8 }}>
+          <span style={{ color: "#a32020", fontWeight: 700 }}>Merah</span> = Sisa Saldo minus bulan itu \u2014 otomatis ngurangin kas tersedia bulan berikutnya.
+        </div>
+      )}
     </div>
   );
 }
