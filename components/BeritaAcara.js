@@ -169,16 +169,21 @@ export default function BeritaAcara({ profile }) {
     setError(null);
     setLoadingRecord(true);
     const period = viewPeriod;
-    const prevPeriod = addMonthsToPeriod(period, -1);
     const isolate = profile?.role === "auditor";
     let beQuery = supabase.from("berita_acara").select("*").eq("branch_id", b.id).eq("period", period);
     if (isolate && period >= ISOLATION_START_PERIOD) beQuery = beQuery.eq("submitted_by", profile.id);
     let invQuery = supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", period);
     if (isolate && period >= ISOLATION_START_PERIOD) invQuery = invQuery.eq("submitted_by", profile.id);
-    let bePrevQuery = supabase.from("berita_acara").select("*").eq("branch_id", b.id).eq("period", prevPeriod);
-    if (isolate && prevPeriod >= ISOLATION_START_PERIOD) bePrevQuery = bePrevQuery.eq("submitted_by", profile.id);
-    let invPrevQuery = supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", prevPeriod);
-    if (isolate && prevPeriod >= ISOLATION_START_PERIOD) invPrevQuery = invPrevQuery.eq("submitted_by", profile.id);
+    // "Salin dari Bulan Lalu" nyari sampe 6 bulan ke belakang (bukan cuma 1 bulan persis
+    // sebelumnya) — kalau bulan langsung sebelumnya Tidak Visit/Cabang Baru, nggak
+    // representatif buat disalin, jadi dicari terus mundur sampe ketemu bulan yang beneran
+    // ada datanya. Isolasi per-auditor tetep dipakai pola .or() standar (sebagian rentang
+    // 6 bulan ini bisa aja motong periode sebelum & sesudah Agustus 2026 sekaligus).
+    const lookbackStart = addMonthsToPeriod(period, -6);
+    let bePrevQuery = supabase.from("berita_acara").select("*").eq("branch_id", b.id).gte("period", lookbackStart).lt("period", period);
+    if (isolate) bePrevQuery = bePrevQuery.or(`period.lt.${ISOLATION_START_PERIOD},submitted_by.eq.${profile.id}`);
+    let invPrevQuery = supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).gte("period", lookbackStart).lt("period", period);
+    if (isolate) invPrevQuery = invPrevQuery.or(`period.lt.${ISOLATION_START_PERIOD},submitted_by.eq.${profile.id}`);
     const [beRes, invRes, bePrevRes, invPrevRes] = await Promise.all([beQuery, invQuery, bePrevQuery, invPrevQuery]);
 
     // Data display dimuat terpisah dan galatnya SENGAJA tidak dilempar ke
@@ -201,19 +206,21 @@ export default function BeritaAcara({ profile }) {
     const invEntries = !invRes.error ? (invRes.data || []) : [];
     setEntriesThisPeriod(entries);
 
-    // Siapkan data bulan lalu (buat tombol "Salin dari bulan lalu"), pakai audit paling baru kalau ada beberapa.
-    const bePrevEntries = !bePrevRes.error
-      ? [...(bePrevRes.data || [])].sort((a, b2) => (b2.audit_date || "").localeCompare(a.audit_date || ""))
+    // Siapkan data bulan lalu (buat tombol "Salin dari bulan lalu") — dicari MUNDUR sampe
+    // 6 bulan, dilewatin yang Tidak Visit ATAU Cabang Baru (dua-duanya nggak representatif
+    // buat disalin), diambil yang PERTAMA ketemu valid (paling deket ke bulan ini).
+    const bePrevAll = !bePrevRes.error
+      ? [...(bePrevRes.data || [])].sort((a, b2) => (b2.period || "").localeCompare(a.period || "") || (b2.audit_date || "").localeCompare(a.audit_date || ""))
       : [];
-    const invPrevEntries = !invPrevRes.error ? (invPrevRes.data || []) : [];
-    if (bePrevEntries.length) {
-      const prevLatest = bePrevEntries[0];
-      const pairedInvPrev = invPrevEntries.find((iv) => iv.data?.audit_date === prevLatest.audit_date) || invPrevEntries[0] || null;
+    const invPrevAll = !invPrevRes.error ? (invPrevRes.data || []) : [];
+    const prevLatest = bePrevAll.find((r) => !r.tidak_visit && !r.cabang_baru) || null;
+    if (prevLatest) {
+      const pairedInvPrev = invPrevAll.find((iv) => iv.period === prevLatest.period && iv.data?.audit_date === prevLatest.audit_date) || invPrevAll.find((iv) => iv.period === prevLatest.period) || null;
       setPrevMonthData({
         stockKat1: Array.isArray(prevLatest.stock_opname_kat1) ? prevLatest.stock_opname_kat1 : [],
         stockKat2: Array.isArray(prevLatest.stock_opname_kat2) ? prevLatest.stock_opname_kat2 : [],
         inventarisCategories: pairedInvPrev?.data?.categories || null,
-        periodLabel: periodeLabel(prevPeriod),
+        periodLabel: periodeLabel(prevLatest.period),
         storeLeaderName: prevLatest.store_leader_name || "",
         storeManagerName: prevLatest.store_manager_name || "",
       });
@@ -228,7 +235,7 @@ export default function BeritaAcara({ profile }) {
       setShowCopyBanner(false);
     } else {
       startNewEntry(period);
-      setShowCopyBanner(!!bePrevEntries.length);
+      setShowCopyBanner(!!prevLatest);
     }
     setLoadingRecord(false);
   }
