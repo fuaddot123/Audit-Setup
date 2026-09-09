@@ -510,7 +510,7 @@ export default function BeritaAcara({ profile }) {
   }
 
   async function exportPDF() {
-    if (!selectedBranch) return;
+    if (!selectedBranch) { setError("Cabang belum kepilih \u2014 nggak bisa cetak PDF."); return; }
     const printDate = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
 
     if (tidakVisit) {
@@ -540,6 +540,11 @@ export default function BeritaAcara({ profile }) {
       win.document.close();
       return;
     }
+
+    // Seluruh proses generate HTML dibungkus try/catch — kalau ada bagian manapun yang error
+    // (misal data Monitoring Display belum lengkap), pesannya MUNCUL di layar (setError),
+    // bukan diem doang kayak sebelumnya (bikin kelihatan "tombolnya nggak bisa diklik").
+    try {
 
     function catPct(rows) {
       if (!rows.length) return null;
@@ -692,7 +697,7 @@ export default function BeritaAcara({ profile }) {
         stokBarisHtml,
         stokTotal: stockTotalCount,
         stokSelisih: stockSelisihCount,
-        stokPct,
+        stokPct: stockPct,
         kat1Pct,
         kat2Pct,
         displayBarisHtml: displayBarisBaru,
@@ -1037,6 +1042,10 @@ export default function BeritaAcara({ profile }) {
     if (!win) { setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF."); return; }
     win.document.write(html);
     win.document.close();
+    } catch (err) {
+      console.error("Gagal generate PDF Berita Acara:", err);
+      setError("Gagal mencetak PDF: " + (err?.message || String(err)) + " \u2014 coba screenshot pesan ini kalau butuh bantuan lebih lanjut.");
+    }
   }
 
   // ── Tampilan: pilih cabang ──
