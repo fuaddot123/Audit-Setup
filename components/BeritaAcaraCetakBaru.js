@@ -104,7 +104,63 @@ thead { display: table-header-group; }
 /* Foto bukti kerusakan inventaris. */
 .inv-foto { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; }
 .inv-foto img { width: 30px; height: 30px; object-fit: cover; border-radius: 3px; border: 1px solid #e6e2f0; }
+
+/* Foto unit Monitoring Display.
+   Potongannya dibangun di BeritaAcara.js dengan kelas-kelas ini, dan sampai
+   10 Sep 2026 tidak satu pun didefinisikan di sini — hanya di template LAMA.
+   Kelas yang tidak terdefinisi tidak menimbulkan galat: fotonya cuma tercetak
+   SEUKURAN ASLINYA, dan foto ponsel beberapa ribu piksel merobek halaman.
+
+   Ukurannya mengikuti cetakan Audit SOP (38px), ketetapan pemilik 10 Sep 2026.
+   Template lama tetap 92px dan tidak disentuh — Berita Acara periode sebelum
+   September yang sudah ditandatangani tidak boleh berubah bentuknya. */
+.foto-unit { margin-top: 6px; page-break-inside: avoid; break-inside: avoid; }
+.foto-unit-judul { font-size: 7.4px; font-weight: 800; color: #2A1F52; margin-bottom: 3px; }
+.foto-unit-grid { display: flex; flex-wrap: wrap; gap: 4px; }
+.foto-unit-img { width: 38px; height: 38px; object-fit: cover; border-radius: 4px; border: 1px solid #ddd; }
 `;
+
+// Dialog cetak dipanggil sesudah font dan gambar benar-benar siap.
+//
+// Kalau dipanggil lebih awal, yang tercetak adalah halaman yang tata
+// letaknya belum jadi — huruf pengganti sementara punya lebar berbeda,
+// dan foto bukti kerusakan yang belum termuat tidak ikut tercetak sama
+// sekali. Lembar itu ditandatangani orang; isinya tidak boleh bergantung
+// pada seberapa cepat jaringannya hari itu.
+//
+// document.fonts bisa tidak ada di peramban lama; jatuhnya ke Promise
+// yang sudah selesai, bukan ke galat. Gambar yang gagal dimuat
+// (onerror) tetap dihitung selesai — satu foto rusak tidak boleh
+// membuat dokumennya tidak pernah tercetak sama sekali.
+const SKRIP_CETAK = `
+<script>
+(function () {
+  function gambarSiap() {
+    var gambar = Array.prototype.slice.call(document.images || []);
+    var belum = gambar.filter(function (g) { return !g.complete; });
+    if (!belum.length) return Promise.resolve();
+    return Promise.all(belum.map(function (g) {
+      return new Promise(function (selesai) {
+        g.addEventListener("load", selesai);
+        g.addEventListener("error", selesai);
+      });
+    }));
+  }
+  function fontSiap() {
+    try {
+      if (document.fonts && document.fonts.ready) return document.fonts.ready;
+    } catch (e) {}
+    return Promise.resolve();
+  }
+  function cetak() {
+    Promise.all([fontSiap(), gambarSiap()]).then(function () {
+      setTimeout(function () { window.print(); }, 250);
+    });
+  }
+  if (document.readyState === "complete") cetak();
+  else window.addEventListener("load", cetak);
+}());
+</script>`;
 
 function kKartu(ikon, judul, angka, warna, lencana, legenda, penuh) {
   return `<div class="k-kartu"${penuh ? ' style="width:100%"' : ""}>`
@@ -177,6 +233,8 @@ export function cetakBaruHtml({
   stokBarisHtml, stokTotal, stokSelisih, stokPct, kat1Pct, kat2Pct,
   displayBarisHtml, displayFotoHtml, displayDipajang, displayLewat, displayBatas,
   skorD, displayInfo,
+  // Bawaannya MATI. Lihat catatan SKRIP_CETAK di bawah.
+  otomatisCetak = false,
 }) {
   const inv = skorInventaris(inventaris);
   const invWarna = inv.rusak ? "#b06a12" : "#1a7f56";
@@ -256,5 +314,7 @@ export function cetakBaruHtml({
   + `<div class="k-kaki"><div><div class="n">KLA COMPUTER</div>`
   + `<div class="s">Solusi Lengkap Kebutuhan Digital Anda</div></div>`
   + `<div class="s">klacomputer.co.id \u00b7 audit@klacomputer.id</div></div>`
-  + `</div></body></html>`;
+  + `</div>`
+  + (otomatisCetak ? SKRIP_CETAK : "")
+  + `</body></html>`;
 }
