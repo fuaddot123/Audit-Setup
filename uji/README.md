@@ -9,6 +9,9 @@ node uji/uji-impor-lib.mjs        # pengurai berkas impor display
 node uji/uji-lihat-sebagai.mjs    # pagar "mode lihat sebagai" (hanya hak baca)
 node uji/uji-baris-display.mjs    # baris tabel Monitoring Display di cetakan
 node uji/uji-cetak-baru.mjs       # cetakan Berita Acara format baru, dirender sungguhan
+node uji/uji-pemicu-cetak.mjs     # dialog cetak dipanggil, dan tiap nama di titik pemanggilan punya deklarasi
+node uji/uji-kelas-cetak.mjs      # kelas CSS yang dikirim pemanggil benar-benar ada di gaya cetakan
+node uji/uji-vonis-service.mjs    # Service Ratio divonis dari dua rasio terpisah, bukan rata-ratanya
 node uji/uji-berkas-asli.mjs      # pengurai diadu ke berkas laporan yang asli
 ```
 
