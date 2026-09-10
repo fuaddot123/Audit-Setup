@@ -106,6 +106,48 @@ thead { display: table-header-group; }
 .inv-foto img { width: 30px; height: 30px; object-fit: cover; border-radius: 3px; border: 1px solid #e6e2f0; }
 `;
 
+// Dialog cetak dipanggil sesudah font dan gambar benar-benar siap.
+//
+// Kalau dipanggil lebih awal, yang tercetak adalah halaman yang tata
+// letaknya belum jadi — huruf pengganti sementara punya lebar berbeda,
+// dan foto bukti kerusakan yang belum termuat tidak ikut tercetak sama
+// sekali. Lembar itu ditandatangani orang; isinya tidak boleh bergantung
+// pada seberapa cepat jaringannya hari itu.
+//
+// document.fonts bisa tidak ada di peramban lama; jatuhnya ke Promise
+// yang sudah selesai, bukan ke galat. Gambar yang gagal dimuat
+// (onerror) tetap dihitung selesai — satu foto rusak tidak boleh
+// membuat dokumennya tidak pernah tercetak sama sekali.
+const SKRIP_CETAK = `
+<script>
+(function () {
+  function gambarSiap() {
+    var gambar = Array.prototype.slice.call(document.images || []);
+    var belum = gambar.filter(function (g) { return !g.complete; });
+    if (!belum.length) return Promise.resolve();
+    return Promise.all(belum.map(function (g) {
+      return new Promise(function (selesai) {
+        g.addEventListener("load", selesai);
+        g.addEventListener("error", selesai);
+      });
+    }));
+  }
+  function fontSiap() {
+    try {
+      if (document.fonts && document.fonts.ready) return document.fonts.ready;
+    } catch (e) {}
+    return Promise.resolve();
+  }
+  function cetak() {
+    Promise.all([fontSiap(), gambarSiap()]).then(function () {
+      setTimeout(function () { window.print(); }, 250);
+    });
+  }
+  if (document.readyState === "complete") cetak();
+  else window.addEventListener("load", cetak);
+}());
+</script>`;
+
 function kKartu(ikon, judul, angka, warna, lencana, legenda, penuh) {
   return `<div class="k-kartu"${penuh ? ' style="width:100%"' : ""}>`
     + `<div class="bl">${ikon}</div><div><div class="t">${esc(judul)}</div>`
@@ -177,6 +219,8 @@ export function cetakBaruHtml({
   stokBarisHtml, stokTotal, stokSelisih, stokPct, kat1Pct, kat2Pct,
   displayBarisHtml, displayFotoHtml, displayDipajang, displayLewat, displayBatas,
   skorD, displayInfo,
+  // Bawaannya MATI. Lihat catatan SKRIP_CETAK di bawah.
+  otomatisCetak = false,
 }) {
   const inv = skorInventaris(inventaris);
   const invWarna = inv.rusak ? "#b06a12" : "#1a7f56";
@@ -256,5 +300,7 @@ export function cetakBaruHtml({
   + `<div class="k-kaki"><div><div class="n">KLA COMPUTER</div>`
   + `<div class="s">Solusi Lengkap Kebutuhan Digital Anda</div></div>`
   + `<div class="s">klacomputer.co.id \u00b7 audit@klacomputer.id</div></div>`
-  + `</div></body></html>`;
+  + `</div>`
+  + (otomatisCetak ? SKRIP_CETAK : "")
+  + `</body></html>`;
 }

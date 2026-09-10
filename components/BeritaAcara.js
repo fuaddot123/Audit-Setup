@@ -707,6 +707,10 @@ export default function BeritaAcara({ profile }) {
         displayBatas: dBatas,
         skorD,
         displayInfo,
+        // Dokumennya memanggil dialog cetaknya sendiri, seperti template lama.
+        // Tanpa ini tabnya terbuka lalu berhenti di situ — tanpa galat, tanpa
+        // dialog, tanpa berkas; dan itu terbaca sebagai "tidak bisa di-download".
+        otomatisCetak: true,
       });
       const winBaru = window.open("", "_blank");
       if (!winBaru) { setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF."); return; }
