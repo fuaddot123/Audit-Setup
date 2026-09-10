@@ -490,7 +490,8 @@ export default function SopAuditCabang({ profile }) {
   // ── Tampilan: form checklist ──
   return (
     <div style={{ flex: 1 }}>
-      <div style={{ background: "var(--surface)", padding: "16px 28px", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, zIndex: 10 }}>
+      {/* Bagian ini SCROLL NORMAL (nggak nempel) — tanggal/nama/riwayat/checkbox */}
+      <div style={{ background: "var(--surface)", padding: "16px 28px", borderBottom: "1px solid var(--border)" }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12, marginBottom: 12 }}>
           <div>
             <button className="btn-ghost" style={{ marginBottom: 8, fontSize: 12.5 }} onClick={backToList}>&larr; Pilih cabang lain</button>
@@ -509,9 +510,6 @@ export default function SopAuditCabang({ profile }) {
               <label style={{ display: "block", fontSize: 11, color: "var(--text-secondary)", marginBottom: 3 }}>Nama yang Mengetahui</label>
               <input className="input" placeholder="Misal: Store Manager" disabled={!canEdit} value={storeManagerName} onChange={(e) => { setStoreManagerName(e.target.value); setSaved(false); }} />
             </div>
-            <button className="btn" disabled={saving || !canEdit} onClick={saveAudit} style={{ alignSelf: "flex-end" }} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
-              {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan Hasil Audit" : "Hanya Lihat"}
-            </button>
             {!profile?.liatSebagai && (profile?.role === "super_admin" || (profile?.role === "auditor" && entriesThisPeriod.find((e) => e.id === selectedEntryId)?.submitted_by === profile?.id)) && selectedEntryId && (
               <button className="btn-ghost" disabled={saving} onClick={deleteAudit} style={{ alignSelf: "flex-end", color: "var(--danger-text)", borderColor: "var(--danger-border, rgba(239,68,68,0.35))" }}>
                 Hapus Data
@@ -577,26 +575,31 @@ export default function SopAuditCabang({ profile }) {
           Cabang ini tidak dikunjungi bulan ini (Tidak Visit)
         </label>
 
-        <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: canEdit ? "pointer" : "default", fontSize: 13, color: "var(--text-secondary)" }}>
           <input type="checkbox" checked={cabangBaru} disabled={!canEdit} onChange={(e) => { setCabangBaru(e.target.checked); setSaved(false); }} />
           Cabang Baru <span style={{ color: "var(--text-faint)" }}>(tetap dihitung normal, cuma ditandai di laporan)</span>
         </label>
+      </div>
 
-        {/* Skor live */}
+      {/* Bagian ini yang NEMPEL (sticky) — cuma skor/progress + tombol Simpan, biar hemat layar */}
+      <div style={{ background: "var(--surface)", padding: "12px 28px", borderBottom: "1px solid var(--border)", position: "sticky", top: 0, zIndex: 10, display: "flex", alignItems: "center", gap: 16 }}>
         {!tidakVisit && (
-          <div style={{ display: "flex", alignItems: "center", gap: 16 }}>
-            <div style={{ fontSize: 26, fontWeight: 800, color: scoreColor(weightedPct) }}>{weightedPct}%</div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 4 }}>{itemsChecked} dari {TOTAL_ITEMS} item dicentang &middot; {totalDone} dari {TOTAL_POINTS} poin terpenuhi</div>
+          <>
+            <div style={{ fontSize: 22, fontWeight: 800, color: scoreColor(weightedPct), flexShrink: 0 }}>{weightedPct}%</div>
+            <div style={{ flex: 1, minWidth: 120 }}>
+              <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 4 }}>{itemsChecked} dari {TOTAL_ITEMS} item dicentang &middot; {totalDone} dari {TOTAL_POINTS} poin terpenuhi</div>
               <div style={{ height: 6, background: "var(--bg-page)", borderRadius: 4, overflow: "hidden" }}>
                 <div style={{ height: "100%", width: `${weightedPct}%`, background: scoreColor(weightedPct), transition: "width .2s" }} />
               </div>
             </div>
             {weightedPct < ALERT_THRESHOLD && (
-              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--danger-text)", background: "var(--danger-bg)", padding: "4px 10px", borderRadius: 20 }}>DI BAWAH TARGET</span>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "var(--danger-text)", background: "var(--danger-bg)", padding: "4px 10px", borderRadius: 20, flexShrink: 0 }}>DI BAWAH TARGET</span>
             )}
-          </div>
+          </>
         )}
+        <button className="btn" disabled={saving || !canEdit} onClick={saveAudit} style={{ flexShrink: 0, marginLeft: tidakVisit ? 0 : "auto" }} title={!canEdit ? "Kamu tidak punya izin mengedit" : undefined}>
+          {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : canEdit ? "Simpan Hasil Audit" : "Hanya Lihat"}
+        </button>
       </div>
 
       {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
