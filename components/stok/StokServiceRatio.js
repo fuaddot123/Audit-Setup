@@ -4,7 +4,7 @@ import { sortBranches } from "../../lib/branchOrder";
 import {
   calcServiceRatio, serviceStatusInfo, laptopStatusInfo, formatRatioPct,
   periodFromDate, todayInputValue, periodeLabel, SERVICE_THRESHOLDS, LAPTOP_THRESHOLDS,
-  nowPeriode, addMonthsToPeriod,
+  nowPeriode, addMonthsToPeriod, worstServiceStatus, vonisService,
 } from "../../lib/stokConfig";
 
 const EMPTY_FORM = { laptop: "", aksesoris: "", aksesoris_customer: "", user: "", total_unit_laptop: "", total_unit_aksesoris: "" };
@@ -304,15 +304,31 @@ export default function StokServiceRatio({ profile }) {
       return;
     }
 
-    const historyRows = fullHistory.map((r) => r.data?.tidak_visit ? `<tr>
+    // Kolom rasio ditulis TERPISAH Laptop/Aksesoris, dan statusnya yang
+    // TERBURUK dari keduanya. Angka rata-rata dua skala tidak pernah dicetak:
+    // ia bukan besaran apa pun, dan dokumen ini ditandatangani orang.
+    const historyRows = fullHistory.map((r) => {
+      if (r.data?.tidak_visit) return `<tr>
         <td>${esc(shortDate(r.data?.audit_date))}</td>
         <td class="mono">\u2014</td>
+        <td class="mono">\u2014</td>
         <td>Tidak Visit</td>
-      </tr>` : `<tr>
-        <td>${esc(shortDate(r.data?.audit_date))}${r.data?.cabang_baru ? '<span class="baru-badge">BARU</span>' : ""}</td>
-        <td class="mono">${esc(formatRatioPct(r.data.ratio || 0))}</td>
-        <td>${esc(serviceStatusInfo(r.data.ratio || 0).lbl)}</td>
-      </tr>`).join("") || `<tr><td colspan="3" style="text-align:center;color:#999;padding:10px;">Belum ada riwayat</td></tr>`;
+      </tr>`;
+      const v = vonisService(r.data);
+      const tgl = `${esc(shortDate(r.data?.audit_date))}${r.data?.cabang_baru ? '<span class="baru-badge">BARU</span>' : ""}`;
+      if (v.tanpaData) return `<tr><td>${tgl}</td><td class="mono">\u2014</td><td class="mono">\u2014</td><td>\u2014</td></tr>`;
+      if (v.legacy) return `<tr>
+        <td>${tgl}</td>
+        <td class="mono" colspan="2">Data lama (gabungan): ${esc(formatRatioPct(v.ratioGabungan))}</td>
+        <td>${esc(v.status.lbl)}</td>
+      </tr>`;
+      return `<tr>
+        <td>${tgl}</td>
+        <td class="mono">${esc(formatRatioPct(v.ratioLaptop))}</td>
+        <td class="mono">${esc(formatRatioPct(v.ratioAksesoris))}</td>
+        <td>${esc(v.status.lbl)}</td>
+      </tr>`;
+    }).join("") || `<tr><td colspan="4" style="text-align:center;color:#999;padding:10px;">Belum ada riwayat</td></tr>`;
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Service Ratio ${esc(selectedBranch.name)}</title>
     <style>
@@ -353,9 +369,10 @@ export default function StokServiceRatio({ profile }) {
           <div class="metric-card"><div class="l">Status Aksesoris</div><div class="v" style="font-size:14px;color:${statusAksesoris.color};">${esc(statusAksesoris.lbl)}</div></div>
         </div>
         <table>
-          <thead><tr><th>Tanggal Audit</th><th>% Ratio</th><th>Status</th></tr></thead>
+          <thead><tr><th>Tanggal Audit</th><th>% Ratio Laptop</th><th>% Ratio Aksesoris</th><th>Status</th></tr></thead>
           <tbody>${historyRows}</tbody>
         </table>
+        <div class="note-box" style="margin-bottom:10px;">Status = yang <b>terburuk</b> antara Laptop &amp; Aksesoris, bukan rata-ratanya &mdash; ambang keduanya berbeda (Laptop 1%/2%, Aksesoris 0,22%/0,33%). Audit sebelum kedua rasio dipisah ditandai &ldquo;Data lama (gabungan)&rdquo;.</div>
         ${catatan ? `<div class="note-box"><b>Catatan:</b> ${esc(catatan)}</div>` : ""}
       </div>
       </div>
@@ -418,12 +435,23 @@ export default function StokServiceRatio({ profile }) {
           {(() => {
             const rows = branches.map((b) => latestByBranchPeriod[`${b.id}|${viewPeriod}`]).filter(Boolean);
             const auditedCount = rows.length;
-            const avgRatio = auditedCount ? rows.reduce((s, r) => s + (r.entry.data.ratio || 0), 0) / auditedCount : null;
-            const alertCount = rows.filter((r) => serviceStatusInfo(r.entry.data.ratio || 0).lbl === "Perlu Perhatian").length;
+            const vonis = rows.map((r) => ({ tv: !!r.entry.data?.tidak_visit, v: vonisService(r.entry.data) }));
+            // Rata-rata dihitung PER KATEGORI. Merata-ratakan Laptop dan
+            // Aksesoris jadi satu angka mencampur dua skala yang ambangnya
+            // beda 4,55x-6,06x, dan angka campuran itu tidak bisa dinilai
+            // dengan ambang mana pun.
+            const rerata = (kunci) => {
+              const nilai = vonis.filter((x) => !x.tv && !x.v.legacy && !x.v.tanpaData).map((x) => x.v[kunci]);
+              return nilai.length ? nilai.reduce((s, n) => s + n, 0) / nilai.length : null;
+            };
+            const avgLaptop = rerata("ratioLaptop");
+            const avgAksesoris = rerata("ratioAksesoris");
+            const alertCount = vonis.filter((x) => !x.tv && x.v.status?.lbl === "Perlu Perhatian").length;
             return (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14, marginBottom: 20 }}>
                 <SummaryCard label="Cabang sudah diaudit" value={`${auditedCount} / ${branches.length}`} />
-                <SummaryCard label="Rata-rata Ratio" value={avgRatio !== null ? formatRatioPct(avgRatio) : "\u2014"} />
+                <SummaryCard label="Rata-rata Ratio Laptop" value={avgLaptop !== null ? formatRatioPct(avgLaptop) : "\u2014"} />
+                <SummaryCard label="Rata-rata Ratio Aksesoris" value={avgAksesoris !== null ? formatRatioPct(avgAksesoris) : "\u2014"} />
                 <SummaryCard label="Perlu Perhatian (alert)" value={alertCount} color={alertCount > 0 ? "var(--danger-text)" : "#1a9e6e"} />
               </div>
             );
@@ -435,15 +463,15 @@ export default function StokServiceRatio({ profile }) {
               {branches.map((b) => {
                 const row = latestByBranchPeriod[`${b.id}|${viewPeriod}`];
                 const isTidakVisit = row?.entry.data?.tidak_visit;
-                const rRatio = row && !isTidakVisit ? row.entry.data.ratio || 0 : null;
-                const rStatus = rRatio !== null ? serviceStatusInfo(rRatio) : null;
+                const rVonis = row && !isTidakVisit ? vonisService(row.entry.data) : null;
+                const rStatus = rVonis && !rVonis.tanpaData ? rVonis.status : null;
                 return (
                   <div
                     key={b.id}
                     onClick={() => pickBranch(b)}
                     style={{ position: "relative", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: "16px 18px", cursor: "pointer", overflow: "hidden" }}
                   >
-                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: !row ? "linear-gradient(90deg, #7c3aed, #F4B740)" : isTidakVisit ? "#888" : rStatus.color }} />
+                    <div style={{ position: "absolute", top: 0, left: 0, right: 0, height: 3, background: !row ? "linear-gradient(90deg, #7c3aed, #F4B740)" : isTidakVisit || !rStatus ? "#888" : rStatus.color }} />
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: row ? 8 : 4 }}>
                       <div style={{ fontWeight: 600, fontSize: 14.5 }}>{b.name}</div>
                       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
@@ -459,11 +487,29 @@ export default function StokServiceRatio({ profile }) {
                       isTidakVisit ? (
                         <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: "#88888822", color: "#888", fontSize: 11, fontWeight: 600 }}>Tidak Visit</span>
                       ) : (
+                      !rStatus ? (
+                        <span style={{ display: "inline-block", padding: "3px 10px", borderRadius: 20, background: "#88888822", color: "#888", fontSize: 11, fontWeight: 600 }}>Data belum lengkap</span>
+                      ) : (
                       <>
-                        <div style={{ fontSize: 22, fontWeight: 800, color: rStatus.color }}>{formatRatioPct(rRatio)}</div>
+                        {rVonis.legacy ? (
+                          <div style={{ fontSize: 22, fontWeight: 800, color: rStatus.color }}>{formatRatioPct(rVonis.ratioGabungan)}</div>
+                        ) : (
+                          <div style={{ display: "flex", gap: 14, alignItems: "baseline", flexWrap: "wrap" }}>
+                            <div>
+                              <div style={{ fontSize: 9.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: 0.3 }}>Laptop</div>
+                              <div style={{ fontSize: 18, fontWeight: 800, color: laptopStatusInfo(rVonis.ratioLaptop).color }}>{formatRatioPct(rVonis.ratioLaptop)}</div>
+                            </div>
+                            <div>
+                              <div style={{ fontSize: 9.5, fontWeight: 700, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: 0.3 }}>Aksesoris</div>
+                              <div style={{ fontSize: 18, fontWeight: 800, color: serviceStatusInfo(rVonis.ratioAksesoris).color }}>{formatRatioPct(rVonis.ratioAksesoris)}</div>
+                            </div>
+                          </div>
+                        )}
                         <span style={{ display: "inline-block", marginTop: 6, padding: "3px 10px", borderRadius: 20, background: `${rStatus.color}22`, color: rStatus.color, fontSize: 11, fontWeight: 600 }}>{rStatus.lbl}</span>
+                        {rVonis.legacy && <span style={{ display: "block", fontSize: 9.5, color: "var(--text-faint)", marginTop: 4 }}>Data lama (gabungan)</span>}
                         <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 6 }}>Terakhir: {shortDate(row.entry.data?.audit_date)}</div>
                       </>
+                      )
                       )
                     ) : (
                       <div style={{ fontSize: 11.5, fontWeight: 400, color: "var(--text-faint)" }}>Belum ada audit &middot; Mulai &rarr;</div>
@@ -524,7 +570,8 @@ export default function StokServiceRatio({ profile }) {
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   {[...entriesThisPeriod].sort((a, b) => (a.data?.audit_date || "").localeCompare(b.data?.audit_date || "")).map((e, i) => {
                     const isTV = e.data?.tidak_visit;
-                    const st = !isTV ? serviceStatusInfo(e.data.ratio || 0) : null;
+                    const ev = !isTV ? vonisService(e.data) : null;
+                    const st = ev && !ev.tanpaData ? ev.status : null;
                     const active = e.id === selectedEntryId;
                     return (
                       <div
@@ -542,10 +589,16 @@ export default function StokServiceRatio({ profile }) {
                         {e.data?.cabang_baru && <span style={{ fontSize: 10, fontWeight: 700, color: "#F4B740" }}>⭐ Baru</span>}
                         {isTV ? (
                           <span style={{ fontSize: 11, fontWeight: 700, color: "#888" }}>Tidak Visit</span>
+                        ) : !st ? (
+                          <span style={{ fontSize: 11, fontWeight: 700, color: "#888" }}>—</span>
                         ) : (
                           <>
                             <span style={{ width: 6, height: 6, borderRadius: "50%", background: st.color }} />
-                            <span style={{ fontSize: 12, fontWeight: 700, color: st.color }}>{formatRatioPct(e.data.ratio || 0)}</span>
+                            <span style={{ fontSize: 12, fontWeight: 700, color: st.color }}>
+                              {ev.legacy
+                                ? `${formatRatioPct(ev.ratioGabungan)} (gabungan)`
+                                : `L ${formatRatioPct(ev.ratioLaptop)} · A ${formatRatioPct(ev.ratioAksesoris)}`}
+                            </span>
                           </>
                         )}
                       </div>
@@ -632,9 +685,13 @@ export default function StokServiceRatio({ profile }) {
                 <div style={{ fontWeight: 700, fontSize: 14.5, color: "#7c3aed", marginBottom: 2 }}>2. HASIL PERHITUNGAN</div>
                 <div style={{ fontSize: 12, color: "var(--text-faint)", marginBottom: 16 }}>Hasil perhitungan otomatis berdasarkan data di samping</div>
 
+                {/* Tiap baris membawa ambangnya SENDIRI. Sebelum ini rasio Laptop
+                    dibagi ambang AKSESORIS (0,33%), jadi laptop 1,50% dan laptop
+                    3,00% sama-sama menggambar batang PENUH — batang yang selalu
+                    penuh tidak memberi tahu apa pun. */}
                 {[
-                  { label: "Laptop", ratio: ratioLaptop, status: statusLaptop },
-                  { label: "Aksesoris", ratio: ratioAksesoris, status: statusAksesoris },
+                  { label: "Laptop", ratio: ratioLaptop, status: statusLaptop, max: LAPTOP_THRESHOLDS.monitoring },
+                  { label: "Aksesoris", ratio: ratioAksesoris, status: statusAksesoris, max: SERVICE_THRESHOLDS.monitoring },
                 ].map((r, i) => (
                   <div key={r.label} style={{ marginBottom: i === 0 ? 16 : 0, paddingBottom: i === 0 ? 16 : 0, borderBottom: i === 0 ? "1px solid var(--border)" : "none" }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -642,7 +699,7 @@ export default function StokServiceRatio({ profile }) {
                       <div style={{ fontSize: 20, fontWeight: 800, color: r.status.color }}>{formatRatioPct(r.ratio)}</div>
                     </div>
                     <div style={{ height: 6, background: "var(--border)", borderRadius: 4, overflow: "hidden", marginBottom: 8 }}>
-                      <div style={{ height: "100%", width: `${Math.min((r.ratio / SERVICE_THRESHOLDS.monitoring) * 100, 100)}%`, background: r.status.color, transition: "width .2s" }} />
+                      <div style={{ height: "100%", width: `${Math.min((r.ratio / r.max) * 100, 100)}%`, background: r.status.color, transition: "width .2s" }} />
                     </div>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, background: `${r.status.color}18`, border: `1px solid ${r.status.color}55`, borderRadius: 20, padding: "5px 12px", width: "fit-content" }}>
                       <span style={{ width: 13, height: 13, color: r.status.color }}>{ICON.eye}</span>
@@ -739,20 +796,60 @@ function ThresholdLegend({ color, label, range }) {
 }
 
 // history: array of audit_generic rows (module=stok_service), tiap baris 1 titik (pakai audit_date, bukan cuma bulan)
+//
+// DUA grafik terpisah, bukan satu. Menumpuk rasio Laptop dan Aksesoris pada
+// satu sumbu berarti membaca keduanya dengan penggaris yang sama, padahal
+// ambangnya beda 4,55x-6,06x — dan itu persis kekeliruan yang layar ini dulu
+// lakukan waktu ia menggambar rata-rata keduanya sebagai satu garis.
 function RatioHistoryChart({ history }) {
-  const shown = history
-    .filter((r) => r.data?.audit_date)
-    .map((r) => ({ date: r.data.audit_date, ratio: r.data.ratio || 0 }))
+  const titik = history
+    .filter((r) => r.data?.audit_date && !r.data?.tidak_visit)
+    .map((r) => ({ date: r.data.audit_date, v: vonisService(r.data) }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
-  if (shown.length < 2) {
-    return <div style={{ fontSize: 12.5, color: "var(--text-faint)", padding: "40px 0", textAlign: "center" }}>Belum cukup riwayat buat ditampilkan sebagai grafik.</div>;
+  const baru = titik.filter((t) => !t.v.legacy && !t.v.tanpaData);
+  const jumlahLama = titik.filter((t) => t.v.legacy).length;
+
+  if (baru.length < 2) {
+    return (
+      <div style={{ fontSize: 12.5, color: "var(--text-faint)", padding: "40px 0", textAlign: "center" }}>
+        Belum cukup riwayat buat ditampilkan sebagai grafik.
+        {jumlahLama > 0 && <div style={{ marginTop: 6, fontSize: 11.5 }}>{jumlahLama} audit lama hanya punya ratio gabungan, jadi nggak bisa digambar di sumbu Laptop/Aksesoris.</div>}
+      </div>
+    );
   }
 
+  return (
+    <div>
+      <RatioSeriesChart
+        judul="Ratio Laptop"
+        warna="#7c3aed"
+        titik={baru.map((t) => ({ date: t.date, ratio: t.v.ratioLaptop }))}
+        ambang={LAPTOP_THRESHOLDS}
+      />
+      <div style={{ height: 18 }} />
+      <RatioSeriesChart
+        judul="Ratio Aksesoris"
+        warna="#1f7a8c"
+        titik={baru.map((t) => ({ date: t.date, ratio: t.v.ratioAksesoris }))}
+        ambang={SERVICE_THRESHOLDS}
+      />
+      {jumlahLama > 0 && (
+        <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 8 }}>
+          {jumlahLama} audit lama (gabungan) nggak digambar &mdash; datanya cuma 1 angka, nggak bisa dipisah jadi Laptop/Aksesoris.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RatioSeriesChart({ judul, warna, titik, ambang }) {
+  const shown = titik;
   const H = 220, padL = 46, padR = 16, padT = 20, padB = 30;
   const colWidth = 60;
   const W = Math.max(640, padL + padR + (shown.length - 1) * colWidth);
-  const maxVal = Math.max(...shown.map((p) => p.ratio), SERVICE_THRESHOLDS.monitoring) * 1.15;
+  // Sumbunya diukur terhadap ambang METRIK INI, bukan ambang metrik sebelah.
+  const maxVal = Math.max(...shown.map((p) => p.ratio), ambang.monitoring) * 1.15;
   const xStep = (W - padL - padR) / (shown.length - 1);
   const xAt = (i) => padL + i * xStep;
   const yAt = (v) => padT + (1 - v / maxVal) * (H - padT - padB);
@@ -761,14 +858,24 @@ function RatioHistoryChart({ history }) {
   const areaPoints = `${padL},${yAt(0)} ${linePoints} ${xAt(shown.length - 1)},${yAt(0)}`;
   const yTicks = [0, maxVal * 0.25, maxVal * 0.5, maxVal * 0.75, maxVal];
   const labelEvery = Math.ceil(shown.length / 9);
+  // Dua grafik hidup di satu halaman. id gradien yang sama membuat grafik
+  // kedua memakai gradien milik yang pertama — warnanya diam-diam salah.
+  const fillId = `ratioFill-${judul.replace(/[^A-Za-z]/g, "")}`;
 
   return (
     <div style={{ width: "100%", overflowX: "auto" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 4 }}>
+        <span style={{ width: 9, height: 9, borderRadius: "50%", background: warna, flexShrink: 0 }} />
+        <span style={{ fontSize: 12, fontWeight: 700 }}>{judul}</span>
+        <span style={{ fontSize: 10.5, color: "var(--text-faint)" }}>
+          batas Terkendali {formatRatioPct(ambang.terkendali)} &middot; Monitoring {formatRatioPct(ambang.monitoring)}
+        </span>
+      </div>
       <svg viewBox={`0 0 ${W} ${H}`} style={{ width: W, height: "auto", minWidth: "100%" }}>
         <defs>
-          <linearGradient id="ratioFill" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor="#7c3aed" stopOpacity="0.35" />
-            <stop offset="100%" stopColor="#7c3aed" stopOpacity="0" />
+          <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={warna} stopOpacity="0.35" />
+            <stop offset="100%" stopColor={warna} stopOpacity="0" />
           </linearGradient>
         </defs>
         {yTicks.map((t, i) => (
@@ -777,14 +884,20 @@ function RatioHistoryChart({ history }) {
             <text x={padL - 8} y={yAt(t) + 3} textAnchor="end" fontSize="9" fill="var(--text-faint)">{(t * 100).toFixed(2)}%</text>
           </g>
         ))}
-        <polygon points={areaPoints} fill="url(#ratioFill)" />
-        <polyline points={linePoints} fill="none" stroke="#7c3aed" strokeWidth="2" />
+        {[
+          { v: ambang.terkendali, c: "#1a9e6e" },
+          { v: ambang.monitoring, c: "#a32020" },
+        ].map((g, i) => (
+          <line key={`amb${i}`} x1={padL} x2={W - padR} y1={yAt(g.v)} y2={yAt(g.v)} stroke={g.c} strokeWidth="1" strokeDasharray="4 3" opacity="0.7" />
+        ))}
+        <polygon points={areaPoints} fill={`url(#${fillId})`} />
+        <polyline points={linePoints} fill="none" stroke={warna} strokeWidth="2" />
         {shown.map((p, i) => {
           const isLast = i === shown.length - 1;
           const showLabel = i % labelEvery === 0 || isLast;
           return (
             <g key={i}>
-              <circle cx={xAt(i)} cy={yAt(p.ratio)} r={isLast ? 4 : 3} fill={isLast ? "#F4B740" : "#7c3aed"} />
+              <circle cx={xAt(i)} cy={yAt(p.ratio)} r={isLast ? 4 : 3} fill={isLast ? "#F4B740" : warna} />
               {showLabel && <text x={xAt(i)} y={yAt(p.ratio) - 10} textAnchor="middle" fontSize="10" fontWeight="700" fill={isLast ? "#F4B740" : "var(--text-secondary)"}>{(p.ratio * 100).toFixed(2)}%</text>}
               {showLabel && <text x={xAt(i)} y={H - 10} textAnchor="middle" fontSize="9.5" fill="var(--text-faint)">{shortDate(p.date)}</text>}
             </g>

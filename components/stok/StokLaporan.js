@@ -3,7 +3,7 @@ import { supabase } from "../../lib/supabaseClient";
 import { sortBranches } from "../../lib/branchOrder";
 import {
   serviceStatusInfo, laptopStatusInfo, formatRatioPct, kesehatanStatusInfo, formatKesehatanPct,
-  nowPeriode, periodeLabel, SERVICE_THRESHOLDS, LAPTOP_THRESHOLDS,
+  nowPeriode, periodeLabel, SERVICE_THRESHOLDS, LAPTOP_THRESHOLDS, worstServiceStatus,
 } from "../../lib/stokConfig";
 import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
 import BranchMultiSelect from "../BranchMultiSelect";
@@ -12,17 +12,9 @@ import BranchMultiSelect from "../BranchMultiSelect";
 // per kategori — Laptop 1%/2%, Aksesoris 0,22%/0,33% — konsisten sama pola yang dipakai di
 // Dashboard Audit & Laporan Bulanan) — dari situ ambil status TERBURUK dari dua-duanya buat
 // badge kolom (bukan rata-rata, biar nggak ada kategori yang ketutupan).
-function worstServiceStatus(ratioLaptop, ratioAksesoris) {
-  const infoLaptop = laptopStatusInfo(ratioLaptop);
-  const infoAksesoris = serviceStatusInfo(ratioAksesoris);
-  if (infoLaptop.lbl === "Perlu Perhatian" || infoAksesoris.lbl === "Perlu Perhatian") {
-    return infoAksesoris.lbl === "Perlu Perhatian" ? infoAksesoris : infoLaptop;
-  }
-  if (infoLaptop.lbl === "Monitoring" || infoAksesoris.lbl === "Monitoring") {
-    return infoLaptop.lbl === "Monitoring" ? infoLaptop : infoAksesoris;
-  }
-  return infoLaptop;
-}
+//
+// Definisinya pindah ke lib/stokConfig.js waktu layar Service Ratio ikut
+// membutuhkannya. Isinya tidak berubah sebaris pun.
 
 export default function StokLaporan({ profile }) {
   const [branches, setBranches] = useState([]);
