@@ -195,6 +195,40 @@ export async function hapusDisplayUntukPeriode({ branchId, period }) {
   }
 }
 
+// ── Reset TOTAL Monitoring Display buat 1 cabang (semua unit, semua periode) ──
+// BEDA dari hapusDisplayUntukPeriode di atas: fungsi itu ngurusin 1 audit
+// yang dihapus (cuma nyentuh catatan periode itu). Ini tombol TERPISAH —
+// "Reset Monitoring Display" — buat auditor yang mau isi ulang dari nol
+// pakai Impor Excel baru. Karena display_unit TIDAK tersimpan per-periode
+// (1 unit bisa kepajang lewat berbulan-bulan), reset ini OTOMATIS ngelibas
+// SEMUA bulan cabang tsb sekaligus, bukan cuma periode yang lagi dibuka —
+// nggak ada cara lain, karena tabelnya sendiri nggak kenal konsep "bulan"
+// per unit. Cabang lain sama sekali nggak kesentuh (query selalu pakai
+// branch_id). Foto-foto kondisi ikut dibersihkan dari Storage.
+export async function resetDisplayUntukCabang({ branchId }) {
+  const { data: unitRows, error: uErr } = await supabase
+    .from("display_unit").select("id").eq("branch_id", branchId);
+  if (uErr) throw uErr;
+  const unitIds = (unitRows || []).map((u) => u.id);
+  if (!unitIds.length) return;
+
+  const { data: semuaKondisi, error: kErr } = await supabase
+    .from("display_kondisi").select("photos").in("display_unit_id", unitIds);
+  if (kErr) throw kErr;
+
+  const semuaFoto = (semuaKondisi || []).flatMap((k) => Array.isArray(k.photos) ? k.photos : []);
+  if (semuaFoto.length) {
+    const paths = semuaFoto.map((m) => {
+      const idx = m.url.indexOf("/findings/");
+      return idx === -1 ? null : m.url.slice(idx + "/findings/".length);
+    }).filter(Boolean);
+    if (paths.length) await supabase.storage.from("findings").remove(paths);
+  }
+
+  await supabase.from("display_kondisi").delete().in("display_unit_id", unitIds);
+  await supabase.from("display_unit").delete().in("id", unitIds);
+}
+
 // ── Muat data ──────────────────────────────────────────────────────────
 
 export async function muatDisplay({ branchId, period }) {
@@ -607,11 +641,28 @@ function PanelImpor({ onMasuk, onTutup, cabang, tanggalAcuan }) {
 
 export function DisplaySection({
   rows, perlakuanOpsi, kondisiOpsi, canEdit, uploadingIdx,
-  onUpdate, onAdd, onRemove, onUploadFoto, onHapusFoto, onImpor,
+  onUpdate, onAdd, onRemove, onUploadFoto, onHapusFoto, onImpor, onReset,
   cabang, tanggalAudit,
 }) {
   const [filter, setFilter] = useState("all"); // "all" | "perhatian" | "belum"
   const [bukaImpor, setBukaImpor] = useState(false);
+
+  // Reset TOTAL, jadi konfirmasinya sengaja dua lapis: window.confirm biasa,
+  // terus ketik ulang nama cabang persis. Klik salah sekali doang nggak
+  // cukup buat ngapus histori umur pajang satu cabang penuh.
+  function handleResetClick() {
+    if (!onReset) return;
+    if (!window.confirm(
+      `Reset TOTAL Monitoring Display cabang ${cabang}?\n\n` +
+      `Semua ${rows.length} unit + seluruh histori umur pajang bakal DIHAPUS PERMANEN, ` +
+      `dari SEMUA bulan (bukan cuma periode yang lagi dibuka). Cabang lain tidak kesentuh.\n\n` +
+      `Lanjut?`
+    )) return;
+    const ketik = window.prompt(`Ketik ulang nama cabang "${cabang}" persis untuk konfirmasi:`);
+    if (ketik === null) return;
+    if (ketik !== cabang) { window.alert("Nama cabang tidak cocok. Reset dibatalkan."); return; }
+    onReset();
+  }
 
   const dipajang = rows.filter((r) => !r.turun).length;
   const lewat = rows.filter((r) => !r.turun && r.status_umur === "Lewat Batas").length;
@@ -651,6 +702,12 @@ export function DisplaySection({
             {onImpor && (
               <button className="btn-ghost" onClick={() => setBukaImpor((b) => !b)} style={{ fontSize: 12 }}>
                 ⬆ Impor Excel
+              </button>
+            )}
+            {onReset && rows.length > 0 && (
+              <button className="btn-ghost" onClick={handleResetClick}
+                style={{ fontSize: 12, color: "var(--danger-text)", borderColor: "var(--danger-text)" }}>
+                🗑️ Reset semua
               </button>
             )}
           </div>

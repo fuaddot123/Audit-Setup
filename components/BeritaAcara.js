@@ -13,6 +13,7 @@ import { barisDisplayHtml } from "../lib/baris-display";
 import {
   DisplaySection, muatDisplay, simpanDisplay, periksaDisplay,
   barisDisplayBaru, uploadDisplayMedia, hapusDisplayUntukPeriode,
+  resetDisplayUntukCabang,
 } from "./DisplayMonitoring";
 
 function nowPeriode() {
@@ -521,6 +522,26 @@ export default function BeritaAcara({ profile }) {
       setSaved(false);
     } catch (err) {
       setError("Gagal menghapus: " + err.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Reset TOTAL Monitoring Display cabang yang lagi dibuka — terpisah dari
+  // deleteRecord() di atas (yang cuma ngurusin 1 audit). Ini buat auditor
+  // yang mau isi ulang dari nol pakai Impor Excel baru. Konfirmasinya sudah
+  // dua lapis di DisplaySection (window.confirm + ketik nama cabang), jadi
+  // di sini tinggal eksekusi.
+  async function resetMonitoringDisplay() {
+    if (!selectedBranch) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await resetDisplayUntukCabang({ branchId: selectedBranch.id });
+      setDisplayRows([]);
+      setDisplayError(null);
+    } catch (err) {
+      setError("Gagal reset Monitoring Display: " + err.message);
     } finally {
       setSaving(false);
     }
@@ -1365,6 +1386,7 @@ export default function BeritaAcara({ profile }) {
                 onUploadFoto={handleUploadDisplayMedia}
                 onHapusFoto={removeDisplayMedia}
                 onImpor={imporDisplay}
+                onReset={resetMonitoringDisplay}
                 cabang={selectedBranch.name}
                 tanggalAudit={auditDate}
               />
