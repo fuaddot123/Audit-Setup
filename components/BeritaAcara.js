@@ -12,7 +12,7 @@ import { cetakBaruHtml } from "./BeritaAcaraCetakBaru";
 import { barisDisplayHtml } from "../lib/baris-display";
 import {
   DisplaySection, muatDisplay, simpanDisplay, periksaDisplay,
-  barisDisplayBaru, uploadDisplayMedia,
+  barisDisplayBaru, uploadDisplayMedia, hapusDisplayUntukPeriode,
 } from "./DisplayMonitoring";
 
 function nowPeriode() {
@@ -484,6 +484,23 @@ export default function BeritaAcara({ profile }) {
       if (err) throw err;
       if (selectedInventarisEntryId) {
         await supabase.from("audit_generic").delete().eq("id", selectedInventarisEntryId);
+      }
+      // Ikut bersihin Monitoring Display buat periode ini: unit yang baru
+      // lahir di audit yang dihapus ini hilang total, unit lama cuma
+      // catatan kondisi periode ini yang kehapus (+ undo "turun" kalau
+      // jatuhnya di periode ini). Lihat DisplayMonitoring.js buat detail.
+      await hapusDisplayUntukPeriode({ branchId: selectedBranch.id, period: viewPeriod });
+      // Muat ulang Monitoring Display biar layar nggak nampilin data lama
+      // (bedanya sama pickBranch: di sini galatnya boleh sunyi juga, sama
+      // alasannya — jangan sampe gagal hapus cuma gara-gara display error).
+      try {
+        const d = await muatDisplay({ branchId: selectedBranch.id, period: viewPeriod });
+        setDisplayRows(d.rows);
+        setPerlakuanOpsi(d.perlakuanOpsi);
+        setKondisiOpsi(d.kondisiOpsi);
+      } catch (errDisplay) {
+        setDisplayRows([]); setPerlakuanOpsi([]); setKondisiOpsi([]);
+        setDisplayError("Data display tidak bisa dimuat: " + errDisplay.message);
       }
       // Kumpulin semua foto/video Inventaris di record ini (dari semua kategori), hapus dari Storage
       // juga — biar nggak nyisain file orphan pas audit-nya udah kehapus dari database.
