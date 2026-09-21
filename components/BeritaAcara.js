@@ -538,7 +538,13 @@ export default function BeritaAcara({ profile }) {
     setError(null);
     try {
       await resetDisplayUntukCabang({ branchId: selectedBranch.id });
-      setDisplayRows([]);
+      // Muat ulang dari server (bukan langsung set kosong) — biar kalau
+      // ternyata ada yang keblokir RLS, layar nunjukin kondisi ASLI di
+      // database, bukan status kosong yang menyesatkan.
+      const d = await muatDisplay({ branchId: selectedBranch.id, period: viewPeriod });
+      setDisplayRows(d.rows);
+      setPerlakuanOpsi(d.perlakuanOpsi);
+      setKondisiOpsi(d.kondisiOpsi);
       setDisplayError(null);
     } catch (err) {
       setError("Gagal reset Monitoring Display: " + err.message);

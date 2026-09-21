@@ -226,7 +226,22 @@ export async function resetDisplayUntukCabang({ branchId }) {
   }
 
   await supabase.from("display_kondisi").delete().in("display_unit_id", unitIds);
-  await supabase.from("display_unit").delete().in("id", unitIds);
+
+  // .select() dipaksa di sini SUPAYA ketauan kalau RLS diem-diem nge-block
+  // DELETE-nya — Supabase nggak ngelempar error buat itu (baris yang
+  // ke-block cuma nggak ikut kehapus), jadi tanpa .select() kelihatannya
+  // "berhasil" padahal 0 baris yang beneran kehapus (pernah kejadian di
+  // tabel lain, gara-gara policy DELETE cuma ngunci ke super_admin).
+  const { data: terhapus, error: dErr } = await supabase
+    .from("display_unit").delete().in("id", unitIds).select("id");
+  if (dErr) throw dErr;
+  if ((terhapus || []).length < unitIds.length) {
+    throw new Error(
+      `Cuma ${(terhapus || []).length} dari ${unitIds.length} unit yang kehapus — sisanya keblokir. ` +
+      `Kemungkinan besar policy DELETE di tabel display_unit (Supabase) cuma ngizinin super_admin, ` +
+      `bukan role auditor. Cek RLS policy-nya, jangan diulang-ulang klik reset.`
+    );
+  }
 }
 
 // ── Muat data ──────────────────────────────────────────────────────────
@@ -647,9 +662,8 @@ export function DisplaySection({
   const [filter, setFilter] = useState("all"); // "all" | "perhatian" | "belum"
   const [bukaImpor, setBukaImpor] = useState(false);
 
-  // Reset TOTAL, jadi konfirmasinya sengaja dua lapis: window.confirm biasa,
-  // terus ketik ulang nama cabang persis. Klik salah sekali doang nggak
-  // cukup buat ngapus histori umur pajang satu cabang penuh.
+  // Reset TOTAL — 1x confirm aja, pesannya dibikin jelas biar tetep nggak
+  // kepencet asal, tapi nggak nyuruh ngetik ulang nama cabang segala.
   function handleResetClick() {
     if (!onReset) return;
     if (!window.confirm(
@@ -658,9 +672,6 @@ export function DisplaySection({
       `dari SEMUA bulan (bukan cuma periode yang lagi dibuka). Cabang lain tidak kesentuh.\n\n` +
       `Lanjut?`
     )) return;
-    const ketik = window.prompt(`Ketik ulang nama cabang "${cabang}" persis untuk konfirmasi:`);
-    if (ketik === null) return;
-    if (ketik !== cabang) { window.alert("Nama cabang tidak cocok. Reset dibatalkan."); return; }
     onReset();
   }
 
