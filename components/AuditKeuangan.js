@@ -35,7 +35,10 @@ const TONE = {
   none: { dot: "var(--neutral-dot)", bg: "var(--neutral-bg)", text: "var(--neutral-text)" },
 };
 
-function computeStatus(entry, settings) {
+// Diekspor (sebelumnya cuma internal) supaya BeritaAcara.js (fitur Laporan
+// Kunjungan) bisa pakai rumus status yang SAMA PERSIS — bukan nyalin ulang
+// logikanya yang gampang ketinggalan kalau formulanya kelak berubah.
+export function computeStatus(entry, settings) {
   if (!entry) return null;
   const sb = parseFloat(entry.saldo_sebelumnya) || 0;
   const sm = parseFloat(entry.saldo_masuk) || 0;

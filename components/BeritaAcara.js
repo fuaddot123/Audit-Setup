@@ -7,18 +7,25 @@ import {
   freshInventarisUntuk, normalizeInventarisUntuk, kunciTerpakai,
   itemBelumTersedia, skorInventaris,
 } from "./AuditInventaris";
-import { pakaiFormatBaru, namaPeriode, INVENTARIS_ITEMS, kunciItem } from "../lib/format-ba";
+import { pakaiFormatBaru, namaPeriode, INVENTARIS_ITEMS, kunciItem, statusKategori } from "../lib/format-ba";
 import { cetakBaruHtml } from "./BeritaAcaraCetakBaru";
 import { barisDisplayHtml } from "../lib/baris-display";
 import {
   DisplaySection, muatDisplay, simpanDisplay, periksaDisplay,
   barisDisplayBaru, uploadDisplayMedia, hapusDisplayUntukPeriode,
-  resetDisplayUntukCabang,
+  resetDisplayUntukCabang, hitungUmurHari,
 } from "./DisplayMonitoring";
+import { listFailedItems, scoreInfo, formatRupiah } from "./sopConfig";
+import { formatRatioPct, formatKesehatanPct } from "./stokConfig";
+import { computeStatus as computeStatusKeuangan } from "./AuditKeuangan";
 
 function nowPeriode() {
   const n = new Date();
   return `${n.getFullYear()}-${String(n.getMonth() + 1).padStart(2, "0")}`;
+}
+function periodFromDate(dateStr) {
+  if (!dateStr) return nowPeriode();
+  return dateStr.slice(0, 7); // 'YYYY-MM-DD' -> 'YYYY-MM'
 }
 function periodeLabel(p) {
   if (!p) return "\u2014";
@@ -100,6 +107,11 @@ export default function BeritaAcara({ profile }) {
   const [kondisiOpsi, setKondisiOpsi] = useState([]);
   const [displayUploadIdx, setDisplayUploadIdx] = useState(null);
   const [displayError, setDisplayError] = useState(null);
+
+  // ── Laporan Kunjungan (teks ringkas buat WA/chat ke bos) ──
+  const [laporanKunjunganTeks, setLaporanKunjunganTeks] = useState(null);
+  const [laporanKunjunganDisalin, setLaporanKunjunganDisalin] = useState(false);
+  const [buatLaporanLoading, setBuatLaporanLoading] = useState(false);
 
   useEffect(() => { loadBranches(); }, []);
 
@@ -329,23 +341,56 @@ export default function BeritaAcara({ profile }) {
     setSaved(false);
   }
 
-  // Unit hasil impor Excel. KONDISI FISIK SENGAJA DIBIARKAN KOSONG — ia hasil
-  // pemeriksaan di tempat, bukan isi berkas. Mengisinya otomatis berarti
-  // Berita Acara memuat penilaian yang tidak pernah dilakukan siapa pun.
+  // Impor "pintar": dibandingin (diff) sama unit yang lagi "masih dipajang"
+  // di cabang ini, dicocokin lewat Serial Number.
+  // - Unit di file yang SN-nya belum ada di daftar sekarang -> ditambahin baru.
+  // - Unit yang lagi masih dipajang tapi SN-nya HILANG dari file baru ->
+  //   otomatis ditandai turun. Perlakuannya TETEP wajib diisi manual
+  //   (lihat periksaDisplay) sebelum Simpan — sistem nggak nebak alasannya.
+  // - Unit TANPA SN nggak ikut di-diff sama sekali (dibiarkan apa adanya),
+  //   soalnya nggak ada kunci yang bisa dipercaya buat mastiin itu unit
+  //   yang sama antara database dan file.
   function imporDisplay(barisBaru) {
-    setDisplayRows((prev) => [
-      ...prev,
-      ...barisBaru.map((r) => ({
-        ...barisDisplayBaru(),
-        brand: r.brand,
-        model: r.model,
-        serial_number: r.serial_number || "",
-        tanggal_pajang: r.tanggal_pajang,
-        program_nama: r.program_nama || "",
-        program_brand: !!r.program_nama,
-      })),
-    ]);
+    const kunci = (sn) => (sn || "").trim().toUpperCase();
+    const snDiFile = new Set(barisBaru.map((r) => kunci(r.serial_number)).filter(Boolean));
+
+    // Dihitung dari state SEKARANG (bukan di dalam updater) biar pesan
+    // ringkasannya nggak keitung dobel kalau updater-nya sempat jalan 2x.
+    const akanTurun = displayRows.filter((r) => {
+      const sn = kunci(r.serial_number);
+      return !r.baru && r.masih_dipajang && !r.turun && sn && !snDiFile.has(sn);
+    });
+
+    setDisplayRows((prev) => {
+      const idsTurun = new Set(akanTurun.map((r) => r.id));
+      const hasilTandai = prev.map((r) => (idsTurun.has(r.id) ? { ...r, turun: true } : r));
+      const snSudahAda = new Set(hasilTandai.map((r) => kunci(r.serial_number)).filter(Boolean));
+      const barisBenerBaru = barisBaru.filter((r) => {
+        const sn = kunci(r.serial_number);
+        return !sn || !snSudahAda.has(sn);
+      });
+      return [
+        ...hasilTandai,
+        ...barisBenerBaru.map((r) => ({
+          ...barisDisplayBaru(),
+          brand: r.brand,
+          model: r.model,
+          serial_number: r.serial_number || "",
+          tanggal_pajang: r.tanggal_pajang,
+          program_nama: r.program_nama || "",
+          program_brand: !!r.program_nama,
+        })),
+      ];
+    });
     setSaved(false);
+
+    if (akanTurun.length > 0) {
+      window.alert(
+        `${akanTurun.length} unit yang sebelumnya masih dipajang tidak ada lagi di file yang baru diimpor, ` +
+        `jadi otomatis ditandai "turun". Isi "Perlakuan pasca display" masing-masing sebelum Simpan ` +
+        `(unit tanpa SN tidak ikut dicek otomatis, tetap harus dicek manual).`
+      );
+    }
   }
 
   function removeDisplay(i) {
@@ -550,6 +595,149 @@ export default function BeritaAcara({ profile }) {
       setError("Gagal reset Monitoring Display: " + err.message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  // ── Hitung ringkasan Inventaris, ngikutin format lama (10 kategori) atau
+  // baru (per item) sesuai periode — biar Laporan Kunjungan bener buat
+  // audit lama maupun baru.
+  function hitungInventaris(inv, period) {
+    if (!pakaiFormatBaru(period)) {
+      const rusak = countRusak(inv);
+      return { total: INVENTARIS_CATEGORIES.length, rusak, berfungsi: INVENTARIS_CATEGORIES.length - rusak, tidakAda: 0 };
+    }
+    const s = skorInventaris(inv);
+    return { total: s.total, rusak: s.rusak, berfungsi: s.total - s.rusak - s.tidakAda, tidakAda: s.tidakAda };
+  }
+  function daftarInventarisRusak(inv, period) {
+    if (!pakaiFormatBaru(period)) {
+      // Pakai statusKategori (sama kayak countRusak), BUKAN inv[cat]?.status
+      // mentah — biar daftar nama ini selalu konsisten sama angka rusaknya.
+      return INVENTARIS_CATEGORIES.filter((cat) => statusKategori(inv, cat) === "Rusak");
+    }
+    const out = [];
+    INVENTARIS_ITEMS.forEach((g) => {
+      g.items.forEach((nama) => {
+        const k = kunciItem(g.kategori, nama);
+        if (inv[k]?.status === "Rusak") out.push(`${g.kategori} - ${nama}`);
+      });
+    });
+    return out;
+  }
+
+  // Laporan teks ringkas 1 kunjungan (SOP + Stok + Keuangan + Berita Acara
+  // hari ini), buat di-copy langsung ke WA/chat ke bos. SOP/Stok/Keuangan
+  // dicocokin ke audit_date PERSIS tanggal kunjungan ini (bukan cuma bulan
+  // yang sama) — kalau nggak ada yang cocok, section-nya DILEWATIN (bukan
+  // ditulis kosong/nol), soalnya modul-modul itu belum tentu diisi bareng
+  // Berita Acara di kunjungan yang sama.
+  async function buatLaporanKunjungan() {
+    if (!selectedBranch || !auditDate) return;
+    setBuatLaporanLoading(true);
+    setError(null);
+    setLaporanKunjunganDisalin(false);
+    try {
+      const period = periodFromDate(auditDate);
+      const isolate = profile?.role === "auditor" && period >= ISOLATION_START_PERIOD;
+
+      let sopQ = supabase.from("audit_generic").select("*").eq("module", "sop").eq("branch_id", selectedBranch.id).eq("period", period);
+      let stokSQ = supabase.from("audit_generic").select("*").eq("module", "stok_service").eq("branch_id", selectedBranch.id).eq("period", period);
+      let stokKQ = supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("branch_id", selectedBranch.id).eq("period", period);
+      let keuQ = supabase.from("audit_keuangan").select("*").eq("branch_id", selectedBranch.id).eq("period", period).eq("audit_date", auditDate);
+      if (isolate) {
+        sopQ = sopQ.eq("submitted_by", profile.id);
+        stokSQ = stokSQ.eq("submitted_by", profile.id);
+        stokKQ = stokKQ.eq("submitted_by", profile.id);
+        keuQ = keuQ.eq("submitted_by", profile.id);
+      }
+
+      const [sopRes, stokSRes, stokKRes, keuRes] = await Promise.all([sopQ, stokSQ, stokKQ, keuQ]);
+      if (sopRes.error) throw sopRes.error;
+      if (stokSRes.error) throw stokSRes.error;
+      if (stokKRes.error) throw stokKRes.error;
+      if (keuRes.error) throw keuRes.error;
+
+      const sopRow = (sopRes.data || []).find((r) => r.data?.audit_date === auditDate && !r.data?.tidak_visit) || null;
+      const stokSRow = (stokSRes.data || []).find((r) => r.data?.audit_date === auditDate && !r.data?.tidak_visit) || null;
+      const stokKRow = (stokKRes.data || []).find((r) => r.data?.audit_date === auditDate && !r.data?.tidak_visit) || null;
+      const keuRow = (keuRes.data || [])[0] || null;
+
+      let statusKeu = null;
+      if (keuRow) {
+        const { data: st } = await supabase.from("settings_keuangan").select("*").eq("id", 1).single();
+        if (st) statusKeu = computeStatusKeuangan(keuRow, st);
+      }
+
+      const baris = [];
+      baris.push("📋 LAPORAN KUNJUNGAN AUDIT");
+      baris.push(`Cabang: ${selectedBranch.name}`);
+      baris.push(`Tanggal: ${new Date(auditDate + "T00:00:00").toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}`);
+      baris.push(`Auditor: ${profile?.full_name || "-"}`);
+      baris.push("━━━━━━━━━━━━━━━━━━━");
+
+      if (sopRow) {
+        const score = sopRow.data.score || 0;
+        baris.push(`✅ SOP Kepatuhan: ${score}% (${scoreInfo(score).lbl})`);
+        const temuan = listFailedItems(sopRow.data).map((f) => f.text);
+        if (temuan.length) baris.push(`Temuan: ${temuan.join("; ")}`);
+        baris.push("");
+      }
+
+      if (stokSRow || stokKRow) {
+        baris.push("📦 Audit Stok");
+        if (stokSRow) {
+          baris.push(`- Service Ratio Laptop: ${formatRatioPct(stokSRow.data.ratio_laptop)} (${stokSRow.data.indikator_laptop})`);
+          baris.push(`- Service Ratio Aksesoris: ${formatRatioPct(stokSRow.data.ratio_aksesoris)} (${stokSRow.data.indikator_aksesoris})`);
+        }
+        if (stokKRow) baris.push(`- Kesehatan Stok: ${formatKesehatanPct(stokKRow.data.kesehatan_pct)}`);
+        baris.push("");
+      }
+
+      if (keuRow && statusKeu) {
+        baris.push("💰 Audit Keuangan");
+        baris.push(`- Sisa Saldo: ${formatRupiah(statusKeu.sisa)}`);
+        baris.push(`- Posisi: ${(statusKeu.posisi * 100).toFixed(0)}%`);
+        baris.push("");
+      }
+
+      // Berita Acara — sumber laporan ini sendiri, selalu ditampilin.
+      const semuaStock = [...stockKat1, ...stockKat2];
+      const stockLengkap = semuaStock.filter((r) => r.status === "Lengkap").length;
+      const stockSelisih = semuaStock.filter((r) => r.status === "Selisih");
+      const invHitung = hitungInventaris(inventaris, viewPeriod);
+      const invRusak = daftarInventarisRusak(inventaris, viewPeriod);
+      const unitDipajang = displayRows.filter((r) => !r.turun);
+      const unitLewat = unitDipajang.filter((r) => r.status_umur === "Lewat Batas").length;
+      const unitTua = unitDipajang
+        .map((r) => ({ ...r, umur: r.baru ? hitungUmurHari(r.tanggal_pajang) : r.umur_hari }))
+        .filter((r) => r.umur > 60)
+        .sort((a, b) => b.umur - a.umur);
+
+      baris.push("📝 Berita Acara");
+      baris.push(`- Stock Opname: ${stockLengkap} Lengkap, ${stockSelisih.length} Selisih${stockSelisih.length ? ` (${stockSelisih.map((r) => r.nama).join(", ")})` : ""}`);
+      baris.push(`- Inventaris: ${invHitung.berfungsi} Berfungsi, ${invHitung.rusak} Rusak${invRusak.length ? ` (${invRusak.join(", ")})` : ""}`);
+      baris.push(`- Monitoring Display: ${unitDipajang.length} unit dipajang, ${unitLewat} lewat batas`);
+      unitTua.forEach((r) => {
+        const snBagian = r.serial_number ? ` (SN ...${r.serial_number.slice(-6)})` : "";
+        const ket = r.status_umur === "Lewat Batas" ? `, lewat ${r.umur - r.batas_hari} hari`
+          : r.status_umur === "Mendekati Batas" ? ", mendekati batas" : "";
+        baris.push(`  • ${r.brand} ${r.model}${snBagian} - ${r.umur} hari${ket}`);
+      });
+      baris.push("━━━━━━━━━━━━━━━━━━━");
+
+      const teks = baris.join("\n");
+      setLaporanKunjunganTeks(teks);
+      try {
+        await navigator.clipboard.writeText(teks);
+        setLaporanKunjunganDisalin(true);
+      } catch {
+        // Clipboard API bisa ditolak browser (izin/HTTP non-secure) — nggak
+        // fatal, teksnya tetep muncul di panel buat di-copy manual.
+      }
+    } catch (err) {
+      setError("Gagal membuat laporan kunjungan: " + err.message);
+    } finally {
+      setBuatLaporanLoading(false);
     }
   }
 
@@ -1184,6 +1372,9 @@ export default function BeritaAcara({ profile }) {
               <input className="input" type="date" value={auditDate} disabled={!canEdit} onChange={(e) => { setAuditDate(e.target.value); setSaved(false); }} />
             </div>
             <button className="btn-ghost" onClick={exportPDF}>Cetak PDF</button>
+            <button className="btn-ghost" disabled={buatLaporanLoading} onClick={buatLaporanKunjungan}>
+              {buatLaporanLoading ? "Menyusun\u2026" : "\ud83d\udccb Laporan Kunjungan"}
+            </button>
             {canEdit && (
               <button className="btn" disabled={saving} onClick={saveRecord}>
                 {saving ? "Menyimpan\u2026" : saved ? "\u2713 Tersimpan" : "Simpan"}
@@ -1195,6 +1386,29 @@ export default function BeritaAcara({ profile }) {
           </div>
         </div>
       </div>
+
+      {laporanKunjunganTeks && (
+        <div style={{ margin: "14px 28px 0", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: 16 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+            <span style={{ fontSize: 13, fontWeight: 600 }}>
+              Laporan Kunjungan {laporanKunjunganDisalin && <span style={{ color: "#1a9e6e", fontWeight: 500 }}>&middot; sudah disalin ke clipboard</span>}
+            </span>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn-ghost" style={{ fontSize: 12 }}
+                onClick={async () => {
+                  try { await navigator.clipboard.writeText(laporanKunjunganTeks); setLaporanKunjunganDisalin(true); }
+                  catch { /* clipboard ditolak browser — teksnya tetep ada buat di-copy manual */ }
+                }}>
+                Salin lagi
+              </button>
+              <button className="btn-ghost" style={{ fontSize: 12 }} onClick={() => setLaporanKunjunganTeks(null)}>Tutup</button>
+            </div>
+          </div>
+          <textarea readOnly value={laporanKunjunganTeks} rows={16}
+            style={{ width: "100%", fontFamily: "monospace", fontSize: 12.5, padding: 10, borderRadius: 8, border: "1px solid var(--border)", background: "var(--surface)", color: "var(--text-primary)", resize: "vertical" }}
+            onClick={(e) => e.target.select()} />
+        </div>
+      )}
 
       {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
 
