@@ -625,12 +625,18 @@ export default function BeritaAcara({ profile }) {
     return out;
   }
 
-  // Laporan teks ringkas 1 kunjungan (SOP + Stok + Keuangan + Berita Acara
-  // hari ini), buat di-copy langsung ke WA/chat ke bos. SOP/Stok/Keuangan
-  // dicocokin ke audit_date PERSIS tanggal kunjungan ini (bukan cuma bulan
-  // yang sama) — kalau nggak ada yang cocok, section-nya DILEWATIN (bukan
-  // ditulis kosong/nol), soalnya modul-modul itu belum tentu diisi bareng
-  // Berita Acara di kunjungan yang sama.
+  // Laporan teks ringkas 1 kunjungan (SOP + Stok + Keuangan + Berita Acara),
+  // buat di-copy langsung ke WA/chat ke bos. SOP/Stok/Keuangan dicocokin ke
+  // entri TERBARU di PERIODE (bulan) yang sama — BUKAN persis tanggal
+  // kunjungan Berita Acara ini, soalnya modul-modul itu sering diisi di
+  // tanggal lain dalam bulan yang sama, bukan bareng di hari yang sama
+  // persis. Kalau di bulan itu emang belum ada sama sekali, section-nya
+  // DILEWATIN (bukan ditulis kosong/nol).
+  function terbaruDiPeriode(rows) {
+    const valid = (rows || []).filter((r) => !r.data?.tidak_visit);
+    if (!valid.length) return null;
+    return [...valid].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""))[0];
+  }
   async function buatLaporanKunjungan() {
     if (!selectedBranch || !auditDate) return;
     setBuatLaporanLoading(true);
@@ -643,7 +649,7 @@ export default function BeritaAcara({ profile }) {
       let sopQ = supabase.from("audit_generic").select("*").eq("module", "sop").eq("branch_id", selectedBranch.id).eq("period", period);
       let stokSQ = supabase.from("audit_generic").select("*").eq("module", "stok_service").eq("branch_id", selectedBranch.id).eq("period", period);
       let stokKQ = supabase.from("audit_generic").select("*").eq("module", "stok_kesehatan").eq("branch_id", selectedBranch.id).eq("period", period);
-      let keuQ = supabase.from("audit_keuangan").select("*").eq("branch_id", selectedBranch.id).eq("period", period).eq("audit_date", auditDate);
+      let keuQ = supabase.from("audit_keuangan").select("*").eq("branch_id", selectedBranch.id).eq("period", period);
       if (isolate) {
         sopQ = sopQ.eq("submitted_by", profile.id);
         stokSQ = stokSQ.eq("submitted_by", profile.id);
@@ -657,10 +663,16 @@ export default function BeritaAcara({ profile }) {
       if (stokKRes.error) throw stokKRes.error;
       if (keuRes.error) throw keuRes.error;
 
-      const sopRow = (sopRes.data || []).find((r) => r.data?.audit_date === auditDate && !r.data?.tidak_visit) || null;
-      const stokSRow = (stokSRes.data || []).find((r) => r.data?.audit_date === auditDate && !r.data?.tidak_visit) || null;
-      const stokKRow = (stokKRes.data || []).find((r) => r.data?.audit_date === auditDate && !r.data?.tidak_visit) || null;
-      const keuRow = (keuRes.data || [])[0] || null;
+      const sopRow = terbaruDiPeriode(sopRes.data);
+      const stokSRow = terbaruDiPeriode(stokSRes.data);
+      const stokKRow = terbaruDiPeriode(stokKRes.data);
+      // audit_keuangan struktur beda (bukan {data:{...}}, kolom langsung di
+      // root + nggak ada tidak_visit di sini) — ambil audit_date terbaru
+      // dari daftar row-nya langsung.
+      const keuRows = keuRes.data || [];
+      const keuRow = keuRows.length
+        ? [...keuRows].sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""))[0]
+        : null;
 
       let statusKeu = null;
       if (keuRow) {
@@ -675,9 +687,14 @@ export default function BeritaAcara({ profile }) {
       baris.push(`Auditor: ${profile?.full_name || "-"}`);
       baris.push("━━━━━━━━━━━━━━━━━━━");
 
+      // Kalau tanggal modul lain beda dari tanggal Berita Acara ini, kasih
+      // catatan tanggalnya di section itu — biar nggak kesan semua dicek
+      // di hari yang sama padahal beda.
+      const catatanTgl = (d) => (d && d !== auditDate ? ` (dicek ${shortDate(d)})` : "");
+
       if (sopRow) {
         const score = sopRow.data.score || 0;
-        baris.push(`✅ SOP Kepatuhan: ${score}% (${scoreInfo(score).lbl})`);
+        baris.push(`✅ SOP Kepatuhan: ${score}% (${scoreInfo(score).lbl})${catatanTgl(sopRow.data.audit_date)}`);
         const temuan = listFailedItems(sopRow.data).map((f) => f.text);
         if (temuan.length) baris.push(`Temuan: ${temuan.join("; ")}`);
         baris.push("");
@@ -686,16 +703,16 @@ export default function BeritaAcara({ profile }) {
       if (stokSRow || stokKRow) {
         baris.push("📦 Audit Stok");
         if (stokSRow) {
-          baris.push(`- Service Ratio Laptop: ${formatRatioPct(stokSRow.data.ratio_laptop)} (${stokSRow.data.indikator_laptop})`);
+          baris.push(`- Service Ratio Laptop: ${formatRatioPct(stokSRow.data.ratio_laptop)} (${stokSRow.data.indikator_laptop})${catatanTgl(stokSRow.data.audit_date)}`);
           baris.push(`- Service Ratio Aksesoris: ${formatRatioPct(stokSRow.data.ratio_aksesoris)} (${stokSRow.data.indikator_aksesoris})`);
         }
-        if (stokKRow) baris.push(`- Kesehatan Stok: ${formatKesehatanPct(stokKRow.data.kesehatan_pct)}`);
+        if (stokKRow) baris.push(`- Kesehatan Stok: ${formatKesehatanPct(stokKRow.data.kesehatan_pct)}${catatanTgl(stokKRow.data.audit_date)}`);
         baris.push("");
       }
 
       if (keuRow && statusKeu) {
         baris.push("💰 Audit Keuangan");
-        baris.push(`- Sisa Saldo: ${formatRupiah(statusKeu.sisa)}`);
+        baris.push(`- Sisa Saldo: ${formatRupiah(statusKeu.sisa)}${catatanTgl(keuRow.audit_date)}`);
         baris.push(`- Posisi: ${(statusKeu.posisi * 100).toFixed(0)}%`);
         baris.push("");
       }
