@@ -15,8 +15,8 @@ import {
   barisDisplayBaru, uploadDisplayMedia, hapusDisplayUntukPeriode,
   resetDisplayUntukCabang, hitungUmurHari,
 } from "./DisplayMonitoring";
-import { listFailedItems, scoreInfo, formatRupiah } from "./sopConfig";
-import { formatRatioPct, formatKesehatanPct } from "./stokConfig";
+import { listFailedItems, scoreInfo, formatRupiah } from "../lib/sopConfig";
+import { formatRatioPct, formatKesehatanPct } from "../lib/stokConfig";
 import { computeStatus as computeStatusKeuangan } from "./AuditKeuangan";
 
 function nowPeriode() {
