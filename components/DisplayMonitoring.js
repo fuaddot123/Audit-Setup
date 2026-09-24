@@ -131,17 +131,23 @@ function warnaStatus(status) {
 //     ini (tanggal_turun jatuh di periode ini), itu di-undo balik jadi
 //     "masih dipajang".
 // Foto-foto kondisi yang kehapus ikut dibersihkan dari Storage.
-export async function hapusDisplayUntukPeriode({ branchId, period }) {
+// isolate/userId: samain kayak muatDisplay/resetDisplayUntukCabang — cuma
+// unit & catatan kondisi punya auditor ini (dicatat_oleh === userId) yang
+// disentuh, biar nggak ada efek ke unit auditor lain yang nggak keliatan
+// di layarnya sama sekali.
+export async function hapusDisplayUntukPeriode({ branchId, period, isolate, userId }) {
   // 1) Semua unit cabang ini + catatan kondisi periode yang dihapus.
-  const { data: unitRows, error: uErr } = await supabase
-    .from("display_unit").select("id, tanggal_turun").eq("branch_id", branchId);
+  let unitQ = supabase.from("display_unit").select("id, tanggal_turun").eq("branch_id", branchId);
+  if (isolate && userId) unitQ = unitQ.eq("dicatat_oleh", userId);
+  const { data: unitRows, error: uErr } = await unitQ;
   if (uErr) throw uErr;
   const unitIds = (unitRows || []).map((u) => u.id);
   if (!unitIds.length) return;
 
-  const { data: kondisiPeriodeIni, error: kErr } = await supabase
-    .from("display_kondisi").select("id, display_unit_id, photos")
+  let kondisiQ = supabase.from("display_kondisi").select("id, display_unit_id, photos")
     .eq("period", period).in("display_unit_id", unitIds);
+  if (isolate && userId) kondisiQ = kondisiQ.eq("dicatat_oleh", userId);
+  const { data: kondisiPeriodeIni, error: kErr } = await kondisiQ;
   if (kErr) throw kErr;
   if (!kondisiPeriodeIni || !kondisiPeriodeIni.length) return; // nggak ada yang perlu dibersihin
 
@@ -149,9 +155,10 @@ export async function hapusDisplayUntukPeriode({ branchId, period }) {
 
   // 2) Buat tiap unit yang kesentuh, cek: dia punya catatan kondisi dari
   //    periode LAIN nggak? Kalau nggak ada sama sekali → baru lahir bulan ini.
-  const { data: riwayatLain, error: rErr } = await supabase
-    .from("display_kondisi").select("display_unit_id")
+  let riwayatQ = supabase.from("display_kondisi").select("display_unit_id")
     .in("display_unit_id", unitIdsPeriodeIni).neq("period", period);
+  if (isolate && userId) riwayatQ = riwayatQ.eq("dicatat_oleh", userId);
+  const { data: riwayatLain, error: rErr } = await riwayatQ;
   if (rErr) throw rErr;
   const punyaRiwayatLain = new Set((riwayatLain || []).map((r) => r.display_unit_id));
 
@@ -205,9 +212,16 @@ export async function hapusDisplayUntukPeriode({ branchId, period }) {
 // nggak ada cara lain, karena tabelnya sendiri nggak kenal konsep "bulan"
 // per unit. Cabang lain sama sekali nggak kesentuh (query selalu pakai
 // branch_id). Foto-foto kondisi ikut dibersihkan dari Storage.
-export async function resetDisplayUntukCabang({ branchId }) {
-  const { data: unitRows, error: uErr } = await supabase
-    .from("display_unit").select("id").eq("branch_id", branchId);
+// isolate/userId: kalau isolate true, yang direset cuma unit yang
+// dicatat_oleh === userId — biar konsisten sama apa yang KELIHATAN di
+// layar auditor itu (muatDisplay dengan isolate yang sama). Tanpa ini,
+// tombol "Reset semua" bisa ngapus punya auditor lain yang nggak keliatan
+// sama sekali di layar, padahal confirm dialog-nya cuma nunjukin jumlah
+// yang keliatan doang — jumlah bisa nggak sinkron sama yang beneran kehapus.
+export async function resetDisplayUntukCabang({ branchId, isolate, userId }) {
+  let q = supabase.from("display_unit").select("id").eq("branch_id", branchId);
+  if (isolate && userId) q = q.eq("dicatat_oleh", userId);
+  const { data: unitRows, error: uErr } = await q;
   if (uErr) throw uErr;
   const unitIds = (unitRows || []).map((u) => u.id);
   if (!unitIds.length) return;
@@ -246,10 +260,15 @@ export async function resetDisplayUntukCabang({ branchId }) {
 
 // ── Muat data ──────────────────────────────────────────────────────────
 
-export async function muatDisplay({ branchId, period }) {
+// isolate/userId: kalau isolate true, unit yang ditampilkan cuma yang
+// dicatat_oleh === userId. Dipanggil dari BeritaAcara.js dengan aturan
+// isolasi yang SAMA kayak modul lain (auditor, period >= ISOLATION_START_PERIOD).
+export async function muatDisplay({ branchId, period, isolate, userId }) {
+  let unitQ = supabase.from("v_display_monitoring").select("*")
+    .eq("branch_id", branchId).order("umur_hari", { ascending: false });
+  if (isolate && userId) unitQ = unitQ.eq("dicatat_oleh", userId);
   const [unitRes, perlakuanRes, kondisiOpsiRes] = await Promise.all([
-    supabase.from("v_display_monitoring").select("*")
-      .eq("branch_id", branchId).order("umur_hari", { ascending: false }),
+    unitQ,
     supabase.from("display_perlakuan").select("*").eq("aktif", true).order("urutan"),
     supabase.from("display_kondisi_opsi").select("*").eq("aktif", true).order("urutan"),
   ]);

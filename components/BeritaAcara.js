@@ -15,7 +15,7 @@ import {
   barisDisplayBaru, uploadDisplayMedia, hapusDisplayUntukPeriode,
   resetDisplayUntukCabang, hitungUmurHari,
 } from "./DisplayMonitoring";
-import { listFailedItems, scoreInfo, formatRupiah } from "../lib/sopConfig";
+import { listFailedItems, scoreInfo, formatRupiah, getCatsForRecord } from "../lib/sopConfig";
 import { formatRatioPct, formatKesehatanPct } from "../lib/stokConfig";
 import { computeStatus as computeStatusKeuangan } from "./AuditKeuangan";
 
@@ -205,7 +205,7 @@ export default function BeritaAcara({ profile }) {
     // bukan ditelan diam-diam.
     setDisplayError(null);
     try {
-      const d = await muatDisplay({ branchId: b.id, period });
+      const d = await muatDisplay({ branchId: b.id, period, isolate, userId: profile.id });
       setDisplayRows(d.rows);
       setPerlakuanOpsi(d.perlakuanOpsi);
       setKondisiOpsi(d.kondisiOpsi);
@@ -493,7 +493,10 @@ export default function BeritaAcara({ profile }) {
         // Dimuat ulang termasuk DAFTAR PILIHANNYA — istilah baru yang barusan
         // didaftarkan harus langsung muncul di dropdown, bukan menunggu
         // halaman dibuka lagi.
-        const d = await muatDisplay({ branchId: selectedBranch.id, period: viewPeriod });
+        const d = await muatDisplay({
+          branchId: selectedBranch.id, period: viewPeriod,
+          isolate: profile?.role === "auditor" && viewPeriod >= ISOLATION_START_PERIOD, userId: profile.id,
+        });
         setDisplayRows(d.rows);
         setPerlakuanOpsi(d.perlakuanOpsi);
         setKondisiOpsi(d.kondisiOpsi);
@@ -535,12 +538,18 @@ export default function BeritaAcara({ profile }) {
       // lahir di audit yang dihapus ini hilang total, unit lama cuma
       // catatan kondisi periode ini yang kehapus (+ undo "turun" kalau
       // jatuhnya di periode ini). Lihat DisplayMonitoring.js buat detail.
-      await hapusDisplayUntukPeriode({ branchId: selectedBranch.id, period: viewPeriod });
+      await hapusDisplayUntukPeriode({
+        branchId: selectedBranch.id, period: viewPeriod,
+        isolate: profile?.role === "auditor" && viewPeriod >= ISOLATION_START_PERIOD, userId: profile.id,
+      });
       // Muat ulang Monitoring Display biar layar nggak nampilin data lama
       // (bedanya sama pickBranch: di sini galatnya boleh sunyi juga, sama
       // alasannya — jangan sampe gagal hapus cuma gara-gara display error).
       try {
-        const d = await muatDisplay({ branchId: selectedBranch.id, period: viewPeriod });
+        const d = await muatDisplay({
+          branchId: selectedBranch.id, period: viewPeriod,
+          isolate: profile?.role === "auditor" && viewPeriod >= ISOLATION_START_PERIOD, userId: profile.id,
+        });
         setDisplayRows(d.rows);
         setPerlakuanOpsi(d.perlakuanOpsi);
         setKondisiOpsi(d.kondisiOpsi);
@@ -582,11 +591,17 @@ export default function BeritaAcara({ profile }) {
     setSaving(true);
     setError(null);
     try {
-      await resetDisplayUntukCabang({ branchId: selectedBranch.id });
+      await resetDisplayUntukCabang({
+        branchId: selectedBranch.id,
+        isolate: profile?.role === "auditor" && viewPeriod >= ISOLATION_START_PERIOD, userId: profile.id,
+      });
       // Muat ulang dari server (bukan langsung set kosong) — biar kalau
       // ternyata ada yang keblokir RLS, layar nunjukin kondisi ASLI di
       // database, bukan status kosong yang menyesatkan.
-      const d = await muatDisplay({ branchId: selectedBranch.id, period: viewPeriod });
+      const d = await muatDisplay({
+        branchId: selectedBranch.id, period: viewPeriod,
+        isolate: profile?.role === "auditor" && viewPeriod >= ISOLATION_START_PERIOD, userId: profile.id,
+      });
       setDisplayRows(d.rows);
       setPerlakuanOpsi(d.perlakuanOpsi);
       setKondisiOpsi(d.kondisiOpsi);
@@ -632,6 +647,20 @@ export default function BeritaAcara({ profile }) {
   // tanggal lain dalam bulan yang sama, bukan bareng di hari yang sama
   // persis. Kalau di bulan itu emang belum ada sama sekali, section-nya
   // DILEWATIN (bukan ditulis kosong/nol).
+  // Rincian skor per kategori SOP — record.cats[catId] = {score, total} (poin
+  // yang lolos vs poin maksimal kategori itu). getCatsForRecord milih daftar
+  // kategori yang PAS (checklist baru/lama), biar label & urutannya bener.
+  function perKategoriSOP(record) {
+    if (!record || !record.cats) return [];
+    return getCatsForRecord(record)
+      .map((c) => {
+        const bd = record.cats[c.id];
+        if (!bd || !bd.total) return null;
+        return { label: c.label, pct: Math.round((bd.score / bd.total) * 100) };
+      })
+      .filter(Boolean);
+  }
+
   function terbaruDiPeriode(rows) {
     const valid = (rows || []).filter((r) => !r.data?.tidak_visit);
     if (!valid.length) return null;
@@ -695,6 +724,8 @@ export default function BeritaAcara({ profile }) {
       if (sopRow) {
         const score = sopRow.data.score || 0;
         baris.push(`✅ SOP Kepatuhan: ${score}% (${scoreInfo(score).lbl})${catatanTgl(sopRow.data.audit_date)}`);
+        const perKat = perKategoriSOP(sopRow.data);
+        if (perKat.length) baris.push(`Per Kategori: ${perKat.map((k) => `${k.label} ${k.pct}%`).join(", ")}`);
         const temuan = listFailedItems(sopRow.data).map((f) => f.text);
         if (temuan.length) baris.push(`Temuan: ${temuan.join("; ")}`);
         baris.push("");
@@ -703,16 +734,24 @@ export default function BeritaAcara({ profile }) {
       if (stokSRow || stokKRow) {
         baris.push("📦 Audit Stok");
         if (stokSRow) {
-          baris.push(`- Service Ratio Laptop: ${formatRatioPct(stokSRow.data.ratio_laptop)} (${stokSRow.data.indikator_laptop})${catatanTgl(stokSRow.data.audit_date)}`);
-          baris.push(`- Service Ratio Aksesoris: ${formatRatioPct(stokSRow.data.ratio_aksesoris)} (${stokSRow.data.indikator_aksesoris})`);
+          const d = stokSRow.data;
+          baris.push(`- Service Ratio Laptop: ${formatRatioPct(d.ratio_laptop)} (${d.indikator_laptop}) — ${d.laptop || 0} toko + ${d.user || 0} customer dari ${d.total_unit_laptop || 0} unit${catatanTgl(d.audit_date)}`);
+          baris.push(`- Service Ratio Aksesoris: ${formatRatioPct(d.ratio_aksesoris)} (${d.indikator_aksesoris}) — ${d.aksesoris || 0} toko + ${d.aksesoris_customer || 0} customer dari ${d.total_unit_aksesoris || 0} unit`);
         }
-        if (stokKRow) baris.push(`- Kesehatan Stok: ${formatKesehatanPct(stokKRow.data.kesehatan_pct)}${catatanTgl(stokKRow.data.audit_date)}`);
+        if (stokKRow) {
+          const d = stokKRow.data;
+          baris.push(`- Kesehatan Stok: ${formatKesehatanPct(d.kesehatan_pct)} — ${d.temuan_count || 0} temuan, ${d.bonus_count || 0} bonus, untung/rugi ${formatRupiah(d.untung_rugi || 0)}${catatanTgl(d.audit_date)}`);
+        }
         baris.push("");
       }
 
       if (keuRow && statusKeu) {
         baris.push("💰 Audit Keuangan");
-        baris.push(`- Sisa Saldo: ${formatRupiah(statusKeu.sisa)}${catatanTgl(keuRow.audit_date)}`);
+        baris.push(`- Saldo bulan sebelumnya: ${formatRupiah(keuRow.saldo_sebelumnya)}${catatanTgl(keuRow.audit_date)}`);
+        baris.push(`- Saldo masuk bulan berjalan: ${formatRupiah(keuRow.saldo_masuk)}`);
+        baris.push(`- Limit kas kecil: ${formatRupiah(keuRow.limit_kas)}`);
+        baris.push(`- Pengeluaran kas kecil: ${formatRupiah(keuRow.pengeluaran)}`);
+        baris.push(`- Sisa Saldo: ${formatRupiah(statusKeu.sisa)}`);
         baris.push(`- Posisi: ${(statusKeu.posisi * 100).toFixed(0)}%`);
         baris.push("");
       }
@@ -725,6 +764,7 @@ export default function BeritaAcara({ profile }) {
       const invRusak = daftarInventarisRusak(inventaris, viewPeriod);
       const unitDipajang = displayRows.filter((r) => !r.turun);
       const unitLewat = unitDipajang.filter((r) => r.status_umur === "Lewat Batas").length;
+      const unitMendekati = unitDipajang.filter((r) => r.status_umur === "Mendekati Batas").length;
       const unitTua = unitDipajang
         .map((r) => ({ ...r, umur: r.baru ? hitungUmurHari(r.tanggal_pajang) : r.umur_hari }))
         .filter((r) => r.umur > 60)
@@ -733,7 +773,7 @@ export default function BeritaAcara({ profile }) {
       baris.push("📝 Berita Acara");
       baris.push(`- Stock Opname: ${stockLengkap} Lengkap, ${stockSelisih.length} Selisih${stockSelisih.length ? ` (${stockSelisih.map((r) => r.nama).join(", ")})` : ""}`);
       baris.push(`- Inventaris: ${invHitung.berfungsi} Berfungsi, ${invHitung.rusak} Rusak${invRusak.length ? ` (${invRusak.join(", ")})` : ""}`);
-      baris.push(`- Monitoring Display: ${unitDipajang.length} unit dipajang, ${unitLewat} lewat batas`);
+      baris.push(`- Monitoring Display: ${unitDipajang.length} unit dipajang, ${unitLewat} lewat batas, ${unitMendekati} mendekati batas`);
       unitTua.forEach((r) => {
         const snBagian = r.serial_number ? ` (SN ...${r.serial_number.slice(-6)})` : "";
         const ket = r.status_umur === "Lewat Batas" ? `, lewat ${r.umur - r.batas_hari} hari`
