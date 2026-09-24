@@ -433,20 +433,51 @@ export async function simpanDisplay({ rows, branchId, period, auditDate, userId,
     let unitId = r.id;
 
     if (r.baru) {
-      const { data, error } = await supabase.from("display_unit").insert({
-        branch_id: branchId,
-        brand: r.brand.trim(),
-        model: r.model.trim(),
-        serial_number: r.serial_number.trim() || null,
-        sku: r.sku.trim() || null,
-        program_brand: r.program_brand,
-        program_nama: r.program_brand ? r.program_nama.trim() : null,
-        tanggal_pajang: r.tanggal_pajang,
-        kondisi_awal: kodeKondisi(r) || null,
-        dicatat_oleh: userId,
-      }).select("id").single();
-      if (error) throw new Error(`${r.brand} ${r.model}: ${error.message}`);
-      unitId = data.id;
+      // Unit ini mungkin UDAH dicatat auditor LAIN yang nggak keliatan di
+      // layar kita (terisolasi) — cek dulu SN-nya ke tabel ASLI sebelum
+      // insert. 1 cabang diaudit auditor beda-beda dari waktu ke waktu itu
+      // normal, jadi kalau ketemu unit yang MASIH AKTIF (belum turun)
+      // dengan SN sama, kita AMBIL ALIH (dicatat_oleh dipindah ke kita)
+      // daripada nyoba insert baris baru yang bakal nabrak constraint
+      // uq_display_unit_sn_aktif (1 SN cuma boleh 1 baris aktif).
+      let existingId = null;
+      const sn = r.serial_number.trim();
+      if (sn) {
+        const { data: existing, error: findErr } = await supabase
+          .from("display_unit").select("id")
+          .eq("branch_id", branchId).eq("serial_number", sn).is("tanggal_turun", null)
+          .maybeSingle();
+        if (findErr) throw new Error(`${r.brand} ${r.model}: ${findErr.message}`);
+        if (existing) existingId = existing.id;
+      }
+
+      if (existingId) {
+        const { error } = await supabase.from("display_unit").update({
+          dicatat_oleh: userId,
+          brand: r.brand.trim(),
+          model: r.model.trim(),
+          sku: r.sku.trim() || null,
+          program_brand: r.program_brand,
+          program_nama: r.program_brand ? r.program_nama.trim() : null,
+        }).eq("id", existingId);
+        if (error) throw new Error(`${r.brand} ${r.model}: ${error.message}`);
+        unitId = existingId;
+      } else {
+        const { data, error } = await supabase.from("display_unit").insert({
+          branch_id: branchId,
+          brand: r.brand.trim(),
+          model: r.model.trim(),
+          serial_number: sn || null,
+          sku: r.sku.trim() || null,
+          program_brand: r.program_brand,
+          program_nama: r.program_brand ? r.program_nama.trim() : null,
+          tanggal_pajang: r.tanggal_pajang,
+          kondisi_awal: kodeKondisi(r) || null,
+          dicatat_oleh: userId,
+        }).select("id").single();
+        if (error) throw new Error(`${r.brand} ${r.model}: ${error.message}`);
+        unitId = data.id;
+      }
     }
 
     // Unit ditandai turun pada kunjungan ini
