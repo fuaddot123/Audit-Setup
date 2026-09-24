@@ -263,10 +263,33 @@ export async function resetDisplayUntukCabang({ branchId, isolate, userId }) {
 // isolate/userId: kalau isolate true, unit yang ditampilkan cuma yang
 // dicatat_oleh === userId. Dipanggil dari BeritaAcara.js dengan aturan
 // isolasi yang SAMA kayak modul lain (auditor, period >= ISOLATION_START_PERIOD).
+// CATATAN: v_display_monitoring (view) TIDAK punya kolom dicatat_oleh,
+// jadi filternya nggak bisa langsung di query view itu — harus ambil dulu
+// id unit yang dicatat_oleh-nya cocok dari tabel display_unit ASLI, baru
+// filter view-nya pakai .in("id", ...).
 export async function muatDisplay({ branchId, period, isolate, userId }) {
+  let idTerisolasi = null;
+  if (isolate && userId) {
+    const { data: ownRows, error: ownErr } = await supabase
+      .from("display_unit").select("id").eq("branch_id", branchId).eq("dicatat_oleh", userId);
+    if (ownErr) throw ownErr;
+    idTerisolasi = (ownRows || []).map((u) => u.id);
+    if (!idTerisolasi.length) {
+      // Nggak ada unit punya auditor ini di cabang ini — nggak usah query
+      // view-nya sama sekali, langsung balikin kosong.
+      const [perlakuanRes0, kondisiOpsiRes0] = await Promise.all([
+        supabase.from("display_perlakuan").select("*").eq("aktif", true).order("urutan"),
+        supabase.from("display_kondisi_opsi").select("*").eq("aktif", true).order("urutan"),
+      ]);
+      if (perlakuanRes0.error) throw perlakuanRes0.error;
+      if (kondisiOpsiRes0.error) throw kondisiOpsiRes0.error;
+      return { rows: [], perlakuanOpsi: perlakuanRes0.data || [], kondisiOpsi: kondisiOpsiRes0.data || [] };
+    }
+  }
+
   let unitQ = supabase.from("v_display_monitoring").select("*")
     .eq("branch_id", branchId).order("umur_hari", { ascending: false });
-  if (isolate && userId) unitQ = unitQ.eq("dicatat_oleh", userId);
+  if (idTerisolasi) unitQ = unitQ.in("id", idTerisolasi);
   const [unitRes, perlakuanRes, kondisiOpsiRes] = await Promise.all([
     unitQ,
     supabase.from("display_perlakuan").select("*").eq("aktif", true).order("urutan"),
