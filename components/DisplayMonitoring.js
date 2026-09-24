@@ -310,10 +310,16 @@ export async function muatDisplay({ branchId, period, isolate, userId }) {
 
   // Catatan kondisi yang SUDAH tersimpan untuk periode ini — supaya form
   // tidak menampilkan kosong padahal auditor sudah pernah mengisi.
+  // Diisolasi juga (dicatat_oleh === userId): kalau nggak, unit yang baru
+  // "diambil alih" tapi kebetulan udah dicek auditor SEBELUMNYA di periode
+  // yang sama bakal keliatan "udah dicek" punya orang lain — padahal buat
+  // auditor yang sekarang, unit itu belum pernah dicek fisiknya sendiri.
   let kondisiPeriode = [];
   if (relevan.length) {
-    const res = await supabase.from("display_kondisi").select("*")
+    let kq = supabase.from("display_kondisi").select("*")
       .eq("period", period).in("display_unit_id", relevan.map((u) => u.id));
+    if (isolate && userId) kq = kq.eq("dicatat_oleh", userId);
+    const res = await kq;
     if (res.error) throw res.error;
     kondisiPeriode = res.data || [];
   }
@@ -512,8 +518,22 @@ export async function simpanDisplay({ rows, branchId, period, auditDate, userId,
         photos: r.photos,
         dicatat_oleh: userId,
       };
-      const res = r.kondisi_id
-        ? await supabase.from("display_kondisi").update(isi).eq("id", r.kondisi_id)
+      // Sama kayak unit di atas: r.kondisi_id cuma keisi kalau kondisi
+      // periode ini punya KITA (muatDisplay udah diisolasi). Bisa aja
+      // sebenernya udah ada baris punya auditor LAIN buat unit+periode yang
+      // sama, yang kita nggak liat — cek dulu biar nggak nabrak constraint
+      // unik (1 unit cuma boleh 1 baris kondisi per periode), ambil alih
+      // (dicatat_oleh pindah ke kita, isinya ketimpa data kita) kalau ketemu.
+      let kondisiId = r.kondisi_id;
+      if (!kondisiId) {
+        const { data: existingK, error: findKErr } = await supabase
+          .from("display_kondisi").select("id")
+          .eq("display_unit_id", unitId).eq("period", period).maybeSingle();
+        if (findKErr) throw new Error(`${r.brand} ${r.model}: ${findKErr.message}`);
+        if (existingK) kondisiId = existingK.id;
+      }
+      const res = kondisiId
+        ? await supabase.from("display_kondisi").update(isi).eq("id", kondisiId)
         : await supabase.from("display_kondisi").insert(isi);
       if (res.error) throw new Error(`${r.brand} ${r.model}: ${res.error.message}`);
     }
