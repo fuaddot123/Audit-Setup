@@ -458,15 +458,27 @@ export async function simpanDisplay({ rows, branchId, period, auditDate, userId,
       }
 
       if (existingId) {
-        const { error } = await supabase.from("display_unit").update({
+        // .select() dipaksa biar ketauan kalau RLS diem-diem nge-block
+        // UPDATE-nya (Supabase nggak ngelempar error buat itu, cuma 0 baris
+        // yang beneran keupdate) — tanpa ini, "ambil alih" bisa "berhasil"
+        // padahal nggak nulis apa-apa, dan abis reload keliatan kayak
+        // balik ke kondisi lama/kosong lagi.
+        const { data: terupdate, error } = await supabase.from("display_unit").update({
           dicatat_oleh: userId,
           brand: r.brand.trim(),
           model: r.model.trim(),
           sku: r.sku.trim() || null,
           program_brand: r.program_brand,
           program_nama: r.program_brand ? r.program_nama.trim() : null,
-        }).eq("id", existingId);
+        }).eq("id", existingId).select("id");
         if (error) throw new Error(`${r.brand} ${r.model}: ${error.message}`);
+        if (!terupdate || !terupdate.length) {
+          throw new Error(
+            `${r.brand} ${r.model}: gagal ambil alih unit ini — kemungkinan besar policy UPDATE ` +
+            `di tabel display_unit (Supabase) belum ngizinin role auditor nge-update baris punya ` +
+            `auditor lain. Cek RLS policy-nya.`
+          );
+        }
         unitId = existingId;
       } else {
         const { data, error } = await supabase.from("display_unit").insert({
@@ -532,10 +544,19 @@ export async function simpanDisplay({ rows, branchId, period, auditDate, userId,
         if (findKErr) throw new Error(`${r.brand} ${r.model}: ${findKErr.message}`);
         if (existingK) kondisiId = existingK.id;
       }
+      // Sama kayak di atas: .select() buat nangkep kalau RLS diem-diem
+      // nge-block UPDATE-nya pas ambil alih kondisi punya auditor lain.
       const res = kondisiId
-        ? await supabase.from("display_kondisi").update(isi).eq("id", kondisiId)
-        : await supabase.from("display_kondisi").insert(isi);
+        ? await supabase.from("display_kondisi").update(isi).eq("id", kondisiId).select("id")
+        : await supabase.from("display_kondisi").insert(isi).select("id");
       if (res.error) throw new Error(`${r.brand} ${r.model}: ${res.error.message}`);
+      if (!res.data || !res.data.length) {
+        throw new Error(
+          `${r.brand} ${r.model}: gagal simpan kondisi — kemungkinan besar policy UPDATE ` +
+          `di tabel display_kondisi (Supabase) belum ngizinin role auditor nge-update baris ` +
+          `punya auditor lain. Cek RLS policy-nya.`
+        );
+      }
     }
 
     hasil.push(unitId);
