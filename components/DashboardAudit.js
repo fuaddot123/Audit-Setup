@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { sortBranches } from "../lib/branchOrder";
-import { CATS, calcWeightedFromRecord, periodeLabel, addMonthsToPeriod, nowPeriode } from "../lib/sopConfig";
+import { CATS, calcWeightedFromRecord, periodeLabel, addMonthsToPeriod, nowPeriode, isCriticalItem, temuanText } from "../lib/sopConfig";
 import { calcKesehatanPct, formatKesehatanPct, calcServiceRatio, formatRatioPct, SERVICE_THRESHOLDS, LAPTOP_THRESHOLDS } from "../lib/stokConfig";
 
 const ISOLATION_START_PERIOD = "2026-08";
@@ -193,8 +193,8 @@ export default function DashboardAudit({ profile }) {
   const avgKeu = avg(branchRows.map((r) => r.keuScore).filter((v) => v != null));
   const avgTotal = avg(branchRows.map((r) => r.total).filter((v) => v != null));
 
-  // Temuan: dihitung dari checklist SOP tiap cabang teraudit — item kritis (CRITICAL_ITEMS-level)
-  // dianggap "Major", sisanya "Minor". Sederhana tapi konsisten sama data yang udah ada.
+  // Temuan: dihitung dari checklist SOP tiap cabang teraudit — item kritis (CRITICAL_ITEMS,
+  // lihat isCriticalItem() di sopConfig.js) dianggap "Major", sisanya "Minor".
   const temuanBreakdown = useMemo(() => {
     let major = 0, minor = 0;
     const itemFail = {};
@@ -204,16 +204,23 @@ export default function DashboardAudit({ profile }) {
       CATS.forEach((c) => c.items.forEach((text, i) => {
         const key = c.id + "_" + i;
         if (!checks[key]) {
-          minor++;
+          if (isCriticalItem(c.id, i)) major++; else minor++;
           itemFail[key] = (itemFail[key] || 0) + 1;
         }
       }));
     });
+    // catId bisa punya underscore sendiri ("display_laptop", "non_operasional"),
+    // jadi index-nya HARUS dipisah dari underscore TERAKHIR, bukan split("_")[0]
+    // — itu yang bikin beberapa item di Top 5 muncul mentah ("display_laptop_4")
+    // sebelumnya: catId ke-potong salah jadi "display" doang, nggak ketemu di CATS.
     const top5 = Object.entries(itemFail).sort((a, b) => b[1] - a[1]).slice(0, 5)
       .map(([key, n]) => {
-        const [catId, idx] = key.split("_");
+        const us = key.lastIndexOf("_");
+        const catId = key.slice(0, us);
+        const idx = Number(key.slice(us + 1));
         const cat = CATS.find((c) => c.id === catId);
-        return { text: cat?.items?.[idx] || key, n };
+        const rawText = cat?.items?.[idx];
+        return { text: rawText ? temuanText(catId, idx, rawText) : key, n };
       });
     return { major, minor, total: major + minor, top5 };
   }, [branchRows]);
