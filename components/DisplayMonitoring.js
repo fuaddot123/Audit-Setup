@@ -439,38 +439,53 @@ export async function simpanDisplay({ rows, branchId, period, auditDate, userId,
     let unitId = r.id;
 
     if (r.baru) {
-      // Unit ini mungkin UDAH dicatat auditor LAIN yang nggak keliatan di
-      // layar kita (terisolasi) — cek dulu SN-nya ke tabel ASLI sebelum
-      // insert. 1 cabang diaudit auditor beda-beda dari waktu ke waktu itu
-      // normal, jadi kalau ketemu unit yang MASIH AKTIF (belum turun)
-      // dengan SN sama, kita AMBIL ALIH (dicatat_oleh dipindah ke kita)
-      // daripada nyoba insert baris baru yang bakal nabrak constraint
-      // uq_display_unit_sn_aktif (1 SN cuma boleh 1 baris aktif).
+      // Unit ini mungkin UDAH tercatat di database — entah oleh auditor lain
+      // yang nggak keliatan di layar kita (terisolasi), ATAU malah di CABANG
+      // LAIN sekalian. Constraint uq_display_unit_sn_aktif itu UNIK LINTAS
+      // CABANG (syaratnya cuma tanggal_turun IS NULL, TIDAK ada branch_id
+      // sama sekali) — jadi 1 SN cuma boleh ada 1 baris aktif di cabang
+      // MANAPUN, bukan cuma di cabang ini. Makanya pengecekannya juga harus
+      // lintas cabang (dulu sempat cuma .eq("branch_id", branchId) — itu
+      // yang bikin masih kebobolan nabrak constraint kalau SN-nya ternyata
+      // aktif di cabang lain). Kalau ketemu, kita AMBIL ALIH (dicatat_oleh +
+      // branch_id dipindah ke sini) daripada nyoba insert baris baru.
       let existingId = null;
+      let existingBranchId = null;
       const sn = r.serial_number.trim();
       if (sn) {
         const { data: existing, error: findErr } = await supabase
-          .from("display_unit").select("id")
-          .eq("branch_id", branchId).eq("serial_number", sn).is("tanggal_turun", null)
+          .from("display_unit").select("id, branch_id")
+          .eq("serial_number", sn).is("tanggal_turun", null)
           .maybeSingle();
         if (findErr) throw new Error(`${r.brand} ${r.model}: ${findErr.message}`);
-        if (existing) existingId = existing.id;
+        if (existing) { existingId = existing.id; existingBranchId = existing.branch_id; }
       }
 
       if (existingId) {
-        // .select() dipaksa biar ketauan kalau RLS diem-diem nge-block
-        // UPDATE-nya (Supabase nggak ngelempar error buat itu, cuma 0 baris
-        // yang beneran keupdate) — tanpa ini, "ambil alih" bisa "berhasil"
-        // padahal nggak nulis apa-apa, dan abis reload keliatan kayak
-        // balik ke kondisi lama/kosong lagi.
-        const { data: terupdate, error } = await supabase.from("display_unit").update({
+        // Kalau ternyata baris aktifnya ada di CABANG LAIN, ini berarti unit
+        // beneran "pindah" ke cabang ini (fisiknya sekarang ada di sini) —
+        // branch_id ikut dipindah, dan umur pajangnya dihitung ULANG dari
+        // tanggal yang diisi sekarang (bukan ikut tanggal lama di cabang
+        // asal, yang bisa jauh lebih tua dan bikin umurnya salah).
+        const pindahCabang = existingBranchId !== branchId;
+        const dataUpdate = {
           dicatat_oleh: userId,
+          branch_id: branchId,
           brand: r.brand.trim(),
           model: r.model.trim(),
           sku: r.sku.trim() || null,
           program_brand: r.program_brand,
           program_nama: r.program_brand ? r.program_nama.trim() : null,
-        }).eq("id", existingId).select("id");
+        };
+        if (pindahCabang) dataUpdate.tanggal_pajang = r.tanggal_pajang;
+
+        // .select() dipaksa biar ketauan kalau RLS diem-diem nge-block
+        // UPDATE-nya (Supabase nggak ngelempar error buat itu, cuma 0 baris
+        // yang beneran keupdate) — tanpa ini, "ambil alih" bisa "berhasil"
+        // padahal nggak nulis apa-apa, dan abis reload keliatan kayak
+        // balik ke kondisi lama/kosong lagi.
+        const { data: terupdate, error } = await supabase.from("display_unit")
+          .update(dataUpdate).eq("id", existingId).select("id");
         if (error) throw new Error(`${r.brand} ${r.model}: ${error.message}`);
         if (!terupdate || !terupdate.length) {
           throw new Error(
