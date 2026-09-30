@@ -46,6 +46,12 @@ Kalau langkah ini terasa berat, ini titik yang wajar untuk minta bantuan IT kant
 
 ## Struktur yang sudah ada
 
+### Saldo kas kecil dari Google Sheets
+
+Pada periode bulan berjalan, kolom **Sisa saldo** di Audit Keuangan membaca saldo terakhir dari spreadsheet [REKAP KAS KECIL CABANG KLA COMP](https://docs.google.com/spreadsheets/d/1He7KkKyyTbBTe_CbbIXrQpLxTicxsfH-/edit). Aplikasi memilih baris transaksi terakhir pada tab cabang, sehingga baris kosong yang hanya berisi rumus saldo tidak dianggap transaksi. Tab `JOGJA`, `SURABAYA`, dan `BABATAN` masing-masing dipetakan ke cabang Yogyakarta, Surabaya MERR, dan Surabaya Babatan.
+
+Saldo dimuat ulang setiap dua menit saat halaman Audit Keuangan terbuka, saat jendela kembali aktif, dan sekali lagi sebelum audit disimpan. Jika spreadsheet tidak bisa dibaca atau tab cabang tidak ada, penyimpanan audit bulan berjalan dibatalkan dengan pesan kesalahan agar angka lama tidak tersimpan tanpa disadari. Audit periode lampau tetap memakai angka yang sudah tersimpan di Supabase. Spreadsheet harus tetap dapat diakses melalui tautan; server membaca ekspor XLSX, sementara endpoint aplikasi hanya melayani pengguna yang sudah login. ID spreadsheet dapat diganti lewat `GOOGLE_SHEET_ID_KAS_KECIL` di environment server.
+
 - `schema.sql` — seluruh struktur database, termasuk keamanan (RLS) supaya:
   - Auditor cuma bisa isi/edit data yang statusnya masih draft
   - Cuma CEO (atau admin) yang bisa mengubah status jadi "Disetujui"/"Ditolak" — ini dicek di **server**, bukan di tampilan, jadi tidak bisa dicurangi dari browser

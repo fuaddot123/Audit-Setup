@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { sortBranches } from "../lib/branchOrder";
 import { buildSummaryReportHtml, openPrintWindow } from "../lib/pdfReportTemplate";
+import { sheetKeyForBranch } from "../lib/kasKecilBranch";
 import BranchMultiSelect from "./BranchMultiSelect";
 
 const INDO_MONTHS = ["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
@@ -10,7 +11,7 @@ function monthLabel(period) {
   const [y, m] = period.split("-");
   return INDO_MONTHS[parseInt(m, 10) - 1] + " " + y;
 }
-function todayMonth() { return new Date().toISOString().slice(0, 7); }
+function todayMonth() { return new Intl.DateTimeFormat("sv-SE", { timeZone: "Asia/Jakarta", year: "numeric", month: "2-digit" }).format(new Date()); }
 function getPrevPeriod(period) {
   const [y, m] = period.split("-").map(Number);
   const d = new Date(y, m - 2, 1);
@@ -91,6 +92,18 @@ function latestOf(entries) {
   return [...entries].sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""))[0];
 }
 
+async function requestSheetBalances(fresh = false) {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session?.access_token) throw new Error("Sesi login tidak tersedia.");
+  const response = await fetch(`/api/saldo-kas-kecil${fresh ? "?fresh=1" : ""}`, {
+    headers: { Authorization: `Bearer ${session.access_token}` },
+    cache: "no-store",
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.error || "Gagal membaca saldo spreadsheet.");
+  return result;
+}
+
 const ICON_PATHS = {
   wallet: <><rect x="3" y="6" width="18" height="13" rx="2" /><path d="M17 12h2M3 10h18" /></>,
   calendar: <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M16 3v4M8 3v4M3 10h18" /></>,
@@ -126,6 +139,9 @@ export default function AuditKeuangan({ profile }) {
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [selectedEntryId, setSelectedEntryId] = useState(null);
   const [form, setForm] = useState({ saldo_sebelumnya: "", saldo_masuk: "", limit_kas: "", pengeluaran: "", sisa_saldo: "", cabang_baru: false, tidak_visit: false });
+  const [sheetBalances, setSheetBalances] = useState({});
+  const [sheetLoading, setSheetLoading] = useState(true);
+  const [sheetError, setSheetError] = useState("");
   const [editingLimit, setEditingLimit] = useState(false);
   const [limitDraft, setLimitDraft] = useState("");
   const [savingLimit, setSavingLimit] = useState(false);
@@ -144,6 +160,24 @@ export default function AuditKeuangan({ profile }) {
   const canEdit = (profile.role === "auditor" || profile.role === "super_admin") && !profile?.liatSebagai;
 
   useEffect(() => { loadAll(); }, []);
+
+  useEffect(() => {
+    let active = true;
+    async function refreshBalances() {
+      try {
+        const result = await requestSheetBalances();
+        if (active) { setSheetBalances(result.balances); setSheetError(""); }
+      } catch (err) {
+        if (active) { setSheetBalances({}); setSheetError(err.message); }
+      } finally {
+        if (active) setSheetLoading(false);
+      }
+    }
+    refreshBalances();
+    const timer = setInterval(refreshBalances, 120_000);
+    window.addEventListener("focus", refreshBalances);
+    return () => { active = false; clearInterval(timer); window.removeEventListener("focus", refreshBalances); };
+  }, []);
 
   async function loadAll() {
     setLoading(true);
@@ -297,6 +331,14 @@ export default function AuditKeuangan({ profile }) {
     setSaving(true);
     setError(null);
     try {
+      let sheetSaldo = null;
+      if (selectedPeriod === todayMonth() && !form.tidak_visit) {
+        const result = await requestSheetBalances(true);
+        setSheetBalances(result.balances);
+        setSheetError("");
+        sheetSaldo = result.balances[sheetKeyForBranch(selectedBranch.name)];
+        if (!sheetSaldo) throw new Error(`Saldo spreadsheet untuk ${selectedBranch.name} tidak ditemukan.`);
+      }
       const today = new Date().toISOString().slice(0, 10);
       const payload = {
         branch_id: selectedBranch.id,
@@ -306,7 +348,7 @@ export default function AuditKeuangan({ profile }) {
         saldo_masuk: parseFloat(form.saldo_masuk) || 0,
         limit_kas: parseFloat(form.limit_kas) || 0,
         pengeluaran: parseFloat(form.pengeluaran) || 0,
-        sisa_saldo: parseFloat(form.sisa_saldo) || 0,
+        sisa_saldo: sheetSaldo ? sheetSaldo.balance : (parseFloat(form.sisa_saldo) || 0),
         cabang_baru: form.cabang_baru,
         tidak_visit: form.tidak_visit,
         status: "draft",
@@ -530,7 +572,9 @@ export default function AuditKeuangan({ profile }) {
   }
 
   const currentEntry = selectedBranch ? latestOf((entriesByBranch[selectedBranch.id] || {})[selectedPeriod]) : null;
-  const current = computeStatus(selectedPeriod ? { ...(currentEntry || {}), ...form } : null, settings);
+  const usesSheetSaldo = selectedPeriod === todayMonth() && !form.tidak_visit;
+  const autoSaldo = usesSheetSaldo && selectedBranch ? sheetBalances[sheetKeyForBranch(selectedBranch.name)] : null;
+  const current = computeStatus(selectedPeriod && (!usesSheetSaldo || autoSaldo) ? { ...(currentEntry || {}), ...form, sisa_saldo: autoSaldo ? autoSaldo.balance : form.sisa_saldo } : null, settings);
   const sisaHitung = (parseFloat(form.saldo_sebelumnya) || 0) + (parseFloat(form.saldo_masuk) || 0) - (parseFloat(form.pengeluaran) || 0);
 
   const visibleBranches = branches.filter((b) => {
@@ -565,7 +609,7 @@ export default function AuditKeuangan({ profile }) {
                 <input type="month" className="input" value={selectedPeriod || ""} onChange={(e) => selectPeriod(selectedBranch.id, e.target.value)} />
               </div>
               {canEdit && (
-                <button className="btn" disabled={saving} onClick={saveEntry} style={{ alignSelf: "flex-end" }}>
+                <button className="btn" disabled={saving || (usesSheetSaldo && !autoSaldo)} onClick={saveEntry} style={{ alignSelf: "flex-end" }}>
                   {saving ? "Menyimpan\u2026" : savedFlash ? "\u2713 Tersimpan" : "Simpan"}
                 </button>
               )}
@@ -732,14 +776,17 @@ export default function AuditKeuangan({ profile }) {
               </div>
 
               <div>
-                <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
-                  <Icon name="wallet" size={13} /> Sisa saldo (hitung fisik uang kas)
+                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12.5, color: "var(--text-secondary)", marginBottom: 7 }}>
+                    <Icon name="wallet" size={13} /> {usesSheetSaldo ? "Sisa saldo (otomatis dari spreadsheet)" : "Sisa saldo (hitung fisik uang kas)"}
                 </label>
                 <div style={{ position: "relative" }}>
                   <span style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)", color: "var(--text-faint)", fontSize: 14.5 }}>Rp</span>
-                  <input className="input" type="text" inputMode="numeric" placeholder="0" disabled={!canEdit} value={formatThousands(form.sisa_saldo)} onChange={(e) => setForm({ ...form, sisa_saldo: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
+                    <input className="input" type="text" inputMode="numeric" placeholder={usesSheetSaldo && sheetLoading ? "Memuat saldo..." : "0"} disabled={!canEdit || usesSheetSaldo} value={formatThousands(autoSaldo ? autoSaldo.balance : (usesSheetSaldo ? "" : form.sisa_saldo))} onChange={(e) => setForm({ ...form, sisa_saldo: parseThousands(e.target.value) })} style={{ paddingLeft: 36, padding: "14px 14px 14px 36px", fontSize: 15.5 }} />
                 </div>
-                {canEdit && (
+                  {autoSaldo && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 5 }}>Saldo terakhir tab {sheetKeyForBranch(selectedBranch.name)}, baris {autoSaldo.row}. Diperbarui otomatis setiap 2 menit.</div>}
+                  {usesSheetSaldo && sheetError && <div style={{ fontSize: 11, color: "var(--danger-text)", marginTop: 5 }}>Saldo spreadsheet belum tersedia: {sheetError}</div>}
+                  {usesSheetSaldo && !sheetLoading && !sheetError && !autoSaldo && <div style={{ fontSize: 11, color: "var(--danger-text)", marginTop: 5 }}>Tab spreadsheet untuk {selectedBranch.name} belum ditemukan.</div>}
+                {canEdit && !usesSheetSaldo && (
                   <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 5 }}>
                     Hasil hitungan rumus: {rupiah(sisaHitung)}{" "}
                     <span onClick={() => setForm((f) => ({ ...f, sisa_saldo: String(Math.round(sisaHitung)) }))} style={{ cursor: "pointer", color: "#F4B740", textDecoration: "underline" }}>
