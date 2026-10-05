@@ -805,7 +805,7 @@ export default function AuditKeuangan({ profile }) {
 
                 {current.bawaanMinus < 0 && (
                   <div style={{ background: "var(--danger-bg)", border: "1px solid rgba(239,68,68,0.3)", borderRadius: 8, padding: "9px 12px", marginBottom: 14, fontSize: 11.5, color: "var(--danger-text)" }}>
-                    <b>\u26a0\ufe0f Bawaan minus dari bulan lalu: {rupiah(current.bawaanMinus)}</b> \u2014 ini ikut ngurangin kas tersedia bulan ini, jadi % Posisi Kas di bawah keliatan lebih tinggi dari performa bulan ini doang. Lihat "% Posisi Murni" buat angka tanpa efek ini.
+                    <b>{"\u26a0\ufe0f"} Bawaan minus dari bulan lalu: {rupiah(current.bawaanMinus)}</b> {"\u2014"} ini ikut ngurangin kas tersedia bulan ini, jadi % Posisi Kas di bawah keliatan lebih tinggi dari performa bulan ini doang. Lihat "% Posisi Murni" buat angka tanpa efek ini.
                   </div>
                 )}
 
@@ -853,7 +853,7 @@ export default function AuditKeuangan({ profile }) {
           </>
           )}
 
-          {savedFlash && <div style={{ color: "var(--success-text)", fontSize: 13, marginTop: 10 }}>Tersimpan \u2713</div>}
+          {savedFlash && <div style={{ color: "var(--success-text)", fontSize: 13, marginTop: 10 }}>Tersimpan {"\u2713"}</div>}
         </div>
       </div>
     );
@@ -1071,7 +1071,7 @@ function KeuanganHistoryChart({ entriesByBranch, branchId, settings }) {
       </div>
       {shown.some((p) => p.sisa < 0) && (
         <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 8 }}>
-          <span style={{ color: "#a32020", fontWeight: 700 }}>Merah</span> = Sisa Saldo minus bulan itu \u2014 otomatis ngurangin kas tersedia bulan berikutnya.
+          <span style={{ color: "#a32020", fontWeight: 700 }}>Merah</span> = Sisa Saldo minus bulan itu {"\u2014"} otomatis ngurangin kas tersedia bulan berikutnya.
         </div>
       )}
     </div>
