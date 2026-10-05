@@ -59,6 +59,30 @@ function kategoriInfo(pct) {
   return { lbl: "Perlu Perbaikan", color: "#a32020" };
 }
 
+// Mencari pasangan Inventaris untuk 1 entri Berita Acara, secara DETERMINISTIK.
+// Urutan: (1) baris yang menyimpan berita_acara_id = id entri ini;
+// (2) baris lama (belum punya tautan) dengan tanggal audit sama — kalau ada
+//     beberapa Berita Acara di tanggal yang sama, dipasangkan berurutan
+//     berdasarkan waktu dibuat; (3) kalau periode itu cuma ada 1 Berita Acara
+//     dan 1 Inventaris yang belum bertautan, keduanya dianggap pasangan.
+// Tidak pernah memilih baris yang sudah bertautan ke Berita Acara lain.
+function cariPasanganInventaris(be, invEntries, beEntries) {
+  const invs = invEntries || [];
+  if (!be || !invs.length) return null;
+  const byCreated = (a, b) => (a.created_at || "").localeCompare(b.created_at || "");
+  const bertaut = invs.find((iv) => iv.data?.berita_acara_id === be.id);
+  if (bertaut) return bertaut;
+  const lama = invs.filter((iv) => !iv.data?.berita_acara_id).sort(byCreated);
+  if (!lama.length) return null;
+  const beSemua = beEntries || [];
+  const beTanggalSama = beSemua.filter((b) => b.audit_date === be.audit_date).sort(byCreated);
+  const idx = beTanggalSama.findIndex((b) => b.id === be.id);
+  const kandidat = lama.filter((iv) => iv.data?.audit_date === be.audit_date);
+  if (idx >= 0 && kandidat[idx]) return kandidat[idx];
+  if (beSemua.length <= 1 && lama.length === 1) return lama[0];
+  return null;
+}
+
 export default function BeritaAcara({ profile }) {
   // Mode "lihat sebagai": seluruh isian dikunci. Pagar sungguhannya ada di
   // RLS — submitted_by wajib sama dengan pengguna yang benar-benar login.
@@ -185,7 +209,7 @@ export default function BeritaAcara({ profile }) {
     const isolate = profile?.role === "auditor";
     let beQuery = supabase.from("berita_acara").select("*").eq("branch_id", b.id).eq("period", period);
     if (isolate && period >= ISOLATION_START_PERIOD) beQuery = beQuery.eq("submitted_by", profile.id);
-    let invQuery = supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", period);
+    let invQuery = supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", b.id).eq("period", period).order("created_at", { ascending: true });
     if (isolate && period >= ISOLATION_START_PERIOD) invQuery = invQuery.eq("submitted_by", profile.id);
     // "Salin dari Bulan Lalu" nyari sampe 6 bulan ke belakang (bukan cuma 1 bulan persis
     // sebelumnya) — kalau bulan langsung sebelumnya Tidak Visit/Cabang Baru, nggak
@@ -243,7 +267,7 @@ export default function BeritaAcara({ profile }) {
 
     if (entries.length) {
       const latest = entries[0];
-      const pairedInv = invEntries.find((iv) => iv.data?.audit_date === latest.audit_date) || invEntries[0] || null;
+      const pairedInv = cariPasanganInventaris(latest, invEntries, entries);
       applyEntryToForm(latest, pairedInv);
       setShowCopyBanner(false);
     } else {
@@ -425,6 +449,14 @@ export default function BeritaAcara({ profile }) {
     if (media && media.url) await deleteMediaFromStorage(media.url);
   }
 
+  // Semua baris Inventaris cabang+periode yang sedang dibuka (urut dibuat).
+  async function muatInventarisPeriode() {
+    let q = supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", selectedBranch.id).eq("period", viewPeriod).order("created_at", { ascending: true });
+    if (profile?.role === "auditor" && viewPeriod >= ISOLATION_START_PERIOD) q = q.eq("submitted_by", profile.id);
+    const { data } = await q;
+    return data || [];
+  }
+
   async function saveRecord() {
     if (!canEdit) { setError("Kamu tidak punya izin untuk menyimpan."); return; }
     if (!auditDate) { setError("Tanggal audit wajib diisi."); return; }
@@ -432,6 +464,13 @@ export default function BeritaAcara({ profile }) {
     setError(null);
     try {
       const user = (await supabase.auth.getUser()).data.user;
+
+      // Cek isian Display DULU, sebelum ada yang ditulis ke database. Dulu
+      // pengecekan ini ada di bawah, sesudah Berita Acara & Inventaris
+      // tersimpan — kalau gagal, ID barisnya belum sempat dicatat dan
+      // simpan ulang membuat baris DOBEL.
+      const galatDisplay = periksaDisplay(displayRows);
+      if (galatDisplay.length) throw new Error(galatDisplay.join(" "));
 
       const beritaPayload = {
         branch_id: selectedBranch.id,
@@ -459,6 +498,13 @@ export default function BeritaAcara({ profile }) {
         if (res.error) throw res.error;
         beRow = res.data;
       }
+      // Catat ID SEGERA setelah tulis berhasil: kalau langkah berikutnya
+      // gagal, simpan ulang tetap meng-UPDATE baris yang sama.
+      setSelectedEntryId(beRow.id);
+      setEntriesThisPeriod((prev) => {
+        const others = prev.filter((e) => e.id !== beRow.id);
+        return [beRow, ...others].sort((a, b) => (b.audit_date || "").localeCompare(a.audit_date || ""));
+      });
 
       let invRow = null;
       if (!tidakVisit) {
@@ -468,7 +514,7 @@ export default function BeritaAcara({ profile }) {
           period: viewPeriod,
           status: "submitted",
           submitted_by: user.id,
-          data: { tidak_visit: false, categories: inventaris, auditor_name: profile?.full_name || null, audit_date: auditDate },
+          data: { tidak_visit: false, categories: inventaris, auditor_name: profile?.full_name || null, audit_date: auditDate, berita_acara_id: beRow.id },
         };
         if (selectedInventarisEntryId) {
           const res = await supabase.from("audit_generic").update(invPayload).eq("id", selectedInventarisEntryId).select().single();
@@ -479,12 +525,11 @@ export default function BeritaAcara({ profile }) {
           if (res.error) throw res.error;
           invRow = res.data;
         }
+        setSelectedInventarisEntryId(invRow.id);
       }
 
       // Simpan data display sesudah berita acara tersimpan, supaya
       // tanggal audit yang dipakai sama persis.
-      const galatDisplay = periksaDisplay(displayRows);
-      if (galatDisplay.length) throw new Error(galatDisplay.join(" "));
       if (displayRows.length) {
         await simpanDisplay({
           rows: displayRows, branchId: selectedBranch.id, period: viewPeriod,
@@ -529,10 +574,17 @@ export default function BeritaAcara({ profile }) {
     setSaving(true);
     setError(null);
     try {
+      // Cari pasangan Inventaris SEBELUM menghapus apa pun. Kalau ID-nya di
+      // layar kosong (mis. entri dibuka setelah hapus sebelumnya), tetap
+      // ketemu — supaya Inventaris pasangannya tidak tertinggal yatim.
+      const invSemua = await muatInventarisPeriode();
+      let invIdHapus = selectedInventarisEntryId;
+      if (!invIdHapus) invIdHapus = cariPasanganInventaris(entry, invSemua, entriesThisPeriod)?.id || null;
+      const invHapusRow = invSemua.find((r) => r.id === invIdHapus) || null;
       const { error: err } = await supabase.from("berita_acara").delete().eq("id", selectedEntryId);
       if (err) throw err;
-      if (selectedInventarisEntryId) {
-        await supabase.from("audit_generic").delete().eq("id", selectedInventarisEntryId);
+      if (invIdHapus) {
+        await supabase.from("audit_generic").delete().eq("id", invIdHapus);
       }
       // Ikut bersihin Monitoring Display buat periode ini: unit yang baru
       // lahir di audit yang dihapus ini hilang total, unit lama cuma
@@ -562,14 +614,20 @@ export default function BeritaAcara({ profile }) {
       // kunciTerpakai() mengikuti BENTUK datanya (10 kategori atau 36 item).
       // Kalau tetap dipatok 10 kategori, foto milik data per item tidak ikut
       // terhapus dan tertinggal jadi berkas yatim di Storage — tanpa galat.
-      const allMedia = kunciTerpakai(inventaris).flatMap((k) => inventaris[k]?.photos || []);
+      // Foto diambil dari baris yang BENAR-BENAR dihapus (bukan dari isi form),
+      // supaya tidak salah menghapus foto milik audit lain.
+      const allMedia = invHapusRow
+        ? Object.values(invHapusRow.data?.categories || {}).flatMap((v) => v?.photos || [])
+        : kunciTerpakai(inventaris).flatMap((k) => inventaris[k]?.photos || []);
       deleteMediaListFromStorage(allMedia);
       const remaining = entriesThisPeriod.filter((e) => e.id !== selectedEntryId);
       setEntriesThisPeriod(remaining);
       if (remaining.length) {
-        // Kalau masih ada sisa, buka yang paling baru — data Inventaris pasangannya nggak kita tau lagi
-        // dari cache lokal, jadi mulai polos (auditor bisa isi ulang kalau perlu).
-        applyEntryToForm(remaining[0], null);
+        // Kalau masih ada sisa, buka yang paling baru DENGAN Inventaris pasangannya
+        // (dulu dibuka dengan Inventaris kosong, dan simpan berikutnya membuat
+        // baris Inventaris dobel).
+        const invSisa = invSemua.filter((r) => r.id !== invIdHapus);
+        applyEntryToForm(remaining[0], cariPasanganInventaris(remaining[0], invSisa, remaining));
       } else {
         startNewEntry(viewPeriod);
       }
@@ -1489,10 +1547,8 @@ export default function BeritaAcara({ profile }) {
                       <div
                         key={e.id}
                         onClick={async () => {
-                          let ivQuery = supabase.from("audit_generic").select("*").eq("module", "inventaris").eq("branch_id", selectedBranch.id).eq("period", viewPeriod);
-                          if (profile?.role === "auditor" && viewPeriod >= ISOLATION_START_PERIOD) ivQuery = ivQuery.eq("submitted_by", profile.id);
-                          const { data: iv } = await ivQuery;
-                          const pairedInv = (iv || []).find((r) => r.data?.audit_date === e.audit_date) || null;
+                          const iv = await muatInventarisPeriode();
+                          const pairedInv = cariPasanganInventaris(e, iv, entriesThisPeriod);
                           applyEntryToForm(e, pairedInv);
                         }}
                         style={{
