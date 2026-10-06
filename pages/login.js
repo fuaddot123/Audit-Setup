@@ -10,6 +10,7 @@ export default function Login() {
   const [password, setPassword] = useState("");
   const [fullName, setFullName] = useState("");
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -22,10 +23,18 @@ export default function Login() {
     e.preventDefault();
     setLoading(true);
     setError(null);
+    setNotice(null);
     try {
       if (mode === "login") {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
+      } else if (mode === "recovery") {
+        const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+          redirectTo: `${window.location.origin}/`,
+        });
+        if (error) throw error;
+        setNotice("Jika email terdaftar, tautan pemulihan akan dikirim. Periksa juga folder Spam. Gunakan tautan terbaru untuk membuat password baru.");
+        return;
       } else {
         const { error } = await supabase.auth.signUp({
           email,
@@ -53,7 +62,7 @@ export default function Login() {
         </div>
         <div className="display" style={{ fontSize: 22, fontWeight: 600, marginBottom: 4, textAlign: "center", color: "var(--text-primary)" }}>KLA Radar</div>
         <div style={{ fontSize: 13, color: "var(--text-secondary)", marginBottom: 24, textAlign: "center" }}>
-          {mode === "login" ? "Masuk ke akun kamu" : "Buat akun baru"}
+          {mode === "login" ? "Masuk ke akun kamu" : mode === "recovery" ? "Pulihkan akun kamu" : "Buat akun baru"}
         </div>
         <form onSubmit={handleSubmit}>
           {mode === "signup" && (
@@ -66,20 +75,21 @@ export default function Login() {
             <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Email</label>
             <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} required />
           </div>
-          <div style={{ marginBottom: 18 }}>
+          {mode !== "recovery" && <div style={{ marginBottom: 18 }}>
             <label style={{ display: "block", fontSize: 12.5, fontWeight: 500, color: "var(--text-secondary)", marginBottom: 5 }}>Password</label>
             <input className="input" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={6} />
-          </div>
+          </div>}
           {error && <div style={{ background: "var(--danger-bg)", border: "1px solid rgba(239,68,68,0.35)", color: "var(--danger-text)", padding: "8px 12px", borderRadius: 8, fontSize: 12.5, marginBottom: 14 }}>{error}</div>}
+          {notice && <div role="status" style={{ background: "rgba(34,197,94,0.12)", color: "var(--text-primary)", padding: "8px 12px", borderRadius: 8, fontSize: 12.5, marginBottom: 14 }}>{notice}</div>}
           <button className="btn" type="submit" disabled={loading} style={{ width: "100%" }}>
-            {loading ? "Memproses\u2026" : mode === "login" ? "Masuk" : "Daftar"}
+            {loading ? "Memproses\u2026" : mode === "login" ? "Masuk" : mode === "recovery" ? "Kirim tautan pemulihan" : "Daftar"}
           </button>
         </form>
         <div style={{ textAlign: "center", marginTop: 16, fontSize: 12.5, color: "var(--text-secondary)" }}>
           {mode === "login" ? (
-            <>Belum punya akun? <a href="#" onClick={(e) => { e.preventDefault(); setMode("signup"); setError(null); }} style={{ color: "#F4B740", fontWeight: 500 }}>Daftar</a></>
+            <><a href="#" onClick={(e) => { e.preventDefault(); setMode("recovery"); setError(null); setNotice(null); }} style={{ color: "#F4B740", fontWeight: 500 }}>Lupa password?</a><br /><br />Belum punya akun? <a href="#" onClick={(e) => { e.preventDefault(); setMode("signup"); setError(null); setNotice(null); }} style={{ color: "#F4B740", fontWeight: 500 }}>Daftar</a></>
           ) : (
-            <>Sudah punya akun? <a href="#" onClick={(e) => { e.preventDefault(); setMode("login"); setError(null); }} style={{ color: "#F4B740", fontWeight: 500 }}>Masuk</a></>
+            <>Sudah punya akun? <a href="#" onClick={(e) => { e.preventDefault(); setMode("login"); setError(null); setNotice(null); }} style={{ color: "#F4B740", fontWeight: 500 }}>Masuk</a></>
           )}
         </div>
       </div>
