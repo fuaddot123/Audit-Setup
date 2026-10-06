@@ -1,11 +1,14 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { sortBranches } from "../lib/branchOrder";
-import { CATS, calcWeightedFromRecord, periodeLabel, addMonthsToPeriod, nowPeriode, isCriticalItem, temuanText } from "../lib/sopConfig";
-import { calcKesehatanPct, formatKesehatanPct, calcServiceRatio, formatRatioPct, SERVICE_THRESHOLDS, LAPTOP_THRESHOLDS } from "../lib/stokConfig";
+import { CATS, calcWeightedFromRecord, periodeLabel, addMonthsToPeriod, nowPeriode, isCriticalItem, temuanText, listFailedItems, isLegacyChecklistRecord } from "../lib/sopConfig";
+import { calcKesehatanPct, formatKesehatanPct, calcServiceRatio, formatRatioPct, SERVICE_THRESHOLDS, LAPTOP_THRESHOLDS, laptopStatusInfo, serviceStatusInfo } from "../lib/stokConfig";
 
 const ISOLATION_START_PERIOD = "2026-08";
 const BOBOT = { sop: 0.3, kesehatan: 0.3, service: 0.2, keuangan: 0.2 };
+// Target per modul — SAMA dengan angka "Target" di kartu skor (ScoreCard) dan garis target grafik.
+const TARGETS = { sop: 90, kesehatan: 98, service: 95, keuangan: 95 };
+const TONE = { good: "#1a9e6e", bad: "#a32020", warn: "#b07212", neutral: "#6b3fa0" };
 const PURPLE = "#6b3fa0", GOLD = "#F4B740", GREEN = "#1a9e6e", RED = "#a32020", AMBER = "#b07212", BLUE = "#1558a0";
 
 function gradeInfo(score) {
@@ -95,6 +98,96 @@ function serviceScoreOf(rec) {
   return null;
 }
 
+// Rincian angka kas kecil 1 entri — dipakai panel rincian cabang. Rumus sisa SAMA dengan
+// keuanganScoreOf() di atas (sisa manual kalau diisi, kalau nggak saldo masuk+sebelumnya−pengeluaran).
+function keuanganInfoOf(entry) {
+  if (!entry) return null;
+  const sb = parseFloat(entry.saldo_sebelumnya) || 0;
+  const sm = parseFloat(entry.saldo_masuk) || 0;
+  const pk = parseFloat(entry.pengeluaran) || 0;
+  const lim = parseFloat(entry.limit_kas) || 0;
+  const total = sb + sm;
+  const hasManualSisa = entry.sisa_saldo !== undefined && entry.sisa_saldo !== null && entry.sisa_saldo !== "";
+  const sisa = hasManualSisa ? (parseFloat(entry.sisa_saldo) || 0) : total - pk;
+  const posisi = total > 0 ? (pk / total) * 100 : 0;
+  return { sb, sm, pk, lim, total, sisa, posisi, bawaanMinus: sb < 0 ? sb : 0, overLimit: lim > 0 && sm > lim };
+}
+const rp = (n) => (n < 0 ? "-" : "") + "Rp " + Math.abs(Math.round(n)).toLocaleString("id-ID");
+
+// Teks "Ringkasan Periode" — dibuat OTOMATIS dari angka dashboard yang sama (bukan angka baru),
+// jadi nggak mungkin beda sama kartu/tabel di bawahnya. Tiap baris = 1 kalimat siap diucapkan.
+function buildRingkasan({ period, prevPeriod, branches, branchRows, avgTotal, prevAvgTotal, avgs, temuan, progres, isPersonalView }) {
+  const lines = [];
+  const n = branchRows.length;
+  if (n === 0) return lines;
+  const withTotal = branchRows.filter((r) => r.total != null);
+
+  if (avgTotal != null) {
+    const sel = prevAvgTotal != null ? avgTotal - prevAvgTotal : null;
+    lines.push({
+      icon: "📊", tone: sel == null ? "neutral" : sel >= 0 ? "good" : "bad",
+      text: `${n} dari ${branches.length} cabang teraudit. Skor audit keseluruhan ${avgTotal.toFixed(1)}/100` +
+        (sel == null ? ", belum ada pembanding bulan lalu." : `, ${sel >= 0 ? "naik" : "turun"} ${Math.abs(sel).toFixed(1)} poin dibanding ${periodeLabel(prevPeriod)}.`),
+    });
+  }
+
+  if (withTotal.length) {
+    const sehat = withTotal.filter((r) => r.total >= 80).length;
+    const tidakSehat = withTotal.length - sehat;
+    const high = withTotal.filter((r) => riskInfo(r.total).label === "High").map((r) => r.branch.name);
+    lines.push({
+      icon: "🏢", tone: high.length ? "bad" : "good",
+      text: `${sehat} cabang sehat (skor \u2265 80)` + (tidakSehat ? `, ${tidakSehat} perlu perhatian` : "") + ". " +
+        (high.length ? `High Risk: ${high.join(", ")}.` : "Tidak ada cabang High Risk."),
+    });
+  }
+
+  if (withTotal.length >= 2) {
+    const sorted = [...withTotal].sort((a, b) => b.total - a.total);
+    const best = sorted[0], worst = sorted[sorted.length - 1];
+    lines.push({ icon: "🏆", tone: "neutral", text: `Tertinggi: ${best.branch.name} (${best.total.toFixed(0)}%). Terendah: ${worst.branch.name} (${worst.total.toFixed(0)}%).` });
+  }
+
+  const mods = [
+    { k: "% Kepatuhan SOP", v: avgs.sop, t: TARGETS.sop },
+    { k: "Kesehatan Stok", v: avgs.kes, t: TARGETS.kesehatan },
+    { k: "Service Ratio", v: avgs.svc, t: TARGETS.service },
+    { k: "Audit Keuangan", v: avgs.keu, t: TARGETS.keuangan },
+  ].filter((m) => m.v != null);
+  if (mods.length) {
+    const below = mods.filter((m) => m.v < m.t).sort((a, b) => (b.t - b.v) - (a.t - a.v));
+    lines.push(below.length
+      ? { icon: "🎯", tone: "warn", text: `${below.length} dari ${mods.length} modul di bawah target. Paling jauh: ${below[0].k} ${below[0].v.toFixed(1)}% (target ${below[0].t}%).` }
+      : { icon: "🎯", tone: "good", text: `Semua ${mods.length} modul mencapai target.` });
+  }
+
+  const sopCount = branchRows.filter((r) => r.sopScore != null).length;
+  if (sopCount > 0) {
+    if (temuan.total > 0) {
+      const top = temuan.top5[0];
+      lines.push({
+        icon: "📋", tone: "warn",
+        text: `${temuan.total} temuan SOP (${temuan.major} major, ${temuan.minor} minor).` + (top ? ` Paling sering: "${top.text}" (${top.n} cabang).` : ""),
+      });
+    } else {
+      lines.push({ icon: "📋", tone: "good", text: "Tidak ada temuan SOP tercatat." });
+    }
+  }
+
+  const belum = branches.filter((b) => !branchRows.some((r) => r.branch.id === b.id)).map((b) => b.name);
+  if (belum.length) lines.push({ icon: "\u23f3", tone: "warn", text: `Belum ada data audit: ${belum.join(", ")}.` });
+
+  if (progres.total > 0) {
+    lines.push({
+      icon: "🗓️", tone: progres.kendala ? "warn" : "neutral",
+      text: `${progres.selesai} dari ${progres.total} kunjungan terjadwal sudah selesai` + (progres.kendala ? `, ${progres.kendala} ada kendala` : "") + ".",
+    });
+  }
+
+  if (isPersonalView) lines.push({ icon: "\u26a0\ufe0f", tone: "neutral", text: "Ringkasan ini hanya mencakup audit yang kamu isi sendiri (tampilan personal), bukan seluruh cabang perusahaan." });
+  return lines;
+}
+
 function latestFor(records, branchId, period) {
   const matches = records.filter((r) => r.branch_id === branchId && r.period === period);
   if (!matches.length) return null;
@@ -112,10 +205,18 @@ export default function DashboardAudit({ profile }) {
   const [period, setPeriod] = useState(nowPeriode());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [selectedId, setSelectedId] = useState(null); // cabang yang rinciannya sedang dibuka
 
   const isPersonalView = profile?.role === "auditor" && period >= ISOLATION_START_PERIOD;
 
   useEffect(() => { loadAll(); }, []);
+  useEffect(() => { setSelectedId(null); }, [period]);
+  useEffect(() => {
+    if (!selectedId) return;
+    const onKey = (e) => { if (e.key === "Escape") setSelectedId(null); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selectedId]);
 
   async function loadAll() {
     setLoading(true);
@@ -174,7 +275,7 @@ export default function DashboardAudit({ profile }) {
     const wSum = parts.reduce((s, x) => s + x.w, 0);
     const total = wSum > 0 ? parts.reduce((s, x) => s + x.v * x.w, 0) / wSum : null;
 
-    return { sopRec, sopScore, kesScore, svcScore, keuScore, keuOverLimit, total, hasAny: !!(sopOk || kesOk || svcOk || keuOk) };
+    return { sopRec, kesRec: kesOk ? kesRec : null, svcRec: svcOk ? svcRec : null, keuRec: keuOk ? keuRec : null, sopScore, kesScore, svcScore, keuScore, keuOverLimit, total, hasAny: !!(sopOk || kesOk || svcOk || keuOk) };
   }
 
   const trendPeriods = useMemo(() => { const arr = []; for (let i = 5; i >= 0; i--) arr.push(addMonthsToPeriod(period, -i)); return arr; }, [period]);
@@ -264,6 +365,26 @@ export default function DashboardAudit({ profile }) {
   const cabangSehat = branchRows.filter((r) => r.total != null && r.total >= 80).length;
   const cabangTidakSehat = branchRows.filter((r) => r.total != null && r.total < 80).length;
 
+  // Pembanding bulan lalu (buat kalimat "naik/turun X poin" di Ringkasan)
+  const prevPeriod = addMonthsToPeriod(period, -1);
+  const prevAvgTotal = useMemo(() => {
+    const totals = branches.map((b) => branchScoresAt(b.id, prevPeriod).total).filter((v) => v != null);
+    return totals.length ? totals.reduce((s, x) => s + x, 0) / totals.length : null;
+  }, [branches, sopRecords, kesRecords, svcRecords, keuEntries, keuSettings, prevPeriod]);
+
+  const ringkasan = buildRingkasan({
+    period, prevPeriod, branches, branchRows, avgTotal, prevAvgTotal,
+    avgs: { sop: avgSop, kes: avgKes, svc: avgSvc, keu: avgKeu },
+    temuan: temuanBreakdown, progres, isPersonalView,
+  });
+
+  // Rincian 1 cabang (panel samping saat baris tabel diklik)
+  const selectedRow = selectedId != null ? branchRows.find((r) => r.branch.id === selectedId) || null : null;
+  const selectedTrend = useMemo(() => {
+    if (selectedId == null) return [];
+    return trendPeriods.map((p) => ({ period: p, total: branchScoresAt(selectedId, p).total }));
+  }, [selectedId, trendPeriods, sopRecords, kesRecords, svcRecords, keuEntries, keuSettings]);
+
   if (loading) return <div style={{ padding: 40, color: "var(--text-secondary)" }}>Memuat\u2026</div>;
 
   return (
@@ -286,6 +407,22 @@ export default function DashboardAudit({ profile }) {
       {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
 
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16 }}>
+        {/* Ringkasan periode — teks otomatis, siap dibacakan saat presentasi */}
+        <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderLeft: `4px solid ${PURPLE}`, borderRadius: 14, padding: "16px 20px" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
+            <div style={{ fontWeight: 700, fontSize: 14 }}>Ringkasan {periodeLabel(period)}</div>
+            <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>Dibuat otomatis dari data audit di bawah</div>
+          </div>
+          {ringkasan.length === 0 ? (
+            <div style={{ fontSize: 13, color: "var(--text-faint)" }}>Belum ada cabang teraudit periode ini.</div>
+          ) : ringkasan.map((l, i) => (
+            <div key={i} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "5px 0" }}>
+              <div style={{ width: 22, height: 22, borderRadius: 6, background: `${TONE[l.tone]}1c`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, flexShrink: 0 }}>{l.icon}</div>
+              <div style={{ fontSize: 13, lineHeight: 1.55 }}>{l.text}</div>
+            </div>
+          ))}
+        </div>
+
         {/* Top KPI row */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
           <KpiCard icon="🏢" label="Total Cabang" value={branches.length} color={PURPLE} />
@@ -371,7 +508,7 @@ export default function DashboardAudit({ profile }) {
 
         {/* Tabel performa per cabang */}
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden" }}>
-          <div style={{ fontWeight: 700, fontSize: 13.5, padding: "14px 18px", borderBottom: "1px solid var(--border)" }}>Performa Audit per Cabang ({periodeLabel(period)})</div>
+          <div style={{ fontWeight: 700, fontSize: 13.5, padding: "14px 18px", borderBottom: "1px solid var(--border)" }}>Performa Audit per Cabang ({periodeLabel(period)}) <span style={{ fontWeight: 400, fontSize: 11, color: "var(--text-faint)", marginLeft: 8 }}>Klik cabang untuk melihat rincian</span></div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
               <thead>
@@ -386,9 +523,9 @@ export default function DashboardAudit({ profile }) {
                   const g = r.total != null ? gradeInfo(r.total) : null;
                   const rk = r.total != null ? riskInfo(r.total) : null;
                   return (
-                    <tr key={r.branch.id} style={{ borderBottom: "1px solid var(--border)" }}>
+                    <tr key={r.branch.id} onClick={() => setSelectedId(r.branch.id)} title="Klik untuk melihat rincian" style={{ borderBottom: "1px solid var(--border)", cursor: "pointer", background: selectedId === r.branch.id ? "var(--surface-alt)" : "transparent" }}>
                       <td style={{ padding: "8px 12px" }}>{i + 1}</td>
-                      <td style={{ padding: "8px 12px", fontWeight: 600 }}>{r.branch.name}</td>
+                      <td style={{ padding: "8px 12px", fontWeight: 600 }}>{r.branch.name} <span style={{ color: "var(--text-faint)", fontWeight: 400 }}>{"\u203a"}</span></td>
                       <td style={{ padding: "8px 12px" }}>{r.sopScore != null ? r.sopScore.toFixed(0) + "%" : "\u2014"}</td>
                       <td style={{ padding: "8px 12px" }}>{r.kesScore != null ? r.kesScore.toFixed(0) + "%" : "\u2014"}</td>
                       <td style={{ padding: "8px 12px" }}>{r.svcScore != null ? r.svcScore.toFixed(0) + "%" : "\u2014"}</td>
@@ -412,6 +549,9 @@ export default function DashboardAudit({ profile }) {
           <br /><span style={{ color: GOLD, fontWeight: 800 }}>*</span> = saldo masuk melebihi limit kas bulan ini (nggak ngaruh ke skor, cuma penanda buat dicek).
         </div>
       </div>
+      {selectedRow && (
+        <BranchDetailDrawer row={selectedRow} period={period} trend={selectedTrend} keuSettings={keuSettings} isPersonalView={isPersonalView} onClose={() => setSelectedId(null)} />
+      )}
     </div>
   );
 }
@@ -544,5 +684,183 @@ function ProgresBox({ label, value, color }) {
       <div style={{ fontSize: 20, fontWeight: 800, color }}>{value}</div>
       <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{label}</div>
     </div>
+  );
+}
+
+// Panel rincian 1 cabang: "kenapa skornya segini" — skor per modul, modul yang paling menarik
+// skor turun, temuan SOP, service ratio, kas kecil, tren 6 bulan, dan hal yang perlu ditindaklanjuti.
+function BranchDetailDrawer({ row, period, trend, keuSettings, isPersonalView, onClose }) {
+  const g = row.total != null ? gradeInfo(row.total) : null;
+  const rk = row.total != null ? riskInfo(row.total) : null;
+
+  const mods = [
+    { key: "sop", label: "% Kepatuhan SOP", v: row.sopScore, w: BOBOT.sop, t: TARGETS.sop, color: PURPLE },
+    { key: "kes", label: "Kesehatan Stok", v: row.kesScore, w: BOBOT.kesehatan, t: TARGETS.kesehatan, color: GREEN },
+    { key: "svc", label: "Service Ratio", v: row.svcScore, w: BOBOT.service, t: TARGETS.service, color: BLUE },
+    { key: "keu", label: "Audit Keuangan", v: row.keuScore, w: BOBOT.keuangan, t: TARGETS.keuangan, color: GOLD },
+  ];
+  const aktif = mods.filter((m) => m.v != null);
+  const wSum = aktif.reduce((s, m) => s + m.w, 0);
+  const withLoss = mods.map((m) => ({ ...m, loss: m.v != null && wSum > 0 ? (Math.max(0, m.t - m.v) * m.w) / wSum : 0 }));
+  const maxLoss = Math.max(0, ...withLoss.map((m) => m.loss));
+
+  // Temuan SOP — pakai listFailedItems() biar checklist lama & baru sama-sama kebaca benar
+  const sopData = row.sopRec && !row.sopRec.data?.tidak_visit ? row.sopRec.data : null;
+  const legacy = sopData ? isLegacyChecklistRecord(sopData) : false;
+  const failed = sopData
+    ? listFailedItems(sopData)
+        .map((f) => ({ ...f, kritis: !legacy && isCriticalItem(f.catId, Number(f.key.slice(f.key.lastIndexOf("_") + 1))) }))
+        .sort((a, b) => Number(b.kritis) - Number(a.kritis))
+    : [];
+  const jumlahKritis = failed.filter((f) => f.kritis).length;
+  const SHOW = 10;
+
+  // Service ratio (Laptop & Aksesoris dinilai sendiri-sendiri, threshold beda)
+  const d = row.svcRec?.data;
+  const svcItems = [];
+  if (d) {
+    if (d.ratio_laptop != null || d.ratio_aksesoris != null) {
+      if (d.ratio_laptop != null) svcItems.push({ label: "Laptop", ratio: d.ratio_laptop, st: laptopStatusInfo(d.ratio_laptop) });
+      if (d.ratio_aksesoris != null) svcItems.push({ label: "Aksesoris", ratio: d.ratio_aksesoris, st: serviceStatusInfo(d.ratio_aksesoris) });
+    } else if (d.ratio != null) {
+      svcItems.push({ label: "Gabungan (data lama)", ratio: d.ratio, st: serviceStatusInfo(d.ratio) });
+    }
+  }
+
+  const keu = keuanganInfoOf(row.keuRec);
+
+  // Hal yang perlu ditindaklanjuti — murni dari data (bukan saran karangan)
+  const todo = [];
+  if (sopData && failed.length) todo.push(`${failed.length} item SOP belum terpenuhi` + (jumlahKritis ? ` (${jumlahKritis} item kritis)` : "") + ".");
+  if (row.kesScore != null && row.kesScore < TARGETS.kesehatan) todo.push(`Kesehatan stok ${row.kesScore.toFixed(1)}% masih di bawah target ${TARGETS.kesehatan}%.`);
+  svcItems.forEach((s) => { if (s.st.lbl !== "Terkendali") todo.push(`Service ratio ${s.label} ${formatRatioPct(s.ratio)} berstatus ${s.st.lbl}.`); });
+  if (keu) {
+    if (keu.sisa < 0) todo.push(`Sisa saldo kas kecil minus ${rp(keu.sisa)}.`);
+    if (keu.bawaanMinus < 0) todo.push(`Ada bawaan minus dari bulan lalu ${rp(keu.bawaanMinus)}, ikut mengurangi kas tersedia bulan ini.`);
+    if (keu.sisa >= 0 && keu.posisi > keuSettings.monitoring) todo.push(`Pemakaian kas ${keu.posisi.toFixed(0)}% melewati batas Monitoring (${keuSettings.monitoring}%).`);
+    if (keu.overLimit) todo.push(`Saldo masuk ${rp(keu.sm)} melebihi limit kas ${rp(keu.lim)}.`);
+  }
+
+  const secTitle = { fontWeight: 700, fontSize: 13, margin: "22px 0 8px" };
+  const modInfo = (m) =>
+    `Target ${m.t}% \u00b7 Bobot ${Math.round(m.w * 100)}% \u00b7 Kontribusi ${((m.v * m.w) / wSum).toFixed(1)} poin` +
+    (m.loss > 0 ? ` \u00b7 kurang ${m.loss.toFixed(1)} poin dari target` : " \u00b7 target tercapai");
+
+  return (
+    <>
+      <div onClick={onClose} style={{ position: "fixed", top: 0, left: 0, right: 0, bottom: 0, background: "rgba(0,0,0,0.35)", zIndex: 90 }} />
+      <div role="dialog" aria-label={`Rincian ${row.branch.name}`} style={{ position: "fixed", top: 0, right: 0, bottom: 0, width: "min(480px, 100vw)", background: "var(--surface)", borderLeft: "1px solid var(--border)", boxShadow: "-8px 0 30px rgba(0,0,0,0.25)", zIndex: 91, overflowY: "auto", padding: 22 }}>
+        <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 12 }}>
+          <div>
+            <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>{row.branch.name}</div>
+            <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>Rincian skor {periodeLabel(period)}</div>
+          </div>
+          <button className="btn-ghost" onClick={onClose} aria-label="Tutup" style={{ padding: "6px 10px" }}>{"\u2715"}</button>
+        </div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 14, marginTop: 14, background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 12, padding: "12px 16px" }}>
+          <div style={{ fontSize: 30, fontWeight: 800, color: g ? g.color : "var(--text-faint)" }}>{row.total != null ? row.total.toFixed(1) + "%" : "\u2014"}</div>
+          <div style={{ fontSize: 12, lineHeight: 1.6 }}>
+            {g && <div>Grade <b style={{ color: g.color }}>{g.grade}</b> {"\u00b7"} Risk <b style={{ color: rk.color }}>{rk.label}</b></div>}
+            <div style={{ color: "var(--text-faint)" }}>Dihitung dari {aktif.length} modul yang ada datanya</div>
+          </div>
+        </div>
+
+        <div style={secTitle}>Skor per modul</div>
+        {withLoss.map((m) => (
+          <div key={m.key} style={{ padding: "10px 0", borderBottom: "1px solid var(--border)" }}>
+            <div style={{ display: "flex", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
+              <div style={{ fontWeight: 700, fontSize: 12.5, color: m.color }}>{m.label}</div>
+              {m.v != null && m.loss > 0 && m.loss === maxLoss && maxLoss >= 0.05 && (
+                <span style={{ fontSize: 9.5, fontWeight: 800, color: RED, background: `${RED}18`, padding: "1px 7px", borderRadius: 20 }}>PALING MENARIK SKOR TURUN</span>
+              )}
+              <div style={{ marginLeft: "auto", fontWeight: 800, fontSize: 15 }}>{m.v != null ? m.v.toFixed(1) + "%" : "\u2014"}</div>
+            </div>
+            {m.v != null ? (
+              <>
+                <div style={{ position: "relative", height: 8, borderRadius: 6, background: "var(--border)", marginTop: 7 }}>
+                  <div style={{ width: `${Math.max(0, Math.min(100, m.v))}%`, height: "100%", borderRadius: 6, background: m.color }} />
+                  <div style={{ position: "absolute", left: `${m.t}%`, top: -3, bottom: -3, width: 2, background: GOLD }} />
+                </div>
+                <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 6 }}>{modInfo(m)}</div>
+              </>
+            ) : (
+              <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>Belum ada data periode ini (tidak dihitung).</div>
+            )}
+          </div>
+        ))}
+
+        <div style={secTitle}>Temuan SOP</div>
+        {!sopData ? (
+          <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Belum ada audit SOP yang valid di periode ini.</div>
+        ) : failed.length === 0 ? (
+          <div style={{ fontSize: 12, color: GREEN, fontWeight: 600 }}>Semua item SOP terpenuhi.</div>
+        ) : (
+          <>
+            <div style={{ fontSize: 11.5, color: "var(--text-secondary)", marginBottom: 6 }}>{failed.length} item belum terpenuhi{jumlahKritis ? `, ${jumlahKritis} di antaranya kritis` : ""}.</div>
+            {failed.slice(0, SHOW).map((f) => (
+              <div key={f.key} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "6px 0", borderBottom: "1px solid var(--border)" }}>
+                <span style={{ fontSize: 9.5, fontWeight: 800, color: f.kritis ? RED : AMBER, background: f.kritis ? `${RED}18` : `${AMBER}18`, padding: "2px 7px", borderRadius: 20, flexShrink: 0, marginTop: 1 }}>{f.kritis ? "MAJOR" : "MINOR"}</span>
+                <div style={{ fontSize: 12, lineHeight: 1.45 }}>{f.text}<div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{f.catLabel}</div></div>
+              </div>
+            ))}
+            {failed.length > SHOW && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 6 }}>+{failed.length - SHOW} temuan lainnya (lihat modul Audit SOP).</div>}
+          </>
+        )}
+
+        {svcItems.length > 0 && (
+          <>
+            <div style={secTitle}>Service Ratio</div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {svcItems.map((s) => (
+                <div key={s.label} style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "8px 12px" }}>
+                  <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{s.label}</div>
+                  <div style={{ fontWeight: 800, fontSize: 15 }}>{formatRatioPct(s.ratio)}</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: s.st.color }}>{s.st.lbl}</div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {keu && (
+          <>
+            <div style={secTitle}>Kas Kecil</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+              {[
+                ["Saldo sebelumnya", rp(keu.sb), keu.sb < 0],
+                ["Saldo masuk", rp(keu.sm), false],
+                ["Pengeluaran", rp(keu.pk), false],
+                ["Sisa saldo", rp(keu.sisa), keu.sisa < 0],
+              ].map(([lbl, val, bad]) => (
+                <div key={lbl} style={{ background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "8px 12px" }}>
+                  <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{lbl}</div>
+                  <div style={{ fontWeight: 800, fontSize: 13.5, color: bad ? RED : "var(--text-primary)" }}>{val}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 6 }}>Pemakaian kas {keu.posisi.toFixed(0)}% dari kas tersedia{keu.lim > 0 ? ` \u00b7 limit ${rp(keu.lim)}` : ""}.</div>
+          </>
+        )}
+
+        <div style={secTitle}>Tren skor 6 bulan</div>
+        <BarTrend data={trend.map((t) => ({ period: t.period, value: t.total }))} target={80} color={PURPLE} />
+        <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>Garis emas = batas sehat 80.</div>
+
+        <div style={secTitle}>Perlu ditindaklanjuti</div>
+        {todo.length === 0 ? (
+          <div style={{ fontSize: 12, color: GREEN, fontWeight: 600 }}>Tidak ada hal yang perlu ditindaklanjuti dari data periode ini.</div>
+        ) : todo.map((t, i) => (
+          <div key={i} style={{ display: "flex", gap: 8, padding: "5px 0", fontSize: 12.5, lineHeight: 1.5 }}>
+            <span style={{ color: AMBER, fontWeight: 800 }}>{"\u2022"}</span>
+            <span>{t}</span>
+          </div>
+        ))}
+
+        {isPersonalView && (
+          <div style={{ marginTop: 22, fontSize: 10.5, color: "var(--text-faint)" }}>Tampilan personal: hanya audit yang kamu isi sendiri yang ikut terhitung.</div>
+        )}
+      </div>
+    </>
   );
 }
