@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { sortBranches } from "../../lib/branchOrder";
 import {
@@ -55,12 +55,21 @@ export default function SopAuditCabang({ profile }) {
   const [error, setError] = useState(null);
   const [saved, setSaved] = useState(false);
   const [loadingRecord, setLoadingRecord] = useState(false);
+  const loadSeq = useRef(0);
 
-  useEffect(() => { loadBranches(); }, []);
+  useEffect(() => {
+    setSelectedBranch(null);
+    setEntriesThisPeriod([]);
+    setLatestByBranchPeriod({});
+    setError(null);
+    loadBranches();
+  }, [profile?.id, profile?.role]);
 
   async function loadBranches() {
+    const seq = ++loadSeq.current;
     setLoadingBranches(true);
     const { data, error: err } = await supabase.from("branches").select("*").order("name");
+    if (seq !== loadSeq.current) return;
     if (!err) setBranches(sortBranches(data || []));
     // Auditor biasa cuma boleh liat/pake audit yang dia submit sendiri — TAPI cuma berlaku
     // mulai Agustus 2026 ke depan. Data Jan-Jul 2026 tetep kebuka bareng buat semua auditor.
@@ -70,6 +79,7 @@ export default function SopAuditCabang({ profile }) {
       recQuery = recQuery.or(`period.lt.${ISOLATION_START_PERIOD},submitted_by.eq.${profile.id}`);
     }
     const { data: recs, error: recErr } = await recQuery;
+    if (seq !== loadSeq.current) return;
     if (!recErr) {
       const sorted = [...(recs || [])].sort((a, b) => (b.data?.audit_date || "").localeCompare(a.data?.audit_date || ""));
       const map = {};
