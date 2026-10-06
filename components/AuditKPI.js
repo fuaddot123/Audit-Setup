@@ -1,7 +1,16 @@
 import { useState, useEffect, useMemo } from "react";
 import { supabase } from "../lib/supabaseClient";
-import { KPI_ITEMS, calcKPI, totalKpiInfo, fmtPct, nowPeriode, periodeLabel, addMonthsToPeriod } from "../lib/kpiConfig";
+import { kpiItemsFor, isKpiV2, calcKPI, totalKpiInfo, fmtPct, nowPeriode, periodeLabel, addMonthsToPeriod } from "../lib/kpiConfig";
 import { buildSummaryReportHtml, openPrintWindow } from "../lib/pdfReportTemplate";
+
+// Peta realisasi dari 1 baris audit_kpi, dipakai calcKPI(…, row.period)
+const realMap = (r) => ({
+  coverage: r.realisasi_coverage, kepatuhan_sop: r.realisasi_kepatuhan_sop,
+  temuan_berulang: r.realisasi_temuan_berulang, temuan_audit: r.realisasi_temuan_audit,
+  ketepatan_laporan: r.realisasi_ketepatan_laporan,
+});
+// Sel tabel PDF: indikator yang tidak berlaku di periode itu ditulis "—"
+const hasilCell = (c, key) => (c.results[key] ? fmtPct(c.results[key].hasil) : "\u2014");
 
 const EMPTY_FORM = { coverage: "", kepatuhan_sop: "", temuan_berulang: "", temuan_audit: "", ketepatan_laporan: "" };
 
@@ -60,11 +69,7 @@ export default function AuditKPI({ profile }) {
     const rows = auditors.map((a) => {
       const rec = allRecords.find((r) => r.auditor_id === a.id && r.period === exportPeriod);
       if (!rec) return { auditor: a, rec: null };
-      const calc = calcKPI({
-        coverage: rec.realisasi_coverage, kepatuhan_sop: rec.realisasi_kepatuhan_sop,
-        temuan_berulang: rec.realisasi_temuan_berulang, temuan_audit: rec.realisasi_temuan_audit,
-        ketepatan_laporan: rec.realisasi_ketepatan_laporan,
-      });
+      const calc = calcKPI(realMap(rec), rec.period);
       return { auditor: a, rec, calc, info: totalKpiInfo(calc.total) };
     });
     const audited = rows.filter((r) => r.rec);
@@ -75,15 +80,15 @@ export default function AuditKPI({ profile }) {
     const colorMap = { Tercapai: "#1a9e6e", "Mendekati Target": "#b07212", "Di Bawah Target": "#a32020" };
     const total = auditors.length;
 
+    const itemsP = kpiItemsFor(exportPeriod);
     const tableRows = auditors.map((a, i) => {
       const row = rows.find((r) => r.auditor.id === a.id);
-      if (!row.rec) return { cells: [String(i + 1), a.full_name || "\u2026", null, null, null, null, null, null], badge: null };
+      if (!row.rec) return { cells: [String(i + 1), a.full_name || "\u2026", ...itemsP.map(() => null), null], badge: null };
       const c = row.calc;
       return {
         cells: [
           String(i + 1), a.full_name || "\u2026",
-          fmtPct(c.results.coverage.hasil), fmtPct(c.results.kepatuhan_sop.hasil), fmtPct(c.results.temuan_berulang.hasil),
-          fmtPct(c.results.temuan_audit.hasil), fmtPct(c.results.ketepatan_laporan.hasil), fmtPct(c.total),
+          ...itemsP.map((it) => hasilCell(c, it.key)), fmtPct(c.total),
         ],
         badge: { label: row.info.lbl, color: colorMap[row.info.lbl] },
       };
@@ -108,7 +113,7 @@ export default function AuditKPI({ profile }) {
         { icon: "alertCircle", label: "MENDEKATI TARGET", value: String(grouped["Mendekati Target"]), sub: "Auditor", color: "#b07212" },
         { icon: "alertTriangle", label: "DI BAWAH TARGET", value: String(grouped["Di Bawah Target"]), sub: "Auditor", color: "#a32020" },
       ],
-      tableHeaders: ["No", "Auditor", "Coverage", "Kepatuhan SOP", "Temuan Berulang", "Temuan Audit", "Ketepatan Laporan", "Total KPI"],
+      tableHeaders: ["No", "Auditor", ...itemsP.map((it) => it.short), "Total KPI"],
       tableRows,
       donutSegments,
       donutCenterLines: [String(total), "Auditor"],
@@ -124,7 +129,7 @@ export default function AuditKPI({ profile }) {
       ],
       notes: [
         "Laporan ini merupakan ringkasan KPI seluruh auditor pada periode yang dipilih.",
-        "Total KPI dihitung dari penjumlahan Hasil (Bobot \u00d7 pencapaian) kelima indikator.",
+        "Total KPI dihitung dari penjumlahan Hasil (Bobot \u00d7 pencapaian) seluruh indikator pada periode tersebut.",
         `Harap tindak lanjuti auditor dengan status "Di Bawah Target".`,
       ],
       pageLabel: "Halaman 1 dari 1",
@@ -141,14 +146,10 @@ export default function AuditKPI({ profile }) {
       const rows = auditors.map((a) => {
         const rec = allRecords.find((r) => r.auditor_id === a.id && r.period === exportPeriod);
         if (!rec) return { Auditor: a.full_name || "\u2026", Periode: periodeLabel(exportPeriod), Status: "Belum diisi" };
-        const c = calcKPI({
-          coverage: rec.realisasi_coverage, kepatuhan_sop: rec.realisasi_kepatuhan_sop,
-          temuan_berulang: rec.realisasi_temuan_berulang, temuan_audit: rec.realisasi_temuan_audit,
-          ketepatan_laporan: rec.realisasi_ketepatan_laporan,
-        });
+        const c = calcKPI(realMap(rec), rec.period);
         const info = totalKpiInfo(c.total);
         const row = { Auditor: a.full_name || "\u2026", Periode: periodeLabel(exportPeriod) };
-        KPI_ITEMS.forEach((item) => {
+        kpiItemsFor(rec.period).forEach((item) => {
           row[item.label + " (Realisasi)"] = c.results[item.key].real;
           row[item.label + " (Hasil)"] = fmtPct(c.results[item.key].hasil);
         });
@@ -175,11 +176,7 @@ export default function AuditKPI({ profile }) {
     if (!history.length) { setError("Belum ada data KPI untuk auditor ini."); return; }
 
     const rowsCalc = history.map((row) => {
-      const c = calcKPI({
-        coverage: row.realisasi_coverage, kepatuhan_sop: row.realisasi_kepatuhan_sop,
-        temuan_berulang: row.realisasi_temuan_berulang, temuan_audit: row.realisasi_temuan_audit,
-        ketepatan_laporan: row.realisasi_ketepatan_laporan,
-      });
+      const c = calcKPI(realMap(row), row.period);
       return { row, calc: c, info: totalKpiInfo(c.total) };
     });
 
@@ -190,8 +187,8 @@ export default function AuditKPI({ profile }) {
     const tableRows = rowsCalc.map((r) => ({
       cells: [
         periodeLabel(r.row.period),
-        fmtPct(r.calc.results.coverage.hasil), fmtPct(r.calc.results.kepatuhan_sop.hasil), fmtPct(r.calc.results.temuan_berulang.hasil),
-        fmtPct(r.calc.results.temuan_audit.hasil), fmtPct(r.calc.results.ketepatan_laporan.hasil), fmtPct(r.calc.total),
+        hasilCell(r.calc, "coverage"), hasilCell(r.calc, "kepatuhan_sop"), hasilCell(r.calc, "temuan_berulang"),
+        hasilCell(r.calc, "temuan_audit"), hasilCell(r.calc, "ketepatan_laporan"), fmtPct(r.calc.total),
       ],
       badge: { label: r.info.lbl, color: colorMap[r.info.lbl] },
     }));
@@ -213,7 +210,7 @@ export default function AuditKPI({ profile }) {
         { icon: "alertCircle", label: "MENDEKATI TARGET", value: String(grouped["Mendekati Target"]), sub: "Bulan", color: "#b07212" },
         { icon: "alertTriangle", label: "DI BAWAH TARGET", value: String(grouped["Di Bawah Target"]), sub: "Bulan", color: "#a32020" },
       ],
-      tableHeaders: ["Periode", "Coverage", "Kepatuhan SOP", "Temuan Berulang", "Temuan Audit", "Ketepatan Laporan", "Total KPI"],
+      tableHeaders: ["Periode", "Coverage / Jml Cabang", "Kepatuhan SOP", "Temuan Berulang", "Temuan Audit / Pelanggaran SOP", "Ketepatan Laporan", "Total KPI"],
       tableRows,
       donutSegments,
       donutCenterLines: [String(rowsCalc.length), "Periode"],
@@ -229,7 +226,7 @@ export default function AuditKPI({ profile }) {
       ],
       notes: [
         `Laporan ini merupakan riwayat KPI individu atas nama ${selectedAuditor.full_name || "\u2026"}.`,
-        "Total KPI dihitung dari penjumlahan Hasil (Bobot \u00d7 pencapaian) kelima indikator tiap bulan.",
+        "Total KPI dihitung dari penjumlahan Hasil (Bobot \u00d7 pencapaian) seluruh indikator pada tiap periode (5 indikator sebelum Sep 2026, 2 indikator sejak Sep 2026; tanda \u2014 = indikator tidak berlaku).",
       ],
       pageLabel: "Halaman 1 dari 1",
     });
@@ -245,14 +242,10 @@ export default function AuditKPI({ profile }) {
       const XLSX = await import("xlsx");
       if (!history.length) { setError("Belum ada data KPI untuk auditor ini."); setExportBusy(false); return; }
       const rows = history.map((row) => {
-        const c = calcKPI({
-          coverage: row.realisasi_coverage, kepatuhan_sop: row.realisasi_kepatuhan_sop,
-          temuan_berulang: row.realisasi_temuan_berulang, temuan_audit: row.realisasi_temuan_audit,
-          ketepatan_laporan: row.realisasi_ketepatan_laporan,
-        });
+        const c = calcKPI(realMap(row), row.period);
         const info = totalKpiInfo(c.total);
         const out = { Auditor: selectedAuditor.full_name || "\u2026", Periode: periodeLabel(row.period) };
-        KPI_ITEMS.forEach((item) => {
+        kpiItemsFor(row.period).forEach((item) => {
           out[item.label + " (Realisasi)"] = c.results[item.key].real;
           out[item.label + " (Hasil)"] = fmtPct(c.results[item.key].hasil);
         });
@@ -319,7 +312,7 @@ export default function AuditKPI({ profile }) {
     setSaved(false);
   }
 
-  const { results, total } = calcKPI({ ...form, kepatuhan_sop: (parseFloat(form.kepatuhan_sop) || 0) / 100 });
+  const { results, total } = calcKPI({ ...form, kepatuhan_sop: (parseFloat(form.kepatuhan_sop) || 0) / 100 }, period);
   const totalInfo = totalKpiInfo(total);
 
   async function deleteRecord() {
@@ -356,13 +349,23 @@ export default function AuditKPI({ profile }) {
         auditor_id: selectedAuditor.id,
         period,
         realisasi_coverage: parseFloat(form.coverage) || 0,
-        realisasi_kepatuhan_sop: (parseFloat(form.kepatuhan_sop) || 0) / 100,
-        realisasi_temuan_berulang: parseFloat(form.temuan_berulang) || 0,
         realisasi_temuan_audit: parseFloat(form.temuan_audit) || 0,
-        realisasi_ketepatan_laporan: parseFloat(form.ketepatan_laporan) || 0,
         submitted_by: user.id,
         updated_at: new Date().toISOString(),
       };
+      if (!isKpiV2(period)) {
+        // Periode lama (sebelum Sep 2026): simpan kelima indikator seperti biasa.
+        payload.realisasi_kepatuhan_sop = (parseFloat(form.kepatuhan_sop) || 0) / 100;
+        payload.realisasi_temuan_berulang = parseFloat(form.temuan_berulang) || 0;
+        payload.realisasi_ketepatan_laporan = parseFloat(form.ketepatan_laporan) || 0;
+      } else if (!history.some((r) => r.period === period)) {
+        // Periode baru, baris baru: isi kolom indikator yang sudah tidak dipakai
+        // dengan 0 (jaga-jaga kolomnya NOT NULL). Kalau barisnya sudah ada,
+        // kolom lama dibiarkan apa adanya.
+        payload.realisasi_kepatuhan_sop = 0;
+        payload.realisasi_temuan_berulang = 0;
+        payload.realisasi_ketepatan_laporan = 0;
+      }
       const { error: err } = await supabase.from("audit_kpi").upsert(payload, { onConflict: "auditor_id,period" });
       if (err) throw err;
       setSaved(true);
@@ -405,11 +408,7 @@ export default function AuditKPI({ profile }) {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))", gap: 12 }}>
               {visibleAuditors.map((a) => {
                 const rec = allRecords.find((r) => r.auditor_id === a.id && r.period === exportPeriod);
-                const calc = rec ? calcKPI({
-                  coverage: rec.realisasi_coverage, kepatuhan_sop: rec.realisasi_kepatuhan_sop,
-                  temuan_berulang: rec.realisasi_temuan_berulang, temuan_audit: rec.realisasi_temuan_audit,
-                  ketepatan_laporan: rec.realisasi_ketepatan_laporan,
-                }) : null;
+                const calc = rec ? calcKPI(realMap(rec), rec.period) : null;
                 const kpiInfo = calc ? totalKpiInfo(calc.total) : null;
                 return (
                 <div
@@ -475,7 +474,7 @@ export default function AuditKPI({ profile }) {
                   </tr>
                 </thead>
                 <tbody>
-                  {KPI_ITEMS.map((item) => {
+                  {kpiItemsFor(period).map((item) => {
                     const r = results[item.key];
                     return (
                       <tr key={item.key} style={{ borderTop: "1px solid var(--border)" }}>
@@ -539,11 +538,7 @@ export default function AuditKPI({ profile }) {
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                 {history.map((row) => {
-                  const calc = calcKPI({
-                    coverage: row.realisasi_coverage, kepatuhan_sop: row.realisasi_kepatuhan_sop,
-                    temuan_berulang: row.realisasi_temuan_berulang, temuan_audit: row.realisasi_temuan_audit,
-                    ketepatan_laporan: row.realisasi_ketepatan_laporan,
-                  });
+                  const calc = calcKPI(realMap(row), row.period);
                   const info = totalKpiInfo(calc.total);
                   return (
                     <div key={row.period} onClick={() => setPeriod(row.period)} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 16px", cursor: "pointer" }}>

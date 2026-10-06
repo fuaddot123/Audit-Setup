@@ -5,7 +5,7 @@ import { kesehatanStatusInfo, serviceStatusInfo, laptopStatusInfo } from "../lib
 import { INVENTARIS_CATEGORIES } from "./AuditInventaris";
 import BranchMultiSelect from "./BranchMultiSelect";
 import { sortBranches } from "../lib/branchOrder";
-import { KPI_ITEMS, calcKPI, totalKpiInfo } from "../lib/kpiConfig";
+import { kpiItemsFor, calcKPI, totalKpiInfo } from "../lib/kpiConfig";
 
 // ── Warna & style ──
 const PURPLE = "2A1F52";
@@ -1799,7 +1799,7 @@ export default function LaporanBulanan({ profile }) {
         const kpiIcons = { coverage: "\u{1F3E2}", kepatuhan_sop: "\u{1F4CB}", temuan_berulang: "\u{1F50D}", temuan_audit: "\u{1F4C4}", ketepatan_laporan: "\u{1F550}" };
 
         function kpiSlideFor(auditorName, realisasiMap) {
-          const { results, total } = calcKPI(realisasiMap);
+          const { results, total } = calcKPI(realisasiMap, period);
           const totalInfo = totalKpiInfo(total);
 
           const s = newSlide();
@@ -1827,7 +1827,7 @@ export default function LaporanBulanan({ profile }) {
           const fmtTarget = (item) => item.targetIsPercent ? `${Math.round(item.target * 100)}%` : String(item.target);
           // "crossref" (Temuan Berulang) target-nya persen, tapi realisasinya angka mentah (jumlah kejadian) — bukan fraksi.
           const fmtReal = (item, real) => (item.targetIsPercent && item.type !== "crossref") ? `${Math.round(real * 100)}%` : String(real);
-          const body = KPI_ITEMS.map((item, i) => {
+          const body = kpiItemsFor(period).map((item, i) => {
             const r = results[item.key];
             const pctColor = r.pctReal >= 0.9 ? GREEN : r.pctReal >= 0.5 ? AMBER : RED;
             return [
