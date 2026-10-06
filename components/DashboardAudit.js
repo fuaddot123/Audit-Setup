@@ -116,6 +116,8 @@ const rp = (n) => (n < 0 ? "-" : "") + "Rp " + Math.abs(Math.round(n)).toLocaleS
 
 // Teks "Ringkasan Periode" — dibuat OTOMATIS dari angka dashboard yang sama (bukan angka baru),
 // jadi nggak mungkin beda sama kartu/tabel di bawahnya. Tiap baris = 1 kalimat siap diucapkan.
+// SENGAJA cuma meringkas hasil audit bulan itu (skor, cabang, modul, temuan) — info lain
+// (cabang belum diaudit, progres jadwal, catatan personal) tidak dimasukkan.
 function buildRingkasan({ period, prevPeriod, branches, branchRows, avgTotal, prevAvgTotal, avgs, temuan, progres, isPersonalView }) {
   const lines = [];
   const n = branchRows.length;
@@ -174,17 +176,6 @@ function buildRingkasan({ period, prevPeriod, branches, branchRows, avgTotal, pr
     }
   }
 
-  const belum = branches.filter((b) => !branchRows.some((r) => r.branch.id === b.id)).map((b) => b.name);
-  if (belum.length) lines.push({ icon: "\u23f3", tone: "warn", text: `Belum ada data audit: ${belum.join(", ")}.` });
-
-  if (progres.total > 0) {
-    lines.push({
-      icon: "🗓️", tone: progres.kendala ? "warn" : "neutral",
-      text: `${progres.selesai} dari ${progres.total} kunjungan terjadwal sudah selesai` + (progres.kendala ? `, ${progres.kendala} ada kendala` : "") + ".",
-    });
-  }
-
-  if (isPersonalView) lines.push({ icon: "\u26a0\ufe0f", tone: "neutral", text: "Ringkasan ini hanya mencakup audit yang kamu isi sendiri (tampilan personal), bukan seluruh cabang perusahaan." });
   return lines;
 }
 
