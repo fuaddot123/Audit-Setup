@@ -12,6 +12,13 @@ const EMPTY_FORM = { laptop: "", aksesoris: "", aksesoris_customer: "", user: ""
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
+// Record BARU yang Total Unit Laptop / Aksesoris-nya 0 (kolom dikosongkan waktu input): ratio-nya
+// otomatis tersimpan 0% dan terbaca "Terkendali", padahal sebenarnya belum bisa dihitung.
+function totalUnitKosong(d) {
+  if (!d || d.tidak_visit) return false;
+  const kosong = (x) => x != null && !(Number(x) > 0);
+  return kosong(d.total_unit_laptop) || kosong(d.total_unit_aksesoris);
+}
 function shortDate(d) {
   if (!d) return "\u2014";
   return new Date(d + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
@@ -203,6 +210,16 @@ export default function StokServiceRatio({ profile }) {
   async function saveRecord() {
     if (!canEdit) { setError("Kamu tidak punya izin untuk menyimpan."); return; }
     if (!auditDate) { setError("Tanggal audit wajib diisi."); return; }
+    // Total Unit wajib terisi (> 0): kalau kosong, ratio tersimpan 0% dan cabang otomatis dinilai
+    // "Terkendali" padahal belum bisa dihitung.
+    if (!tidakVisit) {
+      const tuLaptop = parseInt(form.total_unit_laptop, 10) || 0;
+      const tuAksesoris = parseInt(form.total_unit_aksesoris, 10) || 0;
+      if (tuLaptop <= 0 || tuAksesoris <= 0) {
+        setError("Total Unit Laptop dan Total Unit Aksesoris wajib diisi (lebih dari 0) supaya ratio bisa dihitung. Kalau cabang tidak dikunjungi, pilih \"Tidak Visit\".");
+        return;
+      }
+    }
     setSaving(true);
     setError(null);
     try {
@@ -434,8 +451,15 @@ export default function StokServiceRatio({ profile }) {
         <div style={{ padding: 24 }}>
           {(() => {
             const rows = branches.map((b) => latestByBranchPeriod[`${b.id}|${viewPeriod}`]).filter(Boolean);
-            const auditedCount = rows.length;
-            const vonis = rows.map((r) => ({ tv: !!r.entry.data?.tidak_visit, v: vonisService(r.entry.data) }));
+            const vonis = rows.map((r) => ({ tv: !!r.entry.data?.tidak_visit, v: vonisService(r.entry.data), d: r.entry.data }));
+            // "Sudah diaudit" = cabang yang benar-benar DINILAI (bukan Tidak Visit, datanya lengkap).
+            // Dulu memakai rows.length, jadi cabang Tidak Visit ikut terhitung dan kartu menulis 16/16
+            // padahal rata-rata di sebelahnya cuma dari sebagian cabang.
+            const auditedCount = vonis.filter((x) => !x.tv && !x.v.tanpaData).length;
+            const tidakVisitCount = vonis.filter((x) => x.tv).length;
+            // Total Unit kosong/0 = ratio tersimpan 0% dan skornya otomatis terbaik, padahal belum bisa
+            // dihitung. Ratio 0% yang BENAR (ada total unit, tidak ada service) tidak ikut ditandai.
+            const cekInputCount = vonis.filter((x) => !x.tv && !x.v.legacy && !x.v.tanpaData && totalUnitKosong(x.d)).length;
             // Rata-rata dihitung PER KATEGORI. Merata-ratakan Laptop dan
             // Aksesoris jadi satu angka mencampur dua skala yang ambangnya
             // beda 4,55x-6,06x, dan angka campuran itu tidak bisa dinilai
@@ -449,7 +473,7 @@ export default function StokServiceRatio({ profile }) {
             const alertCount = vonis.filter((x) => !x.tv && x.v.status?.lbl === "Perlu Perhatian").length;
             return (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 14, marginBottom: 20 }}>
-                <SummaryCard label="Cabang sudah diaudit" value={`${auditedCount} / ${branches.length}`} />
+                <SummaryCard label="Cabang sudah diaudit" value={`${auditedCount} / ${branches.length}`} sub={[tidakVisitCount > 0 ? `${tidakVisitCount} Tidak Visit` : null, cekInputCount > 0 ? `${cekInputCount} total unit kosong (cek input)` : null].filter(Boolean).join(" \u00b7 ") || null} />
                 <SummaryCard label="Rata-rata Ratio Laptop" value={avgLaptop !== null ? formatRatioPct(avgLaptop) : "\u2014"} />
                 <SummaryCard label="Rata-rata Ratio Aksesoris" value={avgAksesoris !== null ? formatRatioPct(avgAksesoris) : "\u2014"} />
                 <SummaryCard label="Perlu Perhatian (alert)" value={alertCount} color={alertCount > 0 ? "var(--danger-text)" : "#1a9e6e"} />
@@ -506,6 +530,9 @@ export default function StokServiceRatio({ profile }) {
                           </div>
                         )}
                         <span style={{ display: "inline-block", marginTop: 6, padding: "3px 10px", borderRadius: 20, background: `${rStatus.color}22`, color: rStatus.color, fontSize: 11, fontWeight: 600 }}>{rStatus.lbl}</span>
+                        {!rVonis.legacy && totalUnitKosong(row.entry.data) && (
+                          <span title="Total Unit Laptop atau Aksesoris kosong/0, jadi ratio belum bisa dihitung. Buka audit ini dan lengkapi Total Unit." style={{ display: "inline-block", marginTop: 6, marginLeft: 6, padding: "3px 10px", borderRadius: 20, background: "#F4B74022", color: "#F4B740", fontSize: 11, fontWeight: 600 }}>Cek input: total unit</span>
+                        )}
                         {rVonis.legacy && <span style={{ display: "block", fontSize: 9.5, color: "var(--text-faint)", marginTop: 4 }}>Data lama (gabungan)</span>}
                         <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 6 }}>Terakhir: {shortDate(row.entry.data?.audit_date)}</div>
                       </>
@@ -908,11 +935,12 @@ function RatioSeriesChart({ judul, warna, titik, ambang }) {
   );
 }
 
-function SummaryCard({ label, value, color }) {
+function SummaryCard({ label, value, color, sub }) {
   return (
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 12, padding: "16px 18px" }}>
       <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 6 }}>{label}</div>
       <div style={{ fontSize: 24, fontWeight: 700, color: color || "var(--text-primary)" }}>{value}</div>
+      {sub && <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{sub}</div>}
     </div>
   );
 }
