@@ -1134,10 +1134,17 @@ export default function LaporanBulanan({ profile }) {
             .forEach((e) => {
               const baris = [...(Array.isArray(e.stock_opname_kat1) ? e.stock_opname_kat1 : []), ...(Array.isArray(e.stock_opname_kat2) ? e.stock_opname_kat2 : [])];
               baris.filter((r) => r && r.status === "Selisih").forEach((r) => {
-                const qtyKosong = r.qty === "" || r.qty == null;
-                const qty = qtyKosong ? 1 : toNum(r.qty);
-                const harga = toNum(r.harga);
-                items.push({ nama: r.nama || "\u2014", kategori: r.kategori || "", merek: r.merek || "", qty, qtyKosong, harga, nilai: qty * harga, keterangan: r.keterangan || "" });
+                // 1 baris Selisih bisa memuat banyak barang (r.barang); baris lama = 1 barang dari field baris itu sendiri
+                const adaBarang = Array.isArray(r.barang) && r.barang.length;
+                const daftar = adaBarang ? r.barang : [{ nama: "", kategori: r.kategori, merek: r.merek, qty: r.qty, harga: r.harga }];
+                daftar.forEach((bg, bi) => {
+                  const kosongSemua = !(String(bg.nama || "").trim() || String(bg.kategori || "").trim() || String(bg.merek || "").trim() || toNum(bg.harga) || !(bg.qty === "" || bg.qty == null));
+                  if (daftar.length > 1 && kosongSemua) return; // barang tambahan yang belum diisi dilewati
+                  const qtyKosong = bg.qty === "" || bg.qty == null;
+                  const qty = qtyKosong ? 1 : toNum(bg.qty);
+                  const harga = toNum(bg.harga);
+                  items.push({ nama: (bg.nama && String(bg.nama).trim()) || r.nama || "\u2014", kategori: bg.kategori || "", merek: bg.merek || "", qty, qtyKosong, harga, nilai: qty * harga, keterangan: bi === 0 ? (r.keterangan || "") : "" });
+                });
               });
             });
           return { branch: b, items, total: items.reduce((s2, it) => s2 + it.nilai, 0) };

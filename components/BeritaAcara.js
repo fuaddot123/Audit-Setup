@@ -41,31 +41,50 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function newStockRow() { return { nama: "", status: "Lengkap", keterangan: "" }; }
-// Nilai selisih 1 baris Stock Opname = Jumlah × Harga satuan (Jumlah kosong dianggap 1).
+// Satu baris Stock Opname berstatus "Selisih" bisa memuat BEBERAPA barang (row.barang = [{nama,
+// kategori, merek, qty, harga}]). Baris lama (tanpa row.barang) dibaca sebagai 1 barang dari
+// field kategori/merek/qty/harga di baris itu sendiri, jadi data lama tetap aman.
+function barangKosong() { return { nama: "", kategori: "", merek: "", qty: "", harga: "" }; }
+function daftarBarangSelisih(row) {
+  if (Array.isArray(row.barang) && row.barang.length) return row.barang;
+  return [{ nama: "", kategori: row.kategori || "", merek: row.merek || "", qty: row.qty ?? "", harga: row.harga ?? "" }];
+}
+function qtyBarang(b) { return b.qty === "" || b.qty == null ? 1 : Number(b.qty) || 0; }
+// Nilai 1 barang = Jumlah × Harga satuan (Jumlah kosong dianggap 1).
+function nilaiBarang(b) { return qtyBarang(b) * (Number(b.harga) || 0); }
+// Nilai selisih 1 baris Stock Opname = jumlah nilai semua barang di baris itu.
 // Dipakai di form (tampilan) DAN di slide "Daftar Selisih Barang" Laporan Bulanan.
 function nilaiSelisihRow(row) {
-  const qty = row.qty === "" || row.qty == null ? 1 : Number(row.qty) || 0;
-  const harga = Number(row.harga) || 0;
-  return qty * harga;
+  return daftarBarangSelisih(row).reduce((t, b) => t + nilaiBarang(b), 0);
 }
-// Apakah detail barang selisih (kategori / jumlah / harga) sudah diisi?
+// Apakah detail barang (nama / kategori / merek / jumlah / harga) sudah diisi?
+function adaDetailBarang(b) {
+  return !!(String(b.nama || "").trim() || String(b.kategori || "").trim() || String(b.merek || "").trim() || (Number(b.harga) || 0) || !(b.qty === "" || b.qty == null));
+}
 function adaDetailSelisih(row) {
-  return !!(String(row.kategori || "").trim() || (Number(row.harga) || 0) || !(row.qty === "" || row.qty == null));
+  return daftarBarangSelisih(row).some(adaDetailBarang);
 }
-// Format baku 1 baris Selisih (dipakai di cetak PDF & teks WhatsApp):
+// Format baku 1 barang selisih (dipakai di cetak PDF & teks WhatsApp):
 // "Nama barang - kategori - jumlah - harga - total harga" (bagian yang kosong dilewati).
-function teksSelisih(row) {
-  const bagian = [String(row.nama || "").trim() || "\u2014"];
-  const kategori = String(row.kategori || "").trim();
+function teksBarang(b, namaCadangan) {
+  const bagian = [String(b.nama || "").trim() || String(namaCadangan || "").trim() || "\u2014"];
+  const kategori = String(b.kategori || "").trim();
   if (kategori) bagian.push(kategori);
-  if (adaDetailSelisih(row)) bagian.push(String(row.qty === "" || row.qty == null ? 1 : Number(row.qty) || 0));
-  const harga = Number(row.harga) || 0;
+  if (adaDetailBarang(b)) bagian.push(String(qtyBarang(b)));
+  const harga = Number(b.harga) || 0;
   if (harga) {
     bagian.push(`Rp${harga.toLocaleString("id-ID")}`);
-    bagian.push(`Rp${nilaiSelisihRow(row).toLocaleString("id-ID")}`);
+    bagian.push(`Rp${nilaiBarang(b).toLocaleString("id-ID")}`);
   }
   return bagian.join(" - ");
 }
+// Daftar teks per barang untuk 1 baris Selisih (barang kosong di baris multi-barang dilewati).
+function teksSelisihList(row) {
+  const daftar = daftarBarangSelisih(row);
+  const pakai = daftar.length > 1 ? daftar.filter(adaDetailBarang) : daftar;
+  return (pakai.length ? pakai : daftar).map((b) => teksBarang(b, row.nama));
+}
+function teksSelisih(row) { return teksSelisihList(row).join("; "); }
 function shortDate(d) {
   if (!d) return "\u2014";
   return new Date(d + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
@@ -333,6 +352,16 @@ export default function BeritaAcara({ profile }) {
     setSaved(false);
   }
   function removeRow(setter, i) { setter((prev) => prev.filter((_, idx) => idx !== i)); setSaved(false); }
+  // Banyak barang dalam 1 baris Selisih (row.barang)
+  function ubahBarang(setter, i, fn) {
+    setter((prev) => prev.map((r, idx) => (idx === i ? { ...r, barang: fn(daftarBarangSelisih(r).map((b) => ({ ...b }))) } : r)));
+    setSaved(false);
+  }
+  function updateBarang(setter, i, j, field, val) { ubahBarang(setter, i, (list) => list.map((b, k) => (k === j ? { ...b, [field]: val } : b))); }
+  function addBarang(setter, i) { ubahBarang(setter, i, (list) => [...list, barangKosong()]); }
+  function removeBarang(setter, i, j) {
+    ubahBarang(setter, i, (list) => { const sisa = list.filter((_, k) => k !== j); return sisa.length ? sisa : [barangKosong()]; });
+  }
 
   // ── Inventaris helpers ──
   // Menandai SEMUA item sekaligus. Lewat satu setState, bukan 36 panggilan
@@ -855,7 +884,12 @@ export default function BeritaAcara({ profile }) {
 
       baris.push("📝 Berita Acara");
       baris.push(`- Stock Opname: ${stockLengkap} Lengkap, ${stockSelisih.length} Selisih`);
-      stockSelisih.forEach((r) => baris.push(`  \u2022 ${teksSelisih(r)}`));
+      stockSelisih.forEach((r) => {
+        const daftarTeks = teksSelisihList(r);
+        if (daftarTeks.length === 1) { baris.push(`  \u2022 ${daftarTeks[0]}`); return; }
+        baris.push(`  \u2022 ${String(r.nama || "").trim() || "\u2014"}`);
+        daftarTeks.forEach((t) => baris.push(`      - ${t}`));
+      });
       const nilaiSelisihTotal = stockSelisih.reduce((s2, r) => s2 + nilaiSelisihRow(r), 0);
       if (nilaiSelisihTotal > 0) baris.push(`  Total nilai selisih: Rp${nilaiSelisihTotal.toLocaleString("id-ID")}`);
       baris.push(`- Inventaris: ${invHitung.berfungsi} Berfungsi, ${invHitung.rusak} Rusak${invRusak.length ? ` (${invRusak.join(", ")})` : ""}`);
@@ -1044,7 +1078,7 @@ export default function BeritaAcara({ profile }) {
         return `<tr><td>${i === 0 ? `<b>${esc(judul.toUpperCase())}</b>` : ""}</td>`
           + `<td>${esc(r.nama).toUpperCase() || "\u2014"}</td>`
           + `<td class="${bad ? "k-bad" : "k-ok"}">${bad ? "SELISIH" : "LENGKAP"}</td>`
-          + `<td>${[bad && adaDetailSelisih(r) ? esc(teksSelisih(r)) : "", esc(r.keterangan)].filter(Boolean).join(" \u2014 ") || "-"}</td></tr>`;
+          + `<td>${[bad && adaDetailSelisih(r) ? teksSelisihList(r).map(esc).join("<br>") : "", esc(r.keterangan)].filter(Boolean).join(" \u2014 ") || "-"}</td></tr>`;
       }).join("");
       const stokBarisBase = barisStok("Kategori 1", stockKat1) + barisStok("Kategori 2", stockKat2);
       const stokNilaiTotal = [...stockKat1, ...stockKat2].filter((r) => r.status === "Selisih").reduce((s2, r) => s2 + nilaiSelisihRow(r), 0);
@@ -1715,13 +1749,19 @@ export default function BeritaAcara({ profile }) {
               <StockSubSection title="Kategori 1" rows={stockKat1} canEdit={canEdit} filter={stockFilter}
                 onAdd={() => addRow(setStockKat1)}
                 onUpdate={(i, f, v) => updateRow(setStockKat1, i, f, v)}
-                onRemove={(i) => removeRow(setStockKat1, i)} />
+                onRemove={(i) => removeRow(setStockKat1, i)}
+                onUpdateBarang={(i, j, f, v) => updateBarang(setStockKat1, i, j, f, v)}
+                onAddBarang={(i) => addBarang(setStockKat1, i)}
+                onRemoveBarang={(i, j) => removeBarang(setStockKat1, i, j)} />
 
               <div style={{ marginTop: 18 }}>
                 <StockSubSection title="Kategori 2" rows={stockKat2} canEdit={canEdit} filter={stockFilter}
                   onAdd={() => addRow(setStockKat2)}
                   onUpdate={(i, f, v) => updateRow(setStockKat2, i, f, v)}
-                  onRemove={(i) => removeRow(setStockKat2, i)} />
+                  onRemove={(i) => removeRow(setStockKat2, i)}
+                onUpdateBarang={(i, j, f, v) => updateBarang(setStockKat2, i, j, f, v)}
+                onAddBarang={(i) => addBarang(setStockKat2, i)}
+                onRemoveBarang={(i, j) => removeBarang(setStockKat2, i, j)} />
               </div>
             </div>
 
@@ -1802,7 +1842,7 @@ export default function BeritaAcara({ profile }) {
   );
 }
 
-function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove, filter }) {
+function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove, onUpdateBarang, onAddBarang, onRemoveBarang, filter }) {
   const indexed = rows.map((row, i) => ({ row, i }));
   const shown = filter === "selisih" ? indexed.filter(({ row }) => row.status === "Selisih") : indexed;
   return (
@@ -1831,15 +1871,35 @@ function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove, filt
                 />
                 <input className="input" placeholder="Keterangan" value={row.keterangan} disabled={!canEdit} onChange={(e) => onUpdate(i, "keterangan", e.target.value)} style={{ fontSize: 12.5 }} />
                 {canEdit && <span onClick={() => onRemove(i)} style={{ cursor: "pointer", color: "var(--danger-text)", fontSize: 18, textAlign: "center" }}>&times;</span>}
-                {isSelisih && (
-                  <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1.2fr 1fr 0.55fr 1fr 1fr", gap: 8, alignItems: "center" }}>
-                    <input className="input" placeholder="Kategori (mis. Storage)" value={row.kategori || ""} disabled={!canEdit} onChange={(e) => onUpdate(i, "kategori", e.target.value)} style={{ fontSize: 12 }} />
-                    <input className="input" placeholder="Merek" value={row.merek || ""} disabled={!canEdit} onChange={(e) => onUpdate(i, "merek", e.target.value)} style={{ fontSize: 12 }} />
-                    <input className="input" type="number" min="0" placeholder="Jml (1)" value={row.qty ?? ""} disabled={!canEdit} onChange={(e) => onUpdate(i, "qty", e.target.value)} style={{ fontSize: 12 }} />
-                    <input className="input" type="number" min="0" placeholder="Harga satuan (Rp)" value={row.harga ?? ""} disabled={!canEdit} onChange={(e) => onUpdate(i, "harga", e.target.value)} style={{ fontSize: 12 }} />
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "#a32020" }}>Nilai: Rp{nilaiSelisihRow(row).toLocaleString("id-ID")}</div>
-                  </div>
-                )}
+                {isSelisih && (() => {
+                  const daftar = daftarBarangSelisih(row);
+                  const banyak = daftar.length > 1;
+                  return (
+                    <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 8 }}>
+                      {daftar.map((b, j) => (
+                        <div key={j} style={{ display: "flex", flexDirection: "column", gap: 6, ...(banyak ? { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 8 } : {}) }}>
+                          {(banyak || b.nama) && (
+                            <div style={{ display: "grid", gridTemplateColumns: canEdit && banyak ? "1fr auto" : "1fr", gap: 8, alignItems: "center" }}>
+                              <input className="input" placeholder={`Nama barang ${j + 1}`} value={b.nama || ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "nama", e.target.value)} style={{ fontSize: 12 }} />
+                              {canEdit && banyak && <span onClick={() => onRemoveBarang(i, j)} style={{ cursor: "pointer", color: "var(--danger-text)", fontSize: 16, textAlign: "center" }} title="Hapus barang ini">&times;</span>}
+                            </div>
+                          )}
+                          <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 0.55fr 1fr 1fr", gap: 8, alignItems: "center" }}>
+                            <input className="input" placeholder="Kategori (mis. Storage)" value={b.kategori || ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "kategori", e.target.value)} style={{ fontSize: 12 }} />
+                            <input className="input" placeholder="Merek" value={b.merek || ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "merek", e.target.value)} style={{ fontSize: 12 }} />
+                            <input className="input" type="number" min="0" placeholder="Jml (1)" value={b.qty ?? ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "qty", e.target.value)} style={{ fontSize: 12 }} />
+                            <input className="input" type="number" min="0" placeholder="Harga satuan (Rp)" value={b.harga ?? ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "harga", e.target.value)} style={{ fontSize: 12 }} />
+                            <div style={{ fontSize: 12, fontWeight: 700, color: "#a32020" }}>Nilai: Rp{nilaiBarang(b).toLocaleString("id-ID")}</div>
+                          </div>
+                        </div>
+                      ))}
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        {canEdit ? <button type="button" className="btn-ghost" onClick={() => onAddBarang(i)} style={{ fontSize: 12 }}>+ Tambah barang</button> : <span />}
+                        {banyak && <div style={{ fontSize: 12, fontWeight: 700, color: "#a32020" }}>Total: Rp{nilaiSelisihRow(row).toLocaleString("id-ID")}</div>}
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}
