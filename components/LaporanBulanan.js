@@ -204,7 +204,7 @@ export default function LaporanBulanan({ profile }) {
       const [
         brRes, sopCurRes, sopPrevRes, svcCurRes, svcPrevRes,
         kesCurRes, kesPrevRes, keuCurRes, keuPrevRes, invCurRes, invPrevRes, kpiRes, profRes, keuSettingsRes,
-        kesTrendRes, svcTrendRes, keuTrendRes, sopTrendRes, invTrendRes,
+        kesTrendRes, svcTrendRes, keuTrendRes, sopTrendRes, invTrendRes, beCurRes,
       ] = await Promise.all([
         supabase.from("branches").select("*").order("name"),
         isoEq(supabase.from("audit_generic").select("*").eq("module", "sop").eq("period", period), period),
@@ -225,6 +225,7 @@ export default function LaporanBulanan({ profile }) {
         isoOr(supabase.from("audit_keuangan").select("*").in("period", trendPeriods)),
         isoOr(supabase.from("audit_generic").select("*").eq("module", "sop").in("period", trendPeriods)),
         isoOr(supabase.from("audit_generic").select("*").eq("module", "inventaris").in("period", trendPeriods)),
+        isoEq(supabase.from("berita_acara").select("*").eq("period", period), period),
       ]);
       const keuSettings = keuSettingsRes.data || { terkendali: 70, efisien: 95, monitoring: 105 };
 
@@ -1115,6 +1116,94 @@ export default function LaporanBulanan({ profile }) {
           s.addText(it.d, { x: cardX2 + 1.05, y: yy + 0.6, w: 4.3, h: 0.3, fontSize: 10, color: "777777", margin: 0 });
           if (i < legendItems.length - 1) s.addShape(pptx.ShapeType.rect, { x: cardX2 + 0.25, y: yy + 0.92, w: cardW2 - 0.5, h: 0.012, fill: { color: "EEEAF5" } });
         });
+      }
+
+      // ── 4b. Daftar Selisih Barang (dari Stock Opname di Berita Acara) ──
+      // Slide ringkasan per cabang + slide detail per cabang (Nama Barang, Kategori, Merek,
+      // Selisih, Harga, Nilai). Cuma muncul kalau bulan ini ada baris berstatus "Selisih".
+      // Nilai = Jumlah × Harga satuan (Jumlah kosong dianggap 1). DENDA SENGAJA tidak dicatat
+      // di sini (keputusan user). Semua audit non-"Tidak Visit" di bulan itu digabung per cabang.
+      {
+        const toNum = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
+        const rpS = (n) => `Rp${Math.round(n).toLocaleString("id-ID")}`;
+        const selisihList = branches.map((b) => {
+          const items = [];
+          (beCurRes.data || [])
+            .filter((e) => e.branch_id === b.id && !e.tidak_visit)
+            .sort((x, y) => (x.audit_date || "").localeCompare(y.audit_date || ""))
+            .forEach((e) => {
+              const baris = [...(Array.isArray(e.stock_opname_kat1) ? e.stock_opname_kat1 : []), ...(Array.isArray(e.stock_opname_kat2) ? e.stock_opname_kat2 : [])];
+              baris.filter((r) => r && r.status === "Selisih").forEach((r) => {
+                const qty = r.qty === "" || r.qty == null ? 1 : toNum(r.qty);
+                const harga = toNum(r.harga);
+                items.push({ nama: r.nama || "\u2014", kategori: r.kategori || "", merek: r.merek || "", qty, harga, nilai: qty * harga, keterangan: r.keterangan || "" });
+              });
+            });
+          return { branch: b, items, total: items.reduce((s2, it) => s2 + it.nilai, 0) };
+        }).filter((x) => x.items.length > 0);
+
+        if (selisihList.length) {
+          const th = (t, align) => ({ text: t, options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 12.5, align: align || "center" } });
+          const tot = (t, extra) => ({ text: t, options: Object.assign({ fontSize: 12.5, bold: true, fill: { color: PURPLE }, color: WHITE }, extra || {}) });
+          const grandTotal = selisihList.reduce((s2, x) => s2 + x.total, 0);
+          const grandItems = selisihList.reduce((s2, x) => s2 + x.items.length, 0);
+          const tblBorder = { type: "solid", color: "E5E5E5", pt: 0.5 };
+
+          function selisihSlideBase(subtitle) {
+            const s = newSlide();
+            addGradientHeader(s, 0.85);
+            s.addText("DAFTAR SELISIH BARANG", { x: 0.35, y: 0.08, w: 8.5, h: 0.42, fontSize: 20, bold: true, color: WHITE, margin: 0 });
+            s.addText(subtitle, { x: 0.35, y: 0.5, w: 8.5, h: 0.3, fontSize: 13, bold: true, color: GOLD, margin: 0 });
+            addLogo(s, 11.3, 0.18);
+            return s;
+          }
+
+          // Slide ringkasan per cabang + total keseluruhan
+          {
+            const s = selisihSlideBase(`${periodeLabel(period)} \u2014 Ringkasan per Cabang`);
+            const body = selisihList.map((x, i) => [
+              { text: String(i + 1), options: { fontSize: 12.5, align: "center", bold: true, fill: { color: PURPLE }, color: WHITE } },
+              { text: x.branch.name, options: { fontSize: 12.5, bold: true } },
+              { text: String(x.items.length), options: { fontSize: 12.5, align: "center" } },
+              { text: rpS(x.total), options: { fontSize: 12.5, align: "center", bold: true, color: RED } },
+            ]);
+            body.push([
+              tot("TOTAL SELISIH BARANG", { colspan: 2 }),
+              tot(String(grandItems), { align: "center" }),
+              tot(rpS(grandTotal), { align: "center" }),
+            ]);
+            s.addTable([[th("No"), th("Cabang", "left"), th("Jumlah Barang"), th("Nilai Selisih")]].concat(body), { x: 0.35, y: 1.15, w: 12.6, colW: [0.7, 5.5, 3.0, 3.4], border: tblBorder, autoPage: false, margin: [4, 6, 4, 6] });
+          }
+
+          // Slide detail per cabang (dipecah kalau barisnya banyak)
+          const CHUNK = 9;
+          selisihList.forEach((x) => {
+            const pages = Math.ceil(x.items.length / CHUNK);
+            for (let pg = 0; pg < pages; pg++) {
+              const chunk = x.items.slice(pg * CHUNK, (pg + 1) * CHUNK);
+              const s = selisihSlideBase(`${periodeLabel(period)} \u2014 ${x.branch.name}` + (pages > 1 ? ` (${pg + 1}/${pages})` : ""));
+              const body = chunk.map((it, i) => [
+                { text: String(pg * CHUNK + i + 1), options: { fontSize: 12, align: "center", bold: true, fill: { color: PURPLE }, color: WHITE } },
+                { text: it.nama, options: { fontSize: 12, bold: true } },
+                { text: it.kategori || "\u2014", options: { fontSize: 12 } },
+                { text: it.merek || "\u2014", options: { fontSize: 12 } },
+                { text: String(it.qty), options: { fontSize: 12, align: "center" } },
+                { text: it.harga ? rpS(it.harga) : "\u2014", options: { fontSize: 12, align: "center" } },
+                { text: it.harga ? rpS(it.nilai) : "\u2014", options: { fontSize: 12, align: "center", bold: true, color: RED } },
+                { text: it.keterangan || "", options: { fontSize: 11 } },
+              ]);
+              if (pg === pages - 1) {
+                body.push([
+                  tot(`TOTAL ${x.branch.name.toUpperCase()}`, { colspan: 6 }),
+                  tot(rpS(x.total), { align: "center" }),
+                  tot(""),
+                ]);
+              }
+              s.addTable([[th("No"), th("Nama Barang", "left"), th("Kategori", "left"), th("Merek", "left"), th("Selisih"), th("Harga"), th("Nilai Selisih"), th("Keterangan", "left")]].concat(body),
+                { x: 0.35, y: 1.15, w: 12.6, colW: [0.55, 3.4, 1.7, 1.5, 0.9, 1.45, 1.6, 1.5], border: tblBorder, autoPage: false, margin: [4, 6, 4, 6] });
+            }
+          });
+        }
       }
 
       // ── 5. Service Ratio (dipecah jadi 3 slide) ──

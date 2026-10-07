@@ -41,6 +41,13 @@ function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 function newStockRow() { return { nama: "", status: "Lengkap", keterangan: "" }; }
+// Nilai selisih 1 baris Stock Opname = Jumlah × Harga satuan (Jumlah kosong dianggap 1).
+// Dipakai di form (tampilan) DAN di slide "Daftar Selisih Barang" Laporan Bulanan.
+function nilaiSelisihRow(row) {
+  const qty = row.qty === "" || row.qty == null ? 1 : Number(row.qty) || 0;
+  const harga = Number(row.harga) || 0;
+  return qty * harga;
+}
 function shortDate(d) {
   if (!d) return "\u2014";
   return new Date(d + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
@@ -1797,6 +1804,15 @@ function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove, filt
                 />
                 <input className="input" placeholder="Keterangan" value={row.keterangan} disabled={!canEdit} onChange={(e) => onUpdate(i, "keterangan", e.target.value)} style={{ fontSize: 12.5 }} />
                 {canEdit && <span onClick={() => onRemove(i)} style={{ cursor: "pointer", color: "var(--danger-text)", fontSize: 18, textAlign: "center" }}>&times;</span>}
+                {isSelisih && (
+                  <div style={{ gridColumn: "1 / -1", display: "grid", gridTemplateColumns: "1.2fr 1fr 0.55fr 1fr 1fr", gap: 8, alignItems: "center" }}>
+                    <input className="input" placeholder="Kategori (mis. Storage)" value={row.kategori || ""} disabled={!canEdit} onChange={(e) => onUpdate(i, "kategori", e.target.value)} style={{ fontSize: 12 }} />
+                    <input className="input" placeholder="Merek" value={row.merek || ""} disabled={!canEdit} onChange={(e) => onUpdate(i, "merek", e.target.value)} style={{ fontSize: 12 }} />
+                    <input className="input" type="number" min="0" placeholder="Jml (1)" value={row.qty ?? ""} disabled={!canEdit} onChange={(e) => onUpdate(i, "qty", e.target.value)} style={{ fontSize: 12 }} />
+                    <input className="input" type="number" min="0" placeholder="Harga satuan (Rp)" value={row.harga ?? ""} disabled={!canEdit} onChange={(e) => onUpdate(i, "harga", e.target.value)} style={{ fontSize: 12 }} />
+                    <div style={{ fontSize: 12, fontWeight: 700, color: "#a32020" }}>Nilai: Rp{nilaiSelisihRow(row).toLocaleString("id-ID")}</div>
+                  </div>
+                )}
               </div>
             );
           })}
