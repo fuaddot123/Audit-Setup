@@ -1166,12 +1166,12 @@ export default function LaporanBulanan({ profile }) {
               { text: String(i + 1), options: { fontSize: 12.5, align: "center", bold: true, fill: { color: PURPLE }, color: WHITE } },
               { text: x.branch.name, options: { fontSize: 12.5, bold: true } },
               { text: String(x.items.length), options: { fontSize: 12.5, align: "center" } },
-              { text: rpS(x.total), options: { fontSize: 12.5, align: "center", bold: true, color: RED } },
+              { text: x.total ? rpS(x.total) : "\u2014", options: { fontSize: 12.5, align: "center", bold: true, color: x.total ? RED : "808080" } },
             ]);
             body.push([
               tot("TOTAL SELISIH BARANG", { colspan: 2 }),
               tot(String(grandItems), { align: "center" }),
-              tot(rpS(grandTotal), { align: "center" }),
+              tot(grandTotal ? rpS(grandTotal) : "\u2014", { align: "center" }),
             ]);
             s.addTable([[th("No"), th("Cabang", "left"), th("Jumlah Barang"), th("Nilai Selisih")]].concat(body), { x: 0.35, y: 1.15, w: 12.6, colW: [0.7, 5.5, 3.0, 3.4], border: tblBorder, autoPage: false, margin: [4, 6, 4, 6] });
           }
