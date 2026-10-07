@@ -1134,9 +1134,10 @@ export default function LaporanBulanan({ profile }) {
             .forEach((e) => {
               const baris = [...(Array.isArray(e.stock_opname_kat1) ? e.stock_opname_kat1 : []), ...(Array.isArray(e.stock_opname_kat2) ? e.stock_opname_kat2 : [])];
               baris.filter((r) => r && r.status === "Selisih").forEach((r) => {
-                const qty = r.qty === "" || r.qty == null ? 1 : toNum(r.qty);
+                const qtyKosong = r.qty === "" || r.qty == null;
+                const qty = qtyKosong ? 1 : toNum(r.qty);
                 const harga = toNum(r.harga);
-                items.push({ nama: r.nama || "\u2014", kategori: r.kategori || "", merek: r.merek || "", qty, harga, nilai: qty * harga, keterangan: r.keterangan || "" });
+                items.push({ nama: r.nama || "\u2014", kategori: r.kategori || "", merek: r.merek || "", qty, qtyKosong, harga, nilai: qty * harga, keterangan: r.keterangan || "" });
               });
             });
           return { branch: b, items, total: items.reduce((s2, it) => s2 + it.nilai, 0) };
@@ -1200,7 +1201,7 @@ export default function LaporanBulanan({ profile }) {
                   { text: it.nama, options: { fontSize: 12, bold: true } },
                   { text: it.kategori || "\u2014", options: { fontSize: 11.5 } },
                   { text: it.merek || "\u2014", options: { fontSize: 11.5 } },
-                  { text: String(it.qty), options: { fontSize: 12, align: "center" } },
+                  { text: it.qtyKosong ? "\u2014" : String(it.qty), options: { fontSize: 12, align: "center" } },
                   { text: it.harga ? rpS(it.harga) : "\u2014", options: { fontSize: 11.5, align: "center" } },
                   { text: it.harga ? rpS(it.nilai) : "\u2014", options: { fontSize: 11.5, align: "center", bold: true, color: RED } },
                   { text: it.keterangan || "", options: { fontSize: 10.5 } },
