@@ -1175,24 +1175,38 @@ export default function LaporanBulanan({ profile }) {
             s.addTable([[th("No"), th("Cabang", "left"), th("Jumlah Barang"), th("Nilai Selisih")]].concat(body), { x: 0.35, y: 1.15, w: 12.6, colW: [0.7, 5.5, 3.0, 3.4], border: tblBorder, autoPage: false, margin: [4, 6, 4, 6] });
           }
 
-          // Slide detail per cabang (dipecah kalau barisnya banyak)
-          const CHUNK = 9;
+          // Slide detail per cabang. Halaman dibagi berdasarkan PERKIRAAN TINGGI baris (dari
+          // panjang teks), bukan jumlah baris tetap — supaya tabel nggak tumpah keluar slide
+          // walau Keterangan-nya panjang. Angka cpl sengaja dikecilkan biar perkiraannya aman.
+          const estLines = (txt, cpl) => Math.max(1, Math.ceil(String(txt || "").length / cpl));
+          const rowH = (it) => Math.max(estLines(it.nama, 20), estLines(it.kategori, 11), estLines(it.merek, 9), estLines(it.keterangan, 62)) * 0.2 + 0.14;
+          const MAX_H = 5.0; // tinggi maksimal baris data per slide (di luar header & baris total)
           selisihList.forEach((x) => {
-            const pages = Math.ceil(x.items.length / CHUNK);
-            for (let pg = 0; pg < pages; pg++) {
-              const chunk = x.items.slice(pg * CHUNK, (pg + 1) * CHUNK);
-              const s = selisihSlideBase(`${periodeLabel(period)} \u2014 ${x.branch.name}` + (pages > 1 ? ` (${pg + 1}/${pages})` : ""));
-              const body = chunk.map((it, i) => [
-                { text: String(pg * CHUNK + i + 1), options: { fontSize: 12, align: "center", bold: true, fill: { color: PURPLE }, color: WHITE } },
-                { text: it.nama, options: { fontSize: 12, bold: true } },
-                { text: it.kategori || "\u2014", options: { fontSize: 12 } },
-                { text: it.merek || "\u2014", options: { fontSize: 12 } },
-                { text: String(it.qty), options: { fontSize: 12, align: "center" } },
-                { text: it.harga ? rpS(it.harga) : "\u2014", options: { fontSize: 12, align: "center" } },
-                { text: it.harga ? rpS(it.nilai) : "\u2014", options: { fontSize: 12, align: "center", bold: true, color: RED } },
-                { text: it.keterangan || "", options: { fontSize: 11 } },
-              ]);
-              if (pg === pages - 1) {
+            const halaman = [];
+            let cur = [], h = 0;
+            x.items.forEach((it) => {
+              const rh = rowH(it);
+              if (cur.length && h + rh > MAX_H) { halaman.push(cur); cur = []; h = 0; }
+              cur.push(it); h += rh;
+            });
+            if (cur.length) halaman.push(cur);
+            let nomor = 0;
+            halaman.forEach((chunk, pg) => {
+              const s = selisihSlideBase(`${periodeLabel(period)} \u2014 ${x.branch.name}` + (halaman.length > 1 ? ` (${pg + 1}/${halaman.length})` : ""));
+              const body = chunk.map((it) => {
+                nomor += 1;
+                return [
+                  { text: String(nomor), options: { fontSize: 12, align: "center", bold: true, fill: { color: PURPLE }, color: WHITE } },
+                  { text: it.nama, options: { fontSize: 12, bold: true } },
+                  { text: it.kategori || "\u2014", options: { fontSize: 11.5 } },
+                  { text: it.merek || "\u2014", options: { fontSize: 11.5 } },
+                  { text: String(it.qty), options: { fontSize: 12, align: "center" } },
+                  { text: it.harga ? rpS(it.harga) : "\u2014", options: { fontSize: 11.5, align: "center" } },
+                  { text: it.harga ? rpS(it.nilai) : "\u2014", options: { fontSize: 11.5, align: "center", bold: true, color: RED } },
+                  { text: it.keterangan || "", options: { fontSize: 10.5 } },
+                ];
+              });
+              if (pg === halaman.length - 1) {
                 body.push([
                   tot(`TOTAL ${x.branch.name.toUpperCase()}`, { colspan: 6 }),
                   tot(rpS(x.total), { align: "center" }),
@@ -1200,8 +1214,8 @@ export default function LaporanBulanan({ profile }) {
                 ]);
               }
               s.addTable([[th("No"), th("Nama Barang", "left"), th("Kategori", "left"), th("Merek", "left"), th("Selisih"), th("Harga"), th("Nilai Selisih"), th("Keterangan", "left")]].concat(body),
-                { x: 0.35, y: 1.15, w: 12.6, colW: [0.55, 3.4, 1.7, 1.5, 0.9, 1.45, 1.6, 1.5], border: tblBorder, autoPage: false, margin: [4, 6, 4, 6] });
-            }
+                { x: 0.35, y: 1.15, w: 12.6, colW: [0.5, 2.2, 1.3, 1.1, 0.8, 1.3, 1.4, 4.0], border: tblBorder, autoPage: false, margin: [3, 5, 3, 5] });
+            });
           });
         }
       }

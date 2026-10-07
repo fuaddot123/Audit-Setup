@@ -48,6 +48,24 @@ function nilaiSelisihRow(row) {
   const harga = Number(row.harga) || 0;
   return qty * harga;
 }
+// Apakah detail barang selisih (kategori / jumlah / harga) sudah diisi?
+function adaDetailSelisih(row) {
+  return !!(String(row.kategori || "").trim() || (Number(row.harga) || 0) || !(row.qty === "" || row.qty == null));
+}
+// Format baku 1 baris Selisih (dipakai di cetak PDF & teks WhatsApp):
+// "Nama barang - kategori - jumlah - harga - total harga" (bagian yang kosong dilewati).
+function teksSelisih(row) {
+  const bagian = [String(row.nama || "").trim() || "\u2014"];
+  const kategori = String(row.kategori || "").trim();
+  if (kategori) bagian.push(kategori);
+  if (adaDetailSelisih(row)) bagian.push(String(row.qty === "" || row.qty == null ? 1 : Number(row.qty) || 0));
+  const harga = Number(row.harga) || 0;
+  if (harga) {
+    bagian.push(`Rp${harga.toLocaleString("id-ID")}`);
+    bagian.push(`Rp${nilaiSelisihRow(row).toLocaleString("id-ID")}`);
+  }
+  return bagian.join(" - ");
+}
 function shortDate(d) {
   if (!d) return "\u2014";
   return new Date(d + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
@@ -836,7 +854,10 @@ export default function BeritaAcara({ profile }) {
         .sort((a, b) => b.umur - a.umur);
 
       baris.push("📝 Berita Acara");
-      baris.push(`- Stock Opname: ${stockLengkap} Lengkap, ${stockSelisih.length} Selisih${stockSelisih.length ? ` (${stockSelisih.map((r) => r.nama).join(", ")})` : ""}`);
+      baris.push(`- Stock Opname: ${stockLengkap} Lengkap, ${stockSelisih.length} Selisih`);
+      stockSelisih.forEach((r) => baris.push(`  \u2022 ${teksSelisih(r)}`));
+      const nilaiSelisihTotal = stockSelisih.reduce((s2, r) => s2 + nilaiSelisihRow(r), 0);
+      if (nilaiSelisihTotal > 0) baris.push(`  Total nilai selisih: Rp${nilaiSelisihTotal.toLocaleString("id-ID")}`);
       baris.push(`- Inventaris: ${invHitung.berfungsi} Berfungsi, ${invHitung.rusak} Rusak${invRusak.length ? ` (${invRusak.join(", ")})` : ""}`);
       baris.push(`- Monitoring Display: ${unitDipajang.length} unit dipajang, ${unitLewat} lewat batas, ${unitMendekati} mendekati batas`);
       unitTua.forEach((r) => {
@@ -1023,10 +1044,16 @@ export default function BeritaAcara({ profile }) {
         return `<tr><td>${i === 0 ? `<b>${esc(judul.toUpperCase())}</b>` : ""}</td>`
           + `<td>${esc(r.nama).toUpperCase() || "\u2014"}</td>`
           + `<td class="${bad ? "k-bad" : "k-ok"}">${bad ? "SELISIH" : "LENGKAP"}</td>`
-          + `<td>${esc(r.keterangan) || "-"}</td></tr>`;
+          + `<td>${[bad && adaDetailSelisih(r) ? esc(teksSelisih(r)) : "", esc(r.keterangan)].filter(Boolean).join(" \u2014 ") || "-"}</td></tr>`;
       }).join("");
-      const stokBarisHtml = (barisStok("Kategori 1", stockKat1) + barisStok("Kategori 2", stockKat2))
-        || `<tr><td colspan="4" style="text-align:center;color:#999;padding:9px">Tidak ada baris diisi</td></tr>`;
+      const stokBarisBase = barisStok("Kategori 1", stockKat1) + barisStok("Kategori 2", stockKat2);
+      const stokNilaiTotal = [...stockKat1, ...stockKat2].filter((r) => r.status === "Selisih").reduce((s2, r) => s2 + nilaiSelisihRow(r), 0);
+      const stokTotalRow = stokNilaiTotal > 0
+        ? `<tr><td colspan="4" style="text-align:right;font-weight:800;color:#a32020">TOTAL NILAI SELISIH: Rp${stokNilaiTotal.toLocaleString("id-ID")}</td></tr>`
+        : "";
+      const stokBarisHtml = stokBarisBase
+        ? stokBarisBase + stokTotalRow
+        : `<tr><td colspan="4" style="text-align:center;color:#999;padding:9px">Tidak ada baris diisi</td></tr>`;
 
       // Kelas warnanya WAJIB k-ok/k-bad: gaya cetak format baru hanya
       // mendefinisikan itu. Dengan status-* kolom umur tercetak tanpa
