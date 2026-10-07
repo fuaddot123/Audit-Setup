@@ -63,21 +63,26 @@ function keuanganOverLimit(entry) {
   return lim > 0 && sm > lim;
 }
 
-// Skor Service Ratio — dulu (SALAH) pakai `ratio*100` langsung, padahal ambang batasnya
-// (SERVICE_THRESHOLDS) super kecil (0.22%/0.33%), bukan skala 0-100%. Angka ratio KECIL itu
-// BAGUS (dikit yang perlu diservis), jadi dipetain dari tingkatan status asli, bukan dibalik
-// jadi persentase buatan sendiri.
-// Threshold Laptop & Aksesoris SEKARANG BEDA (Laptop 1%/2%, Aksesoris 0,22%/0,33% — Laptop
-// barang lebih kompleks jadi wajar rate servisnya lebih tinggi), jadi butuh 2 fungsi tier.
+// Skor Service Ratio — BERJENJANG (bukan lagi 3 tier 100/70/40 yang bikin hampir semua cabang
+// "Terkendali" nempel di 100). Ratio KECIL itu BAGUS (dikit yang perlu diservis), jadi skor turun
+// mulus mengikuti ratio, memakai batas dari stokConfig (bukan angka yang ditulis ulang di sini):
+//   0 .. batas Terkendali          : 100 -> 90
+//   batas Terkendali .. Monitoring : 90  -> 70
+//   di atas batas Monitoring       : 70  -> 40 (turun habis di 2x batas Monitoring, lantai 40)
+// Skala 100/90/70/40 ini ASUMSI (bukan definisi resmi modul) — perlu disetujui pimpinan.
+// Laptop & Aksesoris punya batas BEDA (Laptop barang lebih kompleks), jadi dihitung sendiri-sendiri.
+function skorBerjenjang(ratio, terkendali, monitoring) {
+  const r = Number(ratio);
+  if (!Number.isFinite(r) || r < 0) return null;
+  if (r <= terkendali) return terkendali > 0 ? 100 - 10 * (r / terkendali) : 100;
+  if (r <= monitoring) return 90 - 20 * ((r - terkendali) / (monitoring - terkendali));
+  return Math.max(40, 70 - 30 * ((r - monitoring) / monitoring));
+}
 function tierScoreOfAksesoris(ratio) {
-  if (ratio <= SERVICE_THRESHOLDS.terkendali) return 100;
-  if (ratio <= SERVICE_THRESHOLDS.monitoring) return 70;
-  return 40;
+  return skorBerjenjang(ratio, SERVICE_THRESHOLDS.terkendali, SERVICE_THRESHOLDS.monitoring);
 }
 function tierScoreOfLaptop(ratio) {
-  if (ratio <= LAPTOP_THRESHOLDS.terkendali) return 100;
-  if (ratio <= LAPTOP_THRESHOLDS.monitoring) return 70;
-  return 40;
+  return skorBerjenjang(ratio, LAPTOP_THRESHOLDS.terkendali, LAPTOP_THRESHOLDS.monitoring);
 }
 // Data BARU (udah dipisah Laptop/Aksesoris): klasifikasi skor MASING-MASING dulu (Laptop &
 // Aksesoris kena tier sendiri-sendiri, threshold beda), BARU dirata-ratain skornya — bukan
@@ -90,8 +95,10 @@ function serviceScoreOf(rec) {
   if (!d) return null;
   if (d.ratio_laptop != null || d.ratio_aksesoris != null) {
     const scores = [];
-    if (d.ratio_laptop != null) scores.push(tierScoreOfLaptop(d.ratio_laptop));
-    if (d.ratio_aksesoris != null) scores.push(tierScoreOfAksesoris(d.ratio_aksesoris));
+    const sl = d.ratio_laptop != null ? tierScoreOfLaptop(d.ratio_laptop) : null;
+    const sa = d.ratio_aksesoris != null ? tierScoreOfAksesoris(d.ratio_aksesoris) : null;
+    if (sl != null) scores.push(sl);
+    if (sa != null) scores.push(sa);
     return scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
   }
   if (d.ratio != null) return tierScoreOfAksesoris(d.ratio);
@@ -283,6 +290,9 @@ export default function DashboardAudit({ profile }) {
   const avgKes = avg(branchRows.map((r) => r.kesScore).filter((v) => v != null));
   const avgSvc = avg(branchRows.map((r) => r.svcScore).filter((v) => v != null));
   const avgKeu = avg(branchRows.map((r) => r.keuScore).filter((v) => v != null));
+  // Cakupan data Service Ratio: berapa cabang yang benar-benar punya skor bulan ini
+  // (cabang "Tidak Visit" / tanpa data tidak ikut rata-rata, jadi harus kelihatan di kartu).
+  const svcDinilai = branchRows.filter((r) => r.svcScore != null).length;
   const avgTotal = avg(branchRows.map((r) => r.total).filter((v) => v != null));
 
   // Temuan: dihitung dari checklist SOP tiap cabang teraudit — item kritis (CRITICAL_ITEMS,
@@ -427,7 +437,7 @@ export default function DashboardAudit({ profile }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
             <ScoreCard icon="📋" label="% Kepatuhan SOP" value={avgSop} target={90} trend={sopTrend.map((t) => t.value)} color={PURPLE} />
             <ScoreCard icon="📦" label="Kesehatan Stok" value={avgKes} target={98} trend={kesTrend.map((t) => t.value)} color={GREEN} />
-            <ScoreCard icon="🔧" label="Service Ratio" value={avgSvc} target={95} trend={svcTrend.map((t) => t.value)} color={BLUE} />
+            <ScoreCard icon="🔧" label="Service Ratio" value={avgSvc} target={95} sub={`${svcDinilai} dari ${branches.length} cabang dinilai`} trend={svcTrend.map((t) => t.value)} color={BLUE} />
             <ScoreCard icon="💰" label="Audit Keuangan" value={avgKeu} target={95} trend={keuTrend.map((t) => t.value)} color={GOLD} />
           </div>
           <GaugeCard score={avgTotal} />
@@ -536,7 +546,7 @@ export default function DashboardAudit({ profile }) {
         </div>
 
         <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>
-          Catatan: Total Skor dihitung berdasarkan bobot: SOP (30%), Kesehatan Stok (30%), Service Ratio (20%), Audit Keuangan (20%). Cabang tanpa data di salah satu modul dihitung dari sisa modul yang ada (bobot dinormalisasi). Skor Service Ratio &amp; Audit Keuangan dipetakan dari tingkatan status asli modulnya (Terkendali/Efisien/Monitoring/dst, bukan angka mentah) ke poin 100/90/70/65/40/35/25 — ini pemetaan asumsi, bukan definisi resmi dari modul aslinya.
+          Catatan: Total Skor dihitung berdasarkan bobot: SOP (30%), Kesehatan Stok (30%), Service Ratio (20%), Audit Keuangan (20%). Cabang tanpa data di salah satu modul dihitung dari sisa modul yang ada (bobot dinormalisasi). Skor Service Ratio dihitung berjenjang dari ratio asli (Laptop &amp; Aksesoris dinilai sendiri-sendiri lalu dirata-rata): 100 turun ke 90 di batas Terkendali, ke 70 di batas Monitoring, dan ke 40 di 2x batas Monitoring. Skor Audit Keuangan dipetakan dari tingkatan status modulnya (Terkendali/Efisien/Monitoring/dst) ke poin 100/90/70/65/40/35/25. Skala poin ini pemetaan asumsi, bukan definisi resmi dari modul aslinya.
           <br /><span style={{ color: GOLD, fontWeight: 800 }}>*</span> = saldo masuk melebihi limit kas bulan ini (nggak ngaruh ke skor, cuma penanda buat dicek).
         </div>
       </div>
@@ -560,7 +570,7 @@ function KpiCard({ icon, label, value, sub, color }) {
   );
 }
 
-function ScoreCard({ icon, label, value, target, trend, color }) {
+function ScoreCard({ icon, label, value, target, trend, color, sub }) {
   return (
     <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 16, display: "flex", flexDirection: "column", gap: 8 }}>
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
@@ -569,6 +579,7 @@ function ScoreCard({ icon, label, value, target, trend, color }) {
       </div>
       <div style={{ fontSize: 26, fontWeight: 800, color }}>{value != null ? value.toFixed(1) + "%" : "\u2014"}</div>
       <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>Target &ge; {target}%</div>
+      {sub && <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>{sub}</div>}
       {trend && trend.some((v) => v != null) && <Sparkline data={trend} color={color} />}
     </div>
   );
