@@ -446,21 +446,21 @@ export default function DashboardAudit({ profile }) {
         {/* Run rate 6 bulan — semua modul */}
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 18 }}>
           <div style={{ fontWeight: 700, fontSize: 13.5, marginBottom: 14 }}>Run Rate 6 Bulan Terakhir</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 22 }}>
             <div>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: PURPLE, marginBottom: 6 }}>% Kepatuhan SOP</div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: PURPLE, marginBottom: 6 }}>% Kepatuhan SOP</div>
               <BarTrend data={sopTrend} target={90} color={PURPLE} />
             </div>
             <div>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: GREEN, marginBottom: 6 }}>Kesehatan Stok</div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: GREEN, marginBottom: 6 }}>Kesehatan Stok</div>
               <BarTrend data={kesTrend} target={98} color={GREEN} />
             </div>
             <div>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: BLUE, marginBottom: 6 }}>Service Ratio</div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: BLUE, marginBottom: 6 }}>Service Ratio</div>
               <BarTrend data={svcTrend} target={95} color={BLUE} />
             </div>
             <div>
-              <div style={{ fontSize: 11.5, fontWeight: 700, color: "#b07212", marginBottom: 6 }}>Audit Keuangan</div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: "#b07212", marginBottom: 6 }}>Audit Keuangan</div>
               <BarTrend data={keuTrend} target={95} color={GOLD} />
             </div>
           </div>
@@ -623,28 +623,54 @@ function GaugeCard({ score }) {
   );
 }
 
+// Grafik tren bulanan. Dulu berupa bar yang selalu mulai dari 0% — padahal skornya hampir selalu
+// 80-100%, jadi semua bar kelihatan sama tinggi dan tulisannya mengecil karena SVG diskalakan.
+// Sekarang garis + titik dengan skala dipersempit ke rentang data (tertulis di keterangan di bawah),
+// angka & nama bulan lebih besar, dan garis target diberi label.
 function BarTrend({ data, target, color = PURPLE }) {
-  const w = 480, h = 160, pad = 24;
-  const barW = (w - pad * 2) / data.length * 0.6;
-  const gap = (w - pad * 2) / data.length;
-  const targetY = h - pad - (target / 100) * (h - pad * 2);
+  const w = 480, h = 210, padL = 40, padR = 22, padT = 30, padB = 34;
+  const vals = data.map((d) => d.value).filter((v) => v != null);
+  const hi = 100;
+  let lo = Math.floor((Math.min(...(vals.length ? vals : [target]), target) - 8) / 5) * 5;
+  lo = Math.max(0, Math.min(lo, hi - 20));
+  const innerW = w - padL - padR, innerH = h - padT - padB;
+  const inset = 22; // jarak titik dari tepi, supaya angka tidak menabrak label sumbu Y
+  const xAt = (i) => padL + inset + (data.length === 1 ? (innerW - inset * 2) / 2 : (i * (innerW - inset * 2)) / (data.length - 1));
+  const yAt = (v) => padT + (1 - (Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo)) * innerH;
+  const pts = data.map((d, i) => (d.value == null ? null : { x: xAt(i), y: yAt(d.value), v: d.value, i }));
+  const ada = pts.filter(Boolean);
+  const ticks = [lo, Math.round((lo + hi) / 2 / 5) * 5, hi].filter((t, i, arr) => arr.indexOf(t) === i);
+  const short = (p) => periodeLabel(p).split(" ")[0].slice(0, 3);
+  const targetY = yAt(target);
+  const last = ada[ada.length - 1];
   return (
-    <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: "auto" }}>
-      <line x1={pad} y1={targetY} x2={w - pad} y2={targetY} stroke={GOLD} strokeWidth="1.5" strokeDasharray="4 3" />
-      {data.map((d, i) => {
-        if (d.value == null) return null;
-        const barH = (d.value / 100) * (h - pad * 2);
-        const x = pad + i * gap + (gap - barW) / 2;
-        const y = h - pad - barH;
-        return (
-          <g key={i}>
-            <rect x={x} y={y} width={barW} height={barH} rx="3" fill={color} />
-            <text x={x + barW / 2} y={y - 6} textAnchor="middle" fontSize="10" fontWeight="700" fill="var(--text-primary)">{d.value.toFixed(0)}%</text>
-            <text x={x + barW / 2} y={h - 6} textAnchor="middle" fontSize="9" fill="var(--text-faint)">{periodeLabel(d.period).split(" ")[0]}</text>
+    <div>
+      <svg viewBox={`0 0 ${w} ${h}`} style={{ width: "100%", height: "auto", display: "block" }}>
+        {ticks.map((t) => (
+          <g key={t}>
+            <line x1={padL} y1={yAt(t)} x2={w - padR} y2={yAt(t)} stroke="var(--border)" strokeWidth="1" />
+            <text x={padL - 8} y={yAt(t) + 4} textAnchor="end" fontSize="12" fill="var(--text-faint)">{t}%</text>
           </g>
-        );
-      })}
-    </svg>
+        ))}
+        <line x1={padL} y1={targetY} x2={w - padR} y2={targetY} stroke={GOLD} strokeWidth="1.5" strokeDasharray="5 4" />
+        {ada.length > 1 && <polyline points={ada.map((q) => `${q.x},${q.y}`).join(" ")} fill="none" stroke={color} strokeWidth="2.5" strokeLinejoin="round" strokeLinecap="round" />}
+        {pts.map((q, i) => {
+          if (!q) return null;
+          const isLast = q === last;
+          const bawah = q.y < padT + 14; // titik terlalu atas: taruh angka di bawah titik
+          return (
+            <g key={i}>
+              <circle cx={q.x} cy={q.y} r={isLast ? 6.5 : 4.5} fill={color} stroke="var(--surface)" strokeWidth="2" />
+              <text x={q.x} y={bawah ? q.y + 20 : q.y - 11} textAnchor="middle" fontSize={isLast ? 14 : 12.5} fontWeight="800" fill="var(--text-primary)">{q.v.toFixed(isLast ? 1 : 0)}%</text>
+            </g>
+          );
+        })}
+        {data.map((d, i) => (
+          <text key={i} x={xAt(i)} y={h - 10} textAnchor="middle" fontSize="12.5" fill={i === data.length - 1 ? "var(--text-primary)" : "var(--text-faint)"} fontWeight={i === data.length - 1 ? 700 : 400}>{short(d.period)}</text>
+        ))}
+      </svg>
+      <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 2 }}>Skala grafik {lo}&ndash;{hi}% &middot; garis kuning putus-putus = target {target}%</div>
+    </div>
   );
 }
 
