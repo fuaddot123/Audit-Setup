@@ -44,7 +44,7 @@ function newStockRow() { return { nama: "", status: "Lengkap", keterangan: "" };
 // Satu baris Stock Opname berstatus "Selisih" bisa memuat BEBERAPA barang (row.barang = [{nama,
 // kategori, merek, qty, harga}]). Baris lama (tanpa row.barang) dibaca sebagai 1 barang dari
 // field kategori/merek/qty/harga di baris itu sendiri, jadi data lama tetap aman.
-function barangKosong() { return { nama: "", kategori: "", merek: "", qty: "", harga: "" }; }
+function barangKosong() { return { nama: "", kategori: "", qty: "", harga: "" }; }
 function daftarBarangSelisih(row) {
   if (Array.isArray(row.barang) && row.barang.length) return row.barang;
   return [{ nama: "", kategori: row.kategori || "", merek: row.merek || "", qty: row.qty ?? "", harga: row.harga ?? "" }];
@@ -57,9 +57,9 @@ function nilaiBarang(b) { return qtyBarang(b) * (Number(b.harga) || 0); }
 function nilaiSelisihRow(row) {
   return daftarBarangSelisih(row).reduce((t, b) => t + nilaiBarang(b), 0);
 }
-// Apakah detail barang (nama / kategori / merek / jumlah / harga) sudah diisi?
+// Apakah detail barang (nama / kategori / jumlah / harga) sudah diisi? (Merek sudah tidak dipakai.)
 function adaDetailBarang(b) {
-  return !!(String(b.nama || "").trim() || String(b.kategori || "").trim() || String(b.merek || "").trim() || (Number(b.harga) || 0) || !(b.qty === "" || b.qty == null));
+  return !!(String(b.nama || "").trim() || String(b.kategori || "").trim() || (Number(b.harga) || 0) || !(b.qty === "" || b.qty == null));
 }
 function adaDetailSelisih(row) {
   return daftarBarangSelisih(row).some(adaDetailBarang);
@@ -1877,20 +1877,13 @@ function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove, onUp
                   return (
                     <div style={{ gridColumn: "1 / -1", display: "flex", flexDirection: "column", gap: 8 }}>
                       {daftar.map((b, j) => (
-                        <div key={j} style={{ display: "flex", flexDirection: "column", gap: 6, ...(banyak ? { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 8 } : {}) }}>
-                          {(banyak || b.nama) && (
-                            <div style={{ display: "grid", gridTemplateColumns: canEdit && banyak ? "1fr auto" : "1fr", gap: 8, alignItems: "center" }}>
-                              <input className="input" placeholder={`Nama barang ${j + 1}`} value={b.nama || ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "nama", e.target.value)} style={{ fontSize: 12 }} />
-                              {canEdit && banyak && <span onClick={() => onRemoveBarang(i, j)} style={{ cursor: "pointer", color: "var(--danger-text)", fontSize: 16, textAlign: "center" }} title="Hapus barang ini">&times;</span>}
-                            </div>
-                          )}
-                          <div style={{ display: "grid", gridTemplateColumns: "1.2fr 1fr 0.55fr 1fr 1fr", gap: 8, alignItems: "center" }}>
-                            <input className="input" placeholder="Kategori (mis. Storage)" value={b.kategori || ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "kategori", e.target.value)} style={{ fontSize: 12 }} />
-                            <input className="input" placeholder="Merek" value={b.merek || ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "merek", e.target.value)} style={{ fontSize: 12 }} />
-                            <input className="input" type="number" min="0" placeholder="Jml (1)" value={b.qty ?? ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "qty", e.target.value)} style={{ fontSize: 12 }} />
-                            <input className="input" type="number" min="0" placeholder="Harga satuan (Rp)" value={b.harga ?? ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "harga", e.target.value)} style={{ fontSize: 12 }} />
-                            <div style={{ fontSize: 12, fontWeight: 700, color: "#a32020" }}>Nilai: Rp{nilaiBarang(b).toLocaleString("id-ID")}</div>
-                          </div>
+                        <div key={j} style={{ display: "grid", gridTemplateColumns: canEdit && banyak ? "2fr 1.1fr 0.55fr 1fr 1fr auto" : "2fr 1.1fr 0.55fr 1fr 1fr", gap: 8, alignItems: "center", ...(banyak ? { background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 8 } : {}) }}>
+                          <input className="input" placeholder={banyak ? `Nama barang ${j + 1}` : "Nama barang"} value={b.nama || ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "nama", e.target.value)} style={{ fontSize: 12 }} />
+                          <input className="input" placeholder="Kategori (mis. Storage)" value={b.kategori || ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "kategori", e.target.value)} style={{ fontSize: 12 }} />
+                          <input className="input" type="number" min="0" placeholder="Jml (1)" value={b.qty ?? ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "qty", e.target.value)} style={{ fontSize: 12 }} />
+                          <input className="input" type="number" min="0" placeholder="Harga satuan (Rp)" value={b.harga ?? ""} disabled={!canEdit} onChange={(e) => onUpdateBarang(i, j, "harga", e.target.value)} style={{ fontSize: 12 }} />
+                          <div style={{ fontSize: 12, fontWeight: 700, color: "#a32020" }}>Nilai: Rp{nilaiBarang(b).toLocaleString("id-ID")}</div>
+                          {canEdit && banyak && <span onClick={() => onRemoveBarang(i, j)} style={{ cursor: "pointer", color: "var(--danger-text)", fontSize: 16, textAlign: "center" }} title="Hapus barang ini">&times;</span>}
                         </div>
                       ))}
                       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>

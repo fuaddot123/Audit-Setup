@@ -1119,8 +1119,8 @@ export default function LaporanBulanan({ profile }) {
       }
 
       // ── 4b. Daftar Selisih Barang (dari Stock Opname di Berita Acara) ──
-      // Slide ringkasan per cabang + slide detail per cabang (Nama Barang, Kategori, Merek,
-      // Selisih, Harga, Nilai). Cuma muncul kalau bulan ini ada baris berstatus "Selisih".
+      // Slide ringkasan per cabang + slide detail per cabang (Nama Barang Tetap, Nama Barang Hilang,
+      // Kategori, Selisih, Harga, Nilai, Keterangan). Cuma muncul kalau bulan ini ada baris berstatus "Selisih".
       // Nilai = Jumlah × Harga satuan (Jumlah kosong dianggap 1). DENDA SENGAJA tidak dicatat
       // di sini (keputusan user). Semua audit non-"Tidak Visit" di bulan itu digabung per cabang.
       {
@@ -1138,12 +1138,12 @@ export default function LaporanBulanan({ profile }) {
                 const adaBarang = Array.isArray(r.barang) && r.barang.length;
                 const daftar = adaBarang ? r.barang : [{ nama: "", kategori: r.kategori, merek: r.merek, qty: r.qty, harga: r.harga }];
                 daftar.forEach((bg, bi) => {
-                  const kosongSemua = !(String(bg.nama || "").trim() || String(bg.kategori || "").trim() || String(bg.merek || "").trim() || toNum(bg.harga) || !(bg.qty === "" || bg.qty == null));
+                  const kosongSemua = !(String(bg.nama || "").trim() || String(bg.kategori || "").trim() || toNum(bg.harga) || !(bg.qty === "" || bg.qty == null));
                   if (daftar.length > 1 && kosongSemua) return; // barang tambahan yang belum diisi dilewati
                   const qtyKosong = bg.qty === "" || bg.qty == null;
                   const qty = qtyKosong ? 1 : toNum(bg.qty);
                   const harga = toNum(bg.harga);
-                  items.push({ nama: (bg.nama && String(bg.nama).trim()) || r.nama || "\u2014", kategori: bg.kategori || "", merek: bg.merek || "", qty, qtyKosong, harga, nilai: qty * harga, keterangan: bi === 0 ? (r.keterangan || "") : "" });
+                  items.push({ namaTetap: r.nama || "\u2014", namaHilang: (bg.nama && String(bg.nama).trim()) || "", kategori: bg.kategori || "", qty, qtyKosong, harga, nilai: qty * harga, keterangan: bi === 0 ? (r.keterangan || "") : "" });
                 });
               });
             });
@@ -1187,7 +1187,7 @@ export default function LaporanBulanan({ profile }) {
           // panjang teks), bukan jumlah baris tetap — supaya tabel nggak tumpah keluar slide
           // walau Keterangan-nya panjang. Angka cpl sengaja dikecilkan biar perkiraannya aman.
           const estLines = (txt, cpl) => Math.max(1, Math.ceil(String(txt || "").length / cpl));
-          const rowH = (it) => Math.max(estLines(it.nama, 20), estLines(it.kategori, 11), estLines(it.merek, 9), estLines(it.keterangan, 62)) * 0.2 + 0.14;
+          const rowH = (it) => Math.max(estLines(it.namaTetap, 14), estLines(it.namaHilang, 25), estLines(it.kategori, 11), estLines(it.keterangan, 40)) * 0.2 + 0.14;
           const MAX_H = 5.0; // tinggi maksimal baris data per slide (di luar header & baris total)
           selisihList.forEach((x) => {
             const halaman = [];
@@ -1205,9 +1205,9 @@ export default function LaporanBulanan({ profile }) {
                 nomor += 1;
                 return [
                   { text: String(nomor), options: { fontSize: 12, align: "center", bold: true, fill: { color: PURPLE }, color: WHITE } },
-                  { text: it.nama, options: { fontSize: 12, bold: true } },
+                  { text: it.namaTetap, options: { fontSize: 12, bold: true } },
+                  { text: it.namaHilang || "\u2014", options: { fontSize: 11.5 } },
                   { text: it.kategori || "\u2014", options: { fontSize: 11.5 } },
-                  { text: it.merek || "\u2014", options: { fontSize: 11.5 } },
                   { text: it.qtyKosong ? "\u2014" : String(it.qty), options: { fontSize: 12, align: "center" } },
                   { text: it.harga ? rpS(it.harga) : "\u2014", options: { fontSize: 11.5, align: "center" } },
                   { text: it.harga ? rpS(it.nilai) : "\u2014", options: { fontSize: 11.5, align: "center", bold: true, color: RED } },
@@ -1221,8 +1221,8 @@ export default function LaporanBulanan({ profile }) {
                   tot(""),
                 ]);
               }
-              s.addTable([[th("No"), th("Nama Barang", "left"), th("Kategori", "left"), th("Merek", "left"), th("Selisih"), th("Harga"), th("Nilai Selisih"), th("Keterangan", "left")]].concat(body),
-                { x: 0.35, y: 1.15, w: 12.6, colW: [0.5, 2.2, 1.3, 1.1, 0.8, 1.3, 1.4, 4.0], border: tblBorder, autoPage: false, margin: [3, 5, 3, 5] });
+              s.addTable([[th("No"), th("Nama Barang Tetap", "left"), th("Nama Barang Hilang", "left"), th("Kategori", "left"), th("Selisih"), th("Harga"), th("Nilai Selisih"), th("Keterangan", "left")]].concat(body),
+                { x: 0.35, y: 1.15, w: 12.6, colW: [0.5, 1.7, 3.0, 1.3, 0.8, 1.2, 1.3, 2.8], border: tblBorder, autoPage: false, margin: [3, 5, 3, 5] });
             });
           });
         }
