@@ -148,6 +148,89 @@ function loadPptxGenJS() {
   });
 }
 
+// ── Temuan Berulang: helper (permintaan atasan) ──
+// Identitas 1 temuan: teks yang dinormalisasi (SOP: teks butir checklist; Inventaris: nama item
+// yang berstatus Rusak). Dibandingkan antar audit untuk 1 cabang. Bulan yang nggak diaudit
+// DILEWATI — pembandingnya selalu audit terakhir sebelumnya yang ada datanya.
+const normTemuan = (t) => String(t || "").toLowerCase().replace(/\s+/g, " ").trim();
+function auditValid(rec) { return !!rec && !rec.data?.tidak_visit; }
+
+// Kumpulan temuan 1 audit (SOP + Inventaris). `has` = sumber mana yang datanya ada, supaya
+// sumber yang nggak diaudit nggak dikira "tidak ada temuan" (yang bikin temuan palsu).
+function temuanMapOf(sopRec, invRec) {
+  const map = new Map();
+  const has = { sop: auditValid(sopRec), inv: auditValid(invRec) };
+  if (has.sop) {
+    const notes = sopRec.data?.notes || {};
+    listFailedItems(sopRec.data).forEach(({ key, text, catLabel }) => {
+      map.set("sop|" + normTemuan(text), { src: "sop", text, cat: catLabel, note: notes[key] || "" });
+    });
+  }
+  if (has.inv) {
+    const cats = invRec.data?.categories || {};
+    Object.keys(cats).forEach((name) => {
+      if (cats[name]?.status === "Rusak") {
+        map.set("inv|" + normTemuan(name), { src: "inv", text: name.replace("|", " \u2013 "), cat: "Inventaris", note: cats[name].keterangan || "" });
+      }
+    });
+  }
+  return { map, has };
+}
+
+// Riwayat audit 1 cabang SEBELUM bulan ini, urut dari yang terbaru: [{ period, sop, inv }].
+// Per bulan dipilih audit terbaru (audit_date). Bulan tanpa audit valid otomatis tidak ada di daftar.
+function riwayatCabang(branchId, histSop, histInv) {
+  const by = {};
+  const add = (arr, field) => (arr || [])
+    .filter((r) => String(r.branch_id) === String(branchId))
+    .forEach((r) => {
+      const o = by[r.period] || (by[r.period] = {});
+      if (isNewerAudit(r, o[field], (x) => x.data?.audit_date)) o[field] = r;
+    });
+  add(histSop, "sop");
+  add(histInv, "inv");
+  return Object.keys(by).sort().reverse()
+    .map((p) => ({ period: p, sop: by[p].sop, inv: by[p].inv }))
+    .filter((e) => auditValid(e.sop) || auditValid(e.inv));
+}
+
+// Bandingkan temuan bulan ini (cur) dengan audit terakhir sebelumnya (riwayat[0]).
+// berulang = ada di keduanya (streak = berapa audit berturut-turut sudah muncul, termasuk sekarang);
+// baru = hanya sekarang; diperbaiki = hanya di audit sebelumnya. Cuma sumber yang datanya ada di
+// KEDUA audit yang dibandingkan.
+function analisisBerulang(cur, riwayat) {
+  const prev = riwayat[0];
+  if (!prev) {
+    return { adaPembanding: false, prevPeriod: null, prevCount: 0, berulang: [], baru: [], diperbaiki: [], status: { lbl: "Belum ada pembanding", color: GREY } };
+  }
+  const prevT = temuanMapOf(prev.sop, prev.inv);
+  const hist = riwayat.map((e) => temuanMapOf(e.sop, e.inv));
+  const komparabel = (src) => cur.has[src] && prevT.has[src];
+  const berulang = [], baru = [], diperbaiki = [];
+  cur.map.forEach((v, k) => {
+    if (!komparabel(v.src)) return;
+    if (prevT.map.has(k)) {
+      let streak = 2;
+      for (let i = 1; i < hist.length; i++) { if (hist[i].map.has(k)) streak++; else break; }
+      berulang.push({ ...v, streak });
+    } else baru.push(v);
+  });
+  let prevCount = 0;
+  prevT.map.forEach((v, k) => {
+    if (!komparabel(v.src)) return;
+    prevCount += 1;
+    if (!cur.map.has(k)) diperbaiki.push(v);
+  });
+  berulang.sort((a, b) => b.streak - a.streak || a.text.localeCompare(b.text));
+  let status;
+  if (berulang.length > 0 && diperbaiki.length === 0) status = { lbl: "Tidak ada perubahan", color: RED };
+  else if (berulang.length > 0) status = { lbl: "Sebagian belum berubah", color: AMBER };
+  else if (prevCount > 0) status = { lbl: "Semua sudah diperbaiki", color: GREEN };
+  else if (baru.length > 0) status = { lbl: "Temuan baru", color: AMBER };
+  else status = { lbl: "Tanpa temuan", color: GREEN };
+  return { adaPembanding: true, prevPeriod: prev.period, prevCount, berulang, baru, diperbaiki, status };
+}
+
 export default function LaporanBulanan({ profile }) {
   const [period, setPeriod] = useState(nowPeriode());
   const [generating, setGenerating] = useState(false);
@@ -204,7 +287,7 @@ export default function LaporanBulanan({ profile }) {
       const [
         brRes, sopCurRes, sopPrevRes, svcCurRes, svcPrevRes,
         kesCurRes, kesPrevRes, keuCurRes, keuPrevRes, invCurRes, invPrevRes, kpiRes, profRes, keuSettingsRes,
-        kesTrendRes, svcTrendRes, keuTrendRes, sopTrendRes, invTrendRes, beCurRes,
+        kesTrendRes, svcTrendRes, keuTrendRes, sopTrendRes, invTrendRes, beCurRes, sopHistRes, invHistRes,
       ] = await Promise.all([
         supabase.from("branches").select("*").order("name"),
         isoEq(supabase.from("audit_generic").select("*").eq("module", "sop").eq("period", period), period),
@@ -226,6 +309,9 @@ export default function LaporanBulanan({ profile }) {
         isoOr(supabase.from("audit_generic").select("*").eq("module", "sop").in("period", trendPeriods)),
         isoOr(supabase.from("audit_generic").select("*").eq("module", "inventaris").in("period", trendPeriods)),
         isoEq(supabase.from("berita_acara").select("*").eq("period", period), period),
+        // Riwayat 12 bulan SEBELUM bulan ini (buat slide Temuan Berulang)
+        isoOr(supabase.from("audit_generic").select("*").eq("module", "sop").gte("period", addMonths(period, -12)).lt("period", period)),
+        isoOr(supabase.from("audit_generic").select("*").eq("module", "inventaris").gte("period", addMonths(period, -12)).lt("period", period)),
       ]);
       const keuSettings = keuSettingsRes.data || { terkendali: 70, efisien: 95, monitoring: 105 };
 
@@ -550,7 +636,7 @@ export default function LaporanBulanan({ profile }) {
         }
 
         return {
-          branch: b, sopCur, sopScore, sopScorePrev, tidakVisitSOP,
+          branch: b, sopCur, invCur, sopScore, sopScorePrev, tidakVisitSOP,
           svcRatio, svcRatioPrev, svcCurDetail, svcPrevDetail, kesPct, kesPctPrev, kesCurDetail, kesPrevDetail, sisa, sisaPrev, keuCurDetail, keuPrevDetail,
           totalTemuanBranch,
           pengeluaran: keuCur ? parseFloat(keuCur.pengeluaran) || 0 : 0,
@@ -1668,6 +1754,91 @@ export default function LaporanBulanan({ profile }) {
           s.addText(it.d, { x: cardX2 + 1.05, y: yy + 0.6, w: 4.3, h: 0.3, fontSize: 10, color: "777777", margin: 0 });
           if (i < kepLegendItems.length - 1) s.addShape(pptx.ShapeType.rect, { x: cardX2 + 0.25, y: yy + 0.92, w: cardW2 - 0.5, h: 0.012, fill: { color: "EEEAF5" } });
         });
+      }
+
+      // ── 7b. Temuan Berulang per cabang (permintaan atasan) ──
+      // Temuan bulan ini dibandingkan dengan temuan di audit TERAKHIR sebelumnya (bulan yang nggak
+      // diaudit dilewati). Temuan yang masih ada = berulang = cabang belum ada perubahan.
+      // Slide ringkasan semua cabang + slide detail HANYA untuk cabang yang punya temuan berulang.
+      {
+        const analisis = rows
+          .filter((r) => auditValid(r.sopCur) || auditValid(r.invCur))
+          .map((r) => ({
+            branch: r.branch,
+            ...analisisBerulang(temuanMapOf(r.sopCur, r.invCur), riwayatCabang(r.branch.id, sopHistRes.data, invHistRes.data)),
+          }));
+
+        if (analisis.length) {
+          const th = (t, align) => ({ text: t, options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 12, align: align || "center" } });
+          const tblBorder = { type: "solid", color: "E5E5E5", pt: 0.5 };
+          function berulangSlideBase(subtitle) {
+            const s = newSlide();
+            addGradientHeader(s, 0.85);
+            s.addText("TEMUAN BERULANG", { x: 0.35, y: 0.08, w: 8.5, h: 0.42, fontSize: 20, bold: true, color: WHITE, margin: 0 });
+            s.addText(subtitle, { x: 0.35, y: 0.5, w: 8.5, h: 0.3, fontSize: 13, bold: true, color: GOLD, margin: 0 });
+            addLogo(s, 11.3, 0.18);
+            return s;
+          }
+
+          // Slide ringkasan semua cabang
+          {
+            const s = berulangSlideBase(`${periodeLabel(period)} \u2014 Ringkasan per Cabang`);
+            const num = (n, color) => ({ text: String(n), options: { fontSize: 12, align: "center", bold: n > 0, color: n > 0 ? color : GREY } });
+            const body = analisis.map((a, i) => [
+              { text: String(i + 1), options: { fontSize: 11.5, align: "center", bold: true, fill: { color: PURPLE }, color: WHITE } },
+              { text: a.branch.name, options: { fontSize: 12, bold: true } },
+              { text: a.prevPeriod ? periodeLabel(a.prevPeriod) : "\u2014", options: { fontSize: 11.5, align: "center" } },
+              a.adaPembanding ? num(a.prevCount, "333333") : { text: "\u2014", options: { fontSize: 12, align: "center", color: GREY } },
+              a.adaPembanding ? num(a.berulang.length, RED) : { text: "\u2014", options: { fontSize: 12, align: "center", color: GREY } },
+              a.adaPembanding ? num(a.baru.length, AMBER) : { text: "\u2014", options: { fontSize: 12, align: "center", color: GREY } },
+              a.adaPembanding ? num(a.diperbaiki.length, GREEN) : { text: "\u2014", options: { fontSize: 12, align: "center", color: GREY } },
+              { text: a.status.lbl, options: { fontSize: 12, bold: true, color: a.status.color } },
+            ]);
+            s.addTable([[th("No"), th("Cabang", "left"), th("Dibanding Audit"), th("Temuan Lalu"), th("Berulang"), th("Baru"), th("Diperbaiki"), th("Status", "left")]].concat(body),
+              { x: 0.35, y: 1.15, w: 12.6, colW: [0.5, 2.3, 1.9, 1.2, 1.1, 0.9, 1.3, 3.4], border: tblBorder, autoPage: false, margin: [3, 5, 3, 5] });
+            s.addText("Berulang = temuan yang sama muncul lagi dibanding audit sebelumnya (bulan yang tidak diaudit dilewati), artinya belum ada perubahan di cabang. Dibandingkan: temuan SOP dan item Inventaris yang Rusak.",
+              { x: 0.35, y: 6.75, w: 10.8, h: 0.5, fontSize: 10, color: GREY, margin: 0, valign: "top" });
+          }
+
+          // Slide detail: cuma cabang yang punya temuan berulang
+          const estLines = (txt, cpl) => Math.max(1, Math.ceil(String(txt || "").length / cpl));
+          const rowH = (r) => Math.max(estLines(r.text, 48), estLines(r.cat, 13), estLines(r.note, 38)) * 0.2 + 0.14;
+          const MAX_H = 4.5;
+          analisis.filter((a) => a.berulang.length > 0).forEach((a) => {
+            const baris = [
+              ...a.berulang.map((t) => ({ ...t, status: `BERULANG \u00d7${t.streak}`, color: RED })),
+              ...a.diperbaiki.map((t) => ({ ...t, note: "", status: "DIPERBAIKI", color: GREEN })),
+            ];
+            const halaman = [];
+            let cur = [], h = 0;
+            baris.forEach((r) => {
+              const rh = rowH(r);
+              if (cur.length && h + rh > MAX_H) { halaman.push(cur); cur = []; h = 0; }
+              cur.push(r); h += rh;
+            });
+            if (cur.length) halaman.push(cur);
+            let nomor = 0;
+            halaman.forEach((chunk, pg) => {
+              const s = berulangSlideBase(`${periodeLabel(period)} \u2014 ${a.branch.name}` + (halaman.length > 1 ? ` (${pg + 1}/${halaman.length})` : ""));
+              s.addText(`Dibanding audit ${periodeLabel(a.prevPeriod)}: ${a.prevCount} temuan sebelumnya \u2014 ${a.berulang.length} masih ada, ${a.diperbaiki.length} sudah diperbaiki` + (a.baru.length ? `, ${a.baru.length} temuan baru` : "") + ".",
+                { x: 0.35, y: 0.95, w: 12.6, h: 0.3, fontSize: 12, bold: true, color: a.status.color, margin: 0 });
+              const body = chunk.map((r) => {
+                nomor += 1;
+                return [
+                  { text: String(nomor), options: { fontSize: 11.5, align: "center", bold: true, fill: { color: PURPLE }, color: WHITE } },
+                  { text: r.text, options: { fontSize: 12, bold: true } },
+                  { text: r.cat || "\u2014", options: { fontSize: 11 } },
+                  { text: r.status, options: { fontSize: 11.5, bold: true, align: "center", color: r.color } },
+                  { text: r.note || "", options: { fontSize: 10.5 } },
+                ];
+              });
+              s.addTable([[th("No"), th("Temuan", "left"), th("Asal", "left"), th("Status"), th("Catatan Auditor", "left")]].concat(body),
+                { x: 0.35, y: 1.4, w: 12.6, colW: [0.5, 5.4, 1.7, 2.0, 3.0], border: tblBorder, autoPage: false, margin: [3, 5, 3, 5] });
+              s.addText("BERULANG \u00d7n = temuan yang sama muncul di n audit berturut-turut (termasuk bulan ini), artinya belum ada perubahan. DIPERBAIKI = ada di audit sebelumnya, sudah tidak muncul.",
+                { x: 0.35, y: 6.75, w: 10.8, h: 0.5, fontSize: 10, color: GREY, margin: 0, valign: "top" });
+            });
+          });
+        }
       }
 
       // ── 8..N. Temuan per cabang (cuma yang ada temuan) ──
