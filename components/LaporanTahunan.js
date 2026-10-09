@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { calcWeightedFromRecord, CATS as SOP_CATS, isLegacyChecklistRecord, listFailedItems } from "../lib/sopConfig";
-import { kesehatanStatusInfo, serviceStatusInfo, laptopStatusInfo, calcServiceRatio } from "../lib/stokConfig";
+import { kesehatanStatusInfo, serviceStatusInfo, laptopStatusInfo, calcServiceRatio, SERVICE_THRESHOLDS, LAPTOP_THRESHOLDS } from "../lib/stokConfig";
 import { sortBranches } from "../lib/branchOrder";
 import BranchMultiSelect from "./BranchMultiSelect";
 
@@ -36,6 +36,75 @@ function loadPptxScript() {
 
 function periodsInYear(year) {
   return Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, "0")}`);
+}
+
+// ============================================================
+// PERBANDINGAN ANTAR TAHUN — "periode sepadan"
+// ============================================================
+// Angka besar di kartu = rata-rata SEMUA data tahun itu (cabang & bulan yang ada datanya).
+// Tapi PANAH naik/turun TIDAK boleh membandingkan dua rata-rata itu mentah-mentah kalau cakupan
+// kedua tahun beda (mis. tahun awal audit baru mulai Juni & cuma sebagian cabang): yang
+// dibandingkan jadi kelompok yang tidak setara. Jadi panah hanya dihitung dari pasangan
+// (cabang + bulan) yang punya data di KEDUA tahun, dan baru ditampilkan kalau pasangannya
+// cukup banyak. Otomatis jadi perbandingan setahun penuh begitu kedua tahun sudah lengkap.
+const MIN_PASANGAN_SEPADAN = 3;
+const NAMA_BULAN = ["Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des"];
+
+// Kunci satu titik data: cabang + bulan (tanpa tahun) — "p" berformat "YYYY-MM".
+function kunciCabangBulan(branchId, p) { return `${branchId}|${p.slice(5)}`; }
+function meanOfMap(m) {
+  const v = [...m.values()];
+  return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null;
+}
+function bandingSepadan(curMap, prevMap) {
+  let n = 0, sc = 0, sp = 0;
+  curMap.forEach((v, k) => { if (prevMap.has(k)) { n += 1; sc += v; sp += prevMap.get(k); } });
+  return { n, ok: n >= MIN_PASANGAN_SEPADAN, cur: n ? sc / n : null, prev: n ? sp / n : null };
+}
+// Cakupan data: bulan apa saja & berapa cabang yang punya data (dari gabungan beberapa map).
+function cakupanData(maps) {
+  const bulan = new Set(), cabang = new Set();
+  maps.forEach((m) => m.forEach((_, k) => {
+    const i = k.lastIndexOf("|");
+    cabang.add(k.slice(0, i));
+    bulan.add(k.slice(i + 1));
+  }));
+  return { bulan: [...bulan].sort(), nCabang: cabang.size };
+}
+// ["06","07","08","12"] -> "Jun–Agu, Des"
+function rentangBulanText(mms) {
+  const nums = mms.map(Number).sort((a, b) => a - b);
+  if (!nums.length) return "";
+  const runs = [];
+  let start = nums[0], prev = nums[0];
+  for (let i = 1; i <= nums.length; i++) {
+    const n = nums[i];
+    if (n !== prev + 1) { runs.push([start, prev]); start = n; }
+    prev = n;
+  }
+  return runs.map(([a, b]) => (a === b ? NAMA_BULAN[a - 1] : `${NAMA_BULAN[a - 1]}\u2013${NAMA_BULAN[b - 1]}`)).join(", ");
+}
+
+// Skor Service Ratio BERJENJANG (sama dengan Dashboard Audit): 100 -> 90 di batas Terkendali,
+// -> 70 di batas Monitoring, -> 40 di 2x batas Monitoring (lantai 40). Batas dibaca dari stokConfig.
+// Catatan: fungsi ini salinan dari DashboardAudit.js — kalau skalanya diubah, ubah di kedua tempat.
+function skorBerjenjang(ratio, terkendali, monitoring) {
+  const r = Number(ratio);
+  if (!Number.isFinite(r) || r < 0) return null;
+  if (r <= terkendali) return terkendali > 0 ? 100 - 10 * (r / terkendali) : 100;
+  if (r <= monitoring) return 90 - 20 * ((r - terkendali) / (monitoring - terkendali));
+  return Math.max(40, 70 - 30 * ((r - monitoring) / monitoring));
+}
+function skorServiceRecord(d) {
+  if (d.ratio_laptop != null || d.ratio_aksesoris != null) {
+    const parts = [];
+    if (d.ratio_laptop != null) parts.push(skorBerjenjang(d.ratio_laptop, LAPTOP_THRESHOLDS.terkendali, LAPTOP_THRESHOLDS.monitoring));
+    if (d.ratio_aksesoris != null) parts.push(skorBerjenjang(d.ratio_aksesoris, SERVICE_THRESHOLDS.terkendali, SERVICE_THRESHOLDS.monitoring));
+    const ok = parts.filter((v) => v != null);
+    return ok.length ? ok.reduce((a, b) => a + b, 0) / ok.length : null;
+  }
+  if (d.ratio != null) return skorBerjenjang(d.ratio, SERVICE_THRESHOLDS.terkendali, SERVICE_THRESHOLDS.monitoring);
+  return null;
 }
 
 export default function LaporanTahunan({ profile }) {
@@ -103,61 +172,54 @@ export default function LaporanTahunan({ profile }) {
     return [...matches].sort((a, b) => (b.data?.audit_date || b.audit_date || "").localeCompare(a.data?.audit_date || a.audit_date || ""))[0];
   }
 
-  // Rata-rata SOP setahun (semua cabang, semua bulan yang ada datanya) — calcWeightedFromRecord
-  // otomatis pilih rumus lama/baru sesuai format record, jadi Jan-Des kebaca konsisten.
-  function avgSop(yearData) {
-    const scores = [];
+  // Skor per titik (cabang + bulan) tiap modul, dalam bentuk Map<kunci, skor>. Rata-rata setahun =
+  // rata-rata isi map; perbandingan antar tahun memakai kunci yang sama (lihat bandingSepadan).
+  // Cabang "Tidak Visit" / "Cabang Baru" / tanpa data tidak masuk map.
+  function mapSop(yearData) {
+    const m = new Map();
     yearData.periods.forEach((p) => {
       selectedBranchIds.forEach((bid) => {
         const rec = latestFor(yearData.sop, bid, p);
         if (!rec || rec.data?.tidak_visit || rec.data?.cabang_baru) return;
-        scores.push(calcWeightedFromRecord(rec.data));
+        m.set(kunciCabangBulan(bid, p), calcWeightedFromRecord(rec.data));
       });
     });
-    return scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+    return m;
   }
 
-  function avgKesehatan(yearData) {
-    const scores = [];
+  function mapKesehatan(yearData) {
+    const m = new Map();
     yearData.periods.forEach((p) => {
       selectedBranchIds.forEach((bid) => {
         const rec = latestFor(yearData.kes, bid, p);
         if (!rec || rec.data?.tidak_visit || rec.data?.cabang_baru) return;
-        if (rec.data?.kesehatan_pct != null) scores.push(rec.data.kesehatan_pct * 100);
+        if (rec.data?.kesehatan_pct != null) m.set(kunciCabangBulan(bid, p), rec.data.kesehatan_pct * 100);
       });
     });
-    return scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+    return m;
   }
 
-  // Service Ratio: headline setahun pakai rata-rata BLENDED (Laptop+Aksesoris digabung
-  // rata-rata skor tier, sama prinsip kayak Dashboard Audit) — angka 1 doang buat headline,
-  // detail 2-kategori terpisah nanti di slide khusus Service Ratio (Tahap 2).
-  function avgService(yearData) {
-    const scores = [];
+  // Service Ratio: skor berjenjang Laptop+Aksesoris dirata-rata (sama dengan Dashboard Audit) —
+  // angka 1 buat headline, detail 2-kategori terpisah ada di slide khusus Service Ratio.
+  function mapService(yearData) {
+    const m = new Map();
     yearData.periods.forEach((p) => {
       selectedBranchIds.forEach((bid) => {
         const rec = latestFor(yearData.svc, bid, p);
         if (!rec || rec.data?.tidak_visit || rec.data?.cabang_baru) return;
-        const d = rec.data;
-        if (d.ratio_laptop != null || d.ratio_aksesoris != null) {
-          const parts = [];
-          if (d.ratio_laptop != null) parts.push(laptopStatusInfo(d.ratio_laptop).lbl === "Terkendali" ? 100 : laptopStatusInfo(d.ratio_laptop).lbl === "Monitoring" ? 70 : 40);
-          if (d.ratio_aksesoris != null) parts.push(serviceStatusInfo(d.ratio_aksesoris).lbl === "Terkendali" ? 100 : serviceStatusInfo(d.ratio_aksesoris).lbl === "Monitoring" ? 70 : 40);
-          if (parts.length) scores.push(parts.reduce((a, b) => a + b, 0) / parts.length);
-        } else if (d.ratio != null) {
-          const info = serviceStatusInfo(d.ratio);
-          scores.push(info.lbl === "Terkendali" ? 100 : info.lbl === "Monitoring" ? 70 : 40);
-        }
+        const sk = skorServiceRecord(rec.data);
+        if (sk != null) m.set(kunciCabangBulan(bid, p), sk);
       });
     });
-    return scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
+    return m;
   }
 
-  // Keuangan: rata-rata % Posisi Kas setahun (bukan total Rupiah — biar bisa dibandingin
-  // apple-to-apple antar tahun meski jumlah cabang/anggaran beda).
-  function avgKeuangan(yearData, settings) {
-    const scores = [];
-    let totalPengeluaran = 0;
+  // Kas Kecil: % Posisi Kas per titik (bukan total Rupiah — biar bisa dibandingin antar tahun
+  // meski jumlah cabang/anggaran beda). Total & jumlah titik pengeluaran dikembalikan juga,
+  // supaya bisa ditampilkan sebagai rata-rata per cabang per bulan.
+  function mapKeuangan(yearData) {
+    const posisi = new Map();
+    let pengeluaran = 0, nPengeluaran = 0;
     yearData.periods.forEach((p) => {
       selectedBranchIds.forEach((bid) => {
         const entries = yearData.keu.filter((e) => e.branch_id === bid && e.period === p);
@@ -168,11 +230,12 @@ export default function LaporanTahunan({ profile }) {
         const sm = parseFloat(e.saldo_masuk) || 0;
         const pk = parseFloat(e.pengeluaran) || 0;
         const total = sb + sm;
-        if (total > 0) scores.push((pk / total) * 100);
-        totalPengeluaran += pk;
+        if (total > 0) posisi.set(kunciCabangBulan(bid, p), (pk / total) * 100);
+        pengeluaran += pk;
+        nPengeluaran += 1;
       });
     });
-    return { avgPosisi: scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null, totalPengeluaran };
+    return { posisi, pengeluaran, nPengeluaran };
   }
 
   async function generatePPT() {
@@ -187,10 +250,24 @@ export default function LaporanTahunan({ profile }) {
       const keuSettingsRes = await supabase.from("settings_keuangan").select("*").single();
       const keuSettings = keuSettingsRes.data || { terkendali: 70, efisien: 95, monitoring: 105 };
 
-      const curSop = avgSop(curYear), prevSop = avgSop(prevYear);
-      const curKes = avgKesehatan(curYear), prevKes = avgKesehatan(prevYear);
-      const curSvc = avgService(curYear), prevSvc = avgService(prevYear);
-      const curKeu = avgKeuangan(curYear, keuSettings), prevKeu = avgKeuangan(prevYear, keuSettings);
+      const curSopM = mapSop(curYear), prevSopM = mapSop(prevYear);
+      const curKesM = mapKesehatan(curYear), prevKesM = mapKesehatan(prevYear);
+      const curSvcM = mapService(curYear), prevSvcM = mapService(prevYear);
+      const curKeuM = mapKeuangan(curYear), prevKeuM = mapKeuangan(prevYear);
+
+      const curSop = meanOfMap(curSopM), prevSop = meanOfMap(prevSopM);
+      const curKes = meanOfMap(curKesM), prevKes = meanOfMap(prevKesM);
+      const curSvc = meanOfMap(curSvcM), prevSvc = meanOfMap(prevSvcM);
+      const curKeu = { avgPosisi: meanOfMap(curKeuM.posisi), totalPengeluaran: curKeuM.pengeluaran };
+      const prevKeu = { avgPosisi: meanOfMap(prevKeuM.posisi), totalPengeluaran: prevKeuM.pengeluaran };
+
+      // Perbandingan sepadan (cabang + bulan yang sama di kedua tahun) per modul, buat panah di kartu.
+      const sepSop = bandingSepadan(curSopM, prevSopM);
+      const sepKes = bandingSepadan(curKesM, prevKesM);
+      const sepSvc = bandingSepadan(curSvcM, prevSvcM);
+      const sepKeu = bandingSepadan(curKeuM.posisi, prevKeuM.posisi);
+      const covCur = cakupanData([curSopM, curKesM, curSvcM, curKeuM.posisi]);
+      const covPrev = cakupanData([prevSopM, prevKesM, prevSvcM, prevKeuM.posisi]);
 
       const scopeBranches = branches.filter((b) => selectedBranchIds.includes(b.id));
       const isPersonalView = profile?.role === "auditor";
@@ -229,11 +306,13 @@ export default function LaporanTahunan({ profile }) {
         s.addText("KLA", { x, y, w: 2.1, h: 0.4, align: "right", fontSize: 20, bold: true, color: GOLD, margin: 0 });
         s.addText("COMPUTER", { x, y: y + 0.37, w: 2.1, h: 0.25, align: "right", fontSize: 9, bold: true, color: WHITE, charSpacing: 1, margin: 0 });
       }
-      // Kartu "delta" — angka tahun ini + panah naik/turun dibanding tahun lalu.
-      function deltaArrow(cur, prev, lowerIsBetter) {
-        if (cur == null || prev == null) return { arrow: "", color: "999999", text: "" };
-        const diff = cur - prev;
-        if (Math.abs(diff) < 0.5) return { arrow: "\u2192", color: "999999", text: "stabil" };
+      // Kartu "delta" — panah naik/turun dibanding tahun lalu, dihitung HANYA dari periode sepadan
+      // (cabang + bulan yang punya data di kedua tahun). Kalau pasangannya kurang dari batas
+      // minimum, tidak ada panah (return null) — daripada menampilkan perbandingan yang menyesatkan.
+      function deltaSepadan(b, lowerIsBetter) {
+        if (!b || !b.ok) return null;
+        const diff = b.cur - b.prev;
+        if (Math.abs(diff) < 0.5) return { arrow: "\u2192", color: "999999", text: `stabil vs ${year - 1}` };
         const isUp = diff > 0;
         // Arah panah = arah angka beneran (jujur, jangan dibalik). Yang dibalik cuma WARNANYA
         // — buat metrik yang "makin kecil makin bagus" (misal % Posisi Kas), naik = merah.
@@ -282,36 +361,64 @@ export default function LaporanTahunan({ profile }) {
         s.addText(`${year} dibanding ${year - 1}`, { x: 0.9, y: 1.12, w: 10, h: 0.35, fontSize: 14, color: "B8B0D8", margin: 0 });
 
         const cards = [
-          { label: "SKOR SOP", cur: curSop, prev: prevSop, fmt: (v) => v.toFixed(1) + "%" },
-          { label: "KESEHATAN STOK", cur: curKes, prev: prevKes, fmt: (v) => v.toFixed(1) + "%" },
-          { label: "SERVICE RATIO (SKOR)", cur: curSvc, prev: prevSvc, fmt: (v) => v.toFixed(1) + "%" },
-          { label: "% POSISI KAS", cur: curKeu.avgPosisi, prev: prevKeu.avgPosisi, fmt: (v) => v.toFixed(1) + "%", lowerIsBetter: true },
+          { label: "SKOR SOP", cur: curSop, prev: prevSop, sep: sepSop, fmt: (v) => v.toFixed(1) + "%" },
+          { label: "KESEHATAN STOK", cur: curKes, prev: prevKes, sep: sepKes, fmt: (v) => v.toFixed(1) + "%" },
+          { label: "SERVICE RATIO (SKOR)", cur: curSvc, prev: prevSvc, sep: sepSvc, fmt: (v) => v.toFixed(1) + "%" },
+          { label: "% POSISI KAS", cur: curKeu.avgPosisi, prev: prevKeu.avgPosisi, sep: sepKeu, fmt: (v) => v.toFixed(1) + "%", lowerIsBetter: true },
         ];
 
         const cardW = 2.85, gap = 0.25, startX = 0.9, cardY = 1.85, cardH = 3.2;
         cards.forEach((c, i) => {
           const x = startX + i * (cardW + gap);
-          const d = deltaArrow(c.cur, c.prev, c.lowerIsBetter);
+          const d = deltaSepadan(c.sep, c.lowerIsBetter);
           s.addShape(pptx.ShapeType.roundRect, { x, y: cardY, w: cardW, h: cardH, rectRadius: 0.1, fill: { color: "3D2A72" }, line: { type: "none" } });
           s.addText(c.cur != null ? c.fmt(c.cur) : "\u2014", { x: x + 0.22, y: cardY + 0.55, w: cardW - 0.44, h: 1.0, fontSize: 38, bold: true, color: GOLD, margin: 0 });
           s.addText(c.label, { x: x + 0.22, y: cardY + 1.55, w: cardW - 0.44, h: 0.4, fontSize: 11.5, bold: true, color: WHITE, charSpacing: 0.5, margin: 0 });
           s.addShape(pptx.ShapeType.rect, { x: x + 0.22, y: cardY + 2.0, w: cardW - 0.44, h: 0.012, fill: { color: "6b5f96" } });
           if (c.prev != null && c.cur != null) {
-            s.addText([
-              { text: d.arrow + " ", options: { color: d.color, bold: true, fontSize: 12 } },
-              { text: d.text, options: { color: "B8B0D8", fontSize: 9.5 } },
-            ], { x: x + 0.22, y: cardY + 2.15, w: cardW - 0.44, h: 0.35, margin: 0 });
-            s.addText(`${year - 1}: ${c.fmt(c.prev)}`, { x: x + 0.22, y: cardY + 2.5, w: cardW - 0.44, h: 0.3, fontSize: 10, color: "9188B0", margin: 0 });
+            if (d) {
+              s.addText([
+                { text: d.arrow + " ", options: { color: d.color, bold: true, fontSize: 12 } },
+                { text: d.text, options: { color: "B8B0D8", fontSize: 9.5 } },
+              ], { x: x + 0.22, y: cardY + 2.15, w: cardW - 0.44, h: 0.35, margin: 0 });
+            } else {
+              s.addText("Belum ada periode sepadan", { x: x + 0.22, y: cardY + 2.15, w: cardW - 0.44, h: 0.35, fontSize: 10, italic: true, color: "9188B0", margin: 0 });
+            }
+            s.addText(`${year - 1}: ${c.fmt(c.prev)} (rata-rata data yang ada)`, { x: x + 0.22, y: cardY + 2.5, w: cardW - 0.44, h: 0.3, fontSize: 9, color: "9188B0", margin: 0 });
+            s.addText(
+              c.sep.ok
+                ? `Sepadan (${c.sep.n} cabang-bulan): ${c.fmt(c.sep.cur)} vs ${c.fmt(c.sep.prev)}`
+                : `Pasangan cabang-bulan yang sama: ${c.sep.n} (minimal ${MIN_PASANGAN_SEPADAN})`,
+              { x: x + 0.22, y: cardY + 2.8, w: cardW - 0.44, h: 0.35, fontSize: 8.5, italic: true, color: "9188B0", margin: 0 }
+            );
           } else {
             s.addText(`Data ${year - 1} belum ada`, { x: x + 0.22, y: cardY + 2.15, w: cardW - 0.44, h: 0.5, fontSize: 10, italic: true, color: "9188B0", margin: 0 });
           }
         });
 
+        // Kas Kecil: total Rupiah tidak sebanding kalau cakupan bulan/cabang beda, jadi ditampilkan
+        // juga sebagai rata-rata per cabang per bulan (itu yang dibandingkan antar tahun).
+        const rp = (v) => "Rp" + Math.round(v).toLocaleString("id-ID");
+        const rataKas = (k) => (k.nPengeluaran ? k.pengeluaran / k.nPengeluaran : null);
+        const rataCur = rataKas(curKeuM), rataPrev = rataKas(prevKeuM);
         s.addText(
-          `Total Pengeluaran Kas Kecil ${year}: ${curKeu.totalPengeluaran ? "Rp" + Math.round(curKeu.totalPengeluaran).toLocaleString("id-ID") : "\u2014"}` +
-          (prevKeu.totalPengeluaran ? `  \u2022  ${year - 1}: Rp${Math.round(prevKeu.totalPengeluaran).toLocaleString("id-ID")}` : ""),
-          { x: 0.9, y: 5.35, w: 11.5, h: 0.35, fontSize: 12, color: "D8D0F0", margin: 0 }
+          `Pengeluaran Kas Kecil ${year}: ${curKeuM.pengeluaran ? rp(curKeuM.pengeluaran) : "\u2014"}` +
+          (rataCur != null ? `  \u2022  rata-rata ${rp(rataCur)} per cabang per bulan` : ""),
+          { x: 0.9, y: 5.3, w: 11.5, h: 0.3, fontSize: 11.5, color: "D8D0F0", margin: 0 }
         );
+        if (rataPrev != null) {
+          s.addText(
+            `Pengeluaran Kas Kecil ${year - 1}: rata-rata ${rp(rataPrev)} per cabang per bulan (total ${rp(prevKeuM.pengeluaran)}; total tidak dibandingkan langsung karena cakupan bulan/cabang berbeda)`,
+            { x: 0.9, y: 5.62, w: 11.5, h: 0.45, fontSize: 10, color: "B8B0D8", valign: "top", margin: 0 }
+          );
+        }
+        if (covPrev.bulan.length) {
+          s.addText(
+            `Cakupan data \u2014 ${year}: ${rentangBulanText(covCur.bulan) || "\u2014"} (${covCur.nCabang} cabang)  \u2022  ${year - 1}: ${rentangBulanText(covPrev.bulan)} (${covPrev.nCabang} cabang). ` +
+            `Panah perbandingan hanya memakai cabang dan bulan yang sama di kedua tahun (minimal ${MIN_PASANGAN_SEPADAN} pasangan).`,
+            { x: 0.9, y: 6.2, w: 11.5, h: 0.55, fontSize: 9.5, italic: true, color: "B8B0D8", valign: "top", margin: 0 }
+          );
+        }
         s.addText(
           "Skor SOP & Kepatuhan dihitung otomatis dari checklist yang berlaku tiap bulan (format lama Jan\u2013Agu 2026, format baru mulai Sep 2026) \u2014 tetap sebanding karena keduanya menghasilkan skala 0\u2013100%.",
           { x: 0.9, y: 6.9, w: 11.5, h: 0.4, fontSize: 8.5, italic: true, color: "8A80AE", margin: 0 }
@@ -427,12 +534,12 @@ export default function LaporanTahunan({ profile }) {
       }
 
       // ============================================================
-      // SLIDE 5 — AUDIT KEUANGAN (tren % Posisi Kas 12 bulan)
+      // SLIDE 5 — AUDIT KAS KECIL (tren % Posisi Kas 12 bulan)
       // ============================================================
       {
         const s = newSlide();
         s.background = { color: PURPLE_DARK };
-        s.addText("Audit Keuangan", { x: 0.9, y: 0.5, w: 8, h: 0.5, fontSize: 26, bold: true, color: GOLD, margin: 0 });
+        s.addText("Audit Kas Kecil", { x: 0.9, y: 0.5, w: 8, h: 0.5, fontSize: 26, bold: true, color: GOLD, margin: 0 });
         s.addText(`Tren % Posisi Kas Kecil, ${year} (makin kecil makin efisien)`, { x: 0.9, y: 1.02, w: 8, h: 0.35, fontSize: 13, color: "B8B0D8", margin: 0 });
 
         const keuMonthly = monthlyAvgKeuangan(curYear);
@@ -660,7 +767,7 @@ export default function LaporanTahunan({ profile }) {
         const s = newSlide();
         s.background = { color: PURPLE_DARK };
         s.addText("Kepatuhan SOP Gabungan", { x: 0.9, y: 0.5, w: 9, h: 0.5, fontSize: 26, bold: true, color: GOLD, margin: 0 });
-        s.addText(`Skor gabungan SOP + Stok + Keuangan + Aset, ${year}`, { x: 0.9, y: 1.02, w: 9, h: 0.35, fontSize: 13, color: "B8B0D8", margin: 0 });
+        s.addText(`Skor gabungan SOP + Stok + Kas Kecil + Aset, ${year}`, { x: 0.9, y: 1.02, w: 9, h: 0.35, fontSize: 13, color: "B8B0D8", margin: 0 });
 
         // Pendekatan sederhana: rata-rata Skor SOP & Kesehatan Stok bulanan (proxy kepatuhan
         // gabungan, tanpa hitung ulang total temuan detail 4-sumber).
