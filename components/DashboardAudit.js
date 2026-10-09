@@ -28,7 +28,7 @@ function riskInfo(score) {
   return { label: "High", color: RED };
 }
 
-// Skor Audit Keuangan — dulu (SALAH) pakai formula "makin dikit kepake makin bagus", padahal
+// Skor Audit Kas Kecil — dulu (SALAH) pakai formula "makin dikit kepake makin bagus", padahal
 // kas kecil emang wajar banyak kepake buat operasional. Sekarang ngikutin tingkatan status ASLI
 // dari `computeStatus()` di AuditKeuangan.js (dibanding ke ambang batas dinamis dari
 // `settings_keuangan`, bukan bikin formula sendiri): Terkendali/Efisien = bagus, Monitoring =
@@ -161,7 +161,7 @@ function buildRingkasan({ period, prevPeriod, branches, branchRows, avgTotal, pr
     { k: "% Kepatuhan SOP", v: avgs.sop, t: TARGETS.sop },
     { k: "Kesehatan Stok", v: avgs.kes, t: TARGETS.kesehatan },
     { k: "Service Ratio", v: avgs.svc, t: TARGETS.service },
-    { k: "Audit Keuangan", v: avgs.keu, t: TARGETS.keuangan },
+    { k: "Audit Kas Kecil", v: avgs.keu, t: TARGETS.keuangan },
   ].filter((m) => m.v != null);
   if (mods.length) {
     const below = mods.filter((m) => m.v < m.t).sort((a, b) => (b.t - b.v) - (a.t - a.v));
@@ -438,7 +438,7 @@ export default function DashboardAudit({ profile }) {
             <ScoreCard icon="📋" label="% Kepatuhan SOP" value={avgSop} target={90} trend={sopTrend.map((t) => t.value)} color={PURPLE} />
             <ScoreCard icon="📦" label="Kesehatan Stok" value={avgKes} target={98} trend={kesTrend.map((t) => t.value)} color={GREEN} />
             <ScoreCard icon="🔧" label="Service Ratio" value={avgSvc} target={95} sub={`${svcDinilai} dari ${branches.length} cabang dinilai`} trend={svcTrend.map((t) => t.value)} color={BLUE} />
-            <ScoreCard icon="💰" label="Audit Keuangan" value={avgKeu} target={95} trend={keuTrend.map((t) => t.value)} color={GOLD} />
+            <ScoreCard icon="💰" label="Audit Kas Kecil" value={avgKeu} target={95} trend={keuTrend.map((t) => t.value)} color={GOLD} />
           </div>
           <GaugeCard score={avgTotal} />
         </div>
@@ -460,7 +460,7 @@ export default function DashboardAudit({ profile }) {
               <BarTrend data={svcTrend} target={95} color={BLUE} />
             </div>
             <div>
-              <div style={{ fontSize: 13.5, fontWeight: 700, color: "#b07212", marginBottom: 6 }}>Audit Keuangan</div>
+              <div style={{ fontSize: 13.5, fontWeight: 700, color: "#b07212", marginBottom: 6 }}>Audit Kas Kecil</div>
               <BarTrend data={keuTrend} target={95} color={GOLD} />
             </div>
           </div>
@@ -514,7 +514,7 @@ export default function DashboardAudit({ profile }) {
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12.5 }}>
               <thead>
                 <tr style={{ background: "var(--surface-alt)" }}>
-                  {["No", "Cabang", "% SOP", "Kesehatan Stok", "Service Ratio", "Audit Keuangan", "Total Skor", "Grade", "Risk Level"].map((h) => (
+                  {["No", "Cabang", "% SOP", "Kesehatan Stok", "Service Ratio", "Audit Kas Kecil", "Total Skor", "Grade", "Risk Level"].map((h) => (
                     <th key={h} style={{ textAlign: "left", padding: "8px 12px", fontWeight: 700, color: "var(--text-secondary)", borderBottom: "1px solid var(--border)" }}>{h}</th>
                   ))}
                 </tr>
@@ -546,7 +546,7 @@ export default function DashboardAudit({ profile }) {
         </div>
 
         <div style={{ fontSize: 10.5, color: "var(--text-faint)" }}>
-          Catatan: Total Skor dihitung berdasarkan bobot: SOP (30%), Kesehatan Stok (30%), Service Ratio (20%), Audit Keuangan (20%). Cabang tanpa data di salah satu modul dihitung dari sisa modul yang ada (bobot dinormalisasi). Skor Service Ratio dihitung berjenjang dari ratio asli (Laptop &amp; Aksesoris dinilai sendiri-sendiri lalu dirata-rata): 100 turun ke 90 di batas Terkendali, ke 70 di batas Monitoring, dan ke 40 di 2x batas Monitoring. Skor Audit Keuangan dipetakan dari tingkatan status modulnya (Terkendali/Efisien/Monitoring/dst) ke poin 100/90/70/65/40/35/25. Skala poin ini pemetaan asumsi, bukan definisi resmi dari modul aslinya.
+          Catatan: Total Skor dihitung berdasarkan bobot: SOP (30%), Kesehatan Stok (30%), Service Ratio (20%), Audit Kas Kecil (20%). Cabang tanpa data di salah satu modul dihitung dari sisa modul yang ada (bobot dinormalisasi). Skor Service Ratio dihitung berjenjang dari ratio asli (Laptop &amp; Aksesoris dinilai sendiri-sendiri lalu dirata-rata): 100 turun ke 90 di batas Terkendali, ke 70 di batas Monitoring, dan ke 40 di 2x batas Monitoring. Skor Audit Kas Kecil dipetakan dari tingkatan status modulnya (Terkendali/Efisien/Monitoring/dst) ke poin 100/90/70/65/40/35/25. Skala poin ini pemetaan asumsi, bukan definisi resmi dari modul aslinya.
           <br /><span style={{ color: GOLD, fontWeight: 800 }}>*</span> = saldo masuk melebihi limit kas bulan ini (nggak ngaruh ke skor, cuma penanda buat dicek).
         </div>
       </div>
@@ -725,7 +725,7 @@ function BranchDetailDrawer({ row, period, trend, keuSettings, isPersonalView, o
     { key: "sop", label: "% Kepatuhan SOP", v: row.sopScore, w: BOBOT.sop, t: TARGETS.sop, color: PURPLE },
     { key: "kes", label: "Kesehatan Stok", v: row.kesScore, w: BOBOT.kesehatan, t: TARGETS.kesehatan, color: GREEN },
     { key: "svc", label: "Service Ratio", v: row.svcScore, w: BOBOT.service, t: TARGETS.service, color: BLUE },
-    { key: "keu", label: "Audit Keuangan", v: row.keuScore, w: BOBOT.keuangan, t: TARGETS.keuangan, color: GOLD },
+    { key: "keu", label: "Audit Kas Kecil", v: row.keuScore, w: BOBOT.keuangan, t: TARGETS.keuangan, color: GOLD },
   ];
   const aktif = mods.filter((m) => m.v != null);
   const wSum = aktif.reduce((s, m) => s + m.w, 0);

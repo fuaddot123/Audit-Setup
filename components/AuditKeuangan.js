@@ -595,7 +595,7 @@ export default function AuditKeuangan({ profile }) {
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
             <div>
               <button className="btn-ghost" style={{ marginBottom: 8, fontSize: 12.5 }} onClick={closeModal}>&larr; Pilih cabang lain</button>
-              <div className="display" style={{ fontSize: 19, fontWeight: 600 }}>Audit Keuangan &mdash; {selectedBranch.name}</div>
+              <div className="display" style={{ fontSize: 19, fontWeight: 600 }}>Audit Kas Kecil &mdash; {selectedBranch.name}</div>
               <div style={{ color: "var(--text-secondary)", fontSize: 12 }}>
                 Bulan: {monthLabel(selectedPeriod)}
                 {selectedEntryId ? <span> &middot; mengedit audit tanggal {shortDate(currentEntry?.audit_date)}</span> : <span> &middot; audit baru</span>}
@@ -864,7 +864,7 @@ export default function AuditKeuangan({ profile }) {
     <div style={{ flex: 1 }}>
       <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)", display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Audit Keuangan</div>
+          <div className="display" style={{ fontSize: 20, fontWeight: 600 }}>Audit Kas Kecil</div>
           <div style={{ color: "var(--text-secondary)", fontSize: 12.5 }}>Pemantauan penggunaan kas kecil per cabang, per bulan</div>
         </div>
         <button className="btn" onClick={() => { setExportAllPeriod(allPeriods()[0] || null); setExportBranchIds(branches.map((b) => b.id)); setShowExportAll(true); }}>
