@@ -8,7 +8,7 @@ import AkunSwitcher from "./AkunSwitcher";
 
 const MODULES = [
   { key: "dashboard_audit", label: "Dashboard Audit", ready: true },
-  { key: "keuangan", label: "Audit Keuangan", ready: true },
+  { key: "keuangan", label: "Audit Kas Kecil", ready: true },
   {
     key: "sop", label: "Audit SOP", ready: true, subs: [
       { key: "cabang", label: "Audit Cabang" },
