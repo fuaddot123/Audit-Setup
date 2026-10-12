@@ -15,7 +15,7 @@ import {
   barisDisplayBaru, uploadDisplayMedia, hapusDisplayUntukPeriode,
   resetDisplayUntukCabang, hitungUmurHari,
 } from "./DisplayMonitoring";
-import { listFailedItems, scoreInfo, formatRupiah, getCatsForRecord } from "../lib/sopConfig";
+import { listFailedItems, scoreInfo, formatRupiah, getCatsForRecord, isCriticalItem, isLegacyChecklistRecord } from "../lib/sopConfig";
 import { formatRatioPct, formatKesehatanPct } from "../lib/stokConfig";
 import { computeStatus as computeStatusKeuangan } from "./AuditKeuangan";
 
@@ -85,6 +85,23 @@ function teksSelisihList(row) {
   return (pakai.length ? pakai : daftar).map((b) => teksBarang(b, row.nama));
 }
 function teksSelisih(row) { return teksSelisihList(row).join("; "); }
+// Item Inventaris yang Rusak BESERTA catatannya, buat teks WhatsApp (1 item per baris).
+// Format baru (Sept 2026 ke atas): per item ("Kategori \u2013 Item"); format lama: per kategori.
+function detailInventarisRusak(inv, period) {
+  if (!pakaiFormatBaru(period)) {
+    return INVENTARIS_CATEGORIES
+      .filter((cat) => statusKategori(inv, cat) === "Rusak")
+      .map((cat) => ({ label: cat, ket: String(inv[cat]?.keterangan || "").trim() }));
+  }
+  const out = [];
+  INVENTARIS_ITEMS.forEach((g) => {
+    g.items.forEach((nama) => {
+      const d = inv[kunciItem(g.kategori, nama)];
+      if (d?.status === "Rusak") out.push({ label: `${g.kategori} \u2013 ${nama}`, ket: String(d.keterangan || "").trim() });
+    });
+  });
+  return out;
+}
 function shortDate(d) {
   if (!d) return "\u2014";
   return new Date(d + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
@@ -838,8 +855,20 @@ export default function BeritaAcara({ profile }) {
         baris.push(`✅ SOP Kepatuhan: ${score}% (${scoreInfo(score).lbl})${catatanTgl(sopRow.data.audit_date)}`);
         const perKat = perKategoriSOP(sopRow.data);
         if (perKat.length) baris.push(`Per Kategori: ${perKat.map((k) => `${k.label} ${k.pct}%`).join(", ")}`);
-        const temuan = listFailedItems(sopRow.data).map((f) => f.text);
-        if (temuan.length) baris.push(`Temuan: ${temuan.join("; ")}`);
+        // Temuan SOP dijabarkan: 1 baris per butir yang TIDAK tercentang, ada nama kategori,
+        // butir Critical (Major) ditaruh paling atas dengan tanda. Critical cuma berlaku di checklist
+        // baru (Sept 2026 ke atas); audit lama (checklist 81 butir) nggak punya penanda ini.
+        const legacySop = isLegacyChecklistRecord(sopRow.data);
+        const temuan = listFailedItems(sopRow.data).map((f) => ({
+          ...f,
+          kritis: !legacySop && isCriticalItem(f.catId, Number(f.key.slice(f.key.lastIndexOf("_") + 1))),
+        }));
+        if (temuan.length) {
+          const urut = [...temuan.filter((t) => t.kritis), ...temuan.filter((t) => !t.kritis)];
+          baris.push("");
+          baris.push(`Temuan (${urut.length}):`);
+          urut.forEach((t) => baris.push(`${t.kritis ? "\u26a0\ufe0f" : "\u2022"} [${t.catLabel}] ${t.text}`));
+        }
         baris.push("");
       }
 
@@ -873,7 +902,6 @@ export default function BeritaAcara({ profile }) {
       const stockLengkap = semuaStock.filter((r) => r.status === "Lengkap").length;
       const stockSelisih = semuaStock.filter((r) => r.status === "Selisih");
       const invHitung = hitungInventaris(inventaris, viewPeriod);
-      const invRusak = daftarInventarisRusak(inventaris, viewPeriod);
       const unitDipajang = displayRows.filter((r) => !r.turun);
       const unitLewat = unitDipajang.filter((r) => r.status_umur === "Lewat Batas").length;
       const unitMendekati = unitDipajang.filter((r) => r.status_umur === "Mendekati Batas").length;
@@ -884,15 +912,12 @@ export default function BeritaAcara({ profile }) {
 
       baris.push("📝 Berita Acara");
       baris.push(`- Stock Opname: ${stockLengkap} Lengkap, ${stockSelisih.length} Selisih`);
-      stockSelisih.forEach((r) => {
-        const daftarTeks = teksSelisihList(r);
-        if (daftarTeks.length === 1) { baris.push(`  \u2022 ${daftarTeks[0]}`); return; }
-        baris.push(`  \u2022 ${String(r.nama || "").trim() || "\u2014"}`);
-        daftarTeks.forEach((t) => baris.push(`      - ${t}`));
-      });
+      // Teks WhatsApp harian sengaja RINGKAS: cuma hitungan Lengkap/Selisih (+ total nilai kalau ada
+      // harganya). Rincian per barang ada di PDF Berita Acara dan slide Daftar Selisih Barang.
       const nilaiSelisihTotal = stockSelisih.reduce((s2, r) => s2 + nilaiSelisihRow(r), 0);
       if (nilaiSelisihTotal > 0) baris.push(`  Total nilai selisih: Rp${nilaiSelisihTotal.toLocaleString("id-ID")}`);
-      baris.push(`- Inventaris: ${invHitung.berfungsi} Berfungsi, ${invHitung.rusak} Rusak${invRusak.length ? ` (${invRusak.join(", ")})` : ""}`);
+      baris.push(`- Inventaris: ${invHitung.berfungsi} Berfungsi, ${invHitung.rusak} Rusak`);
+      detailInventarisRusak(inventaris, viewPeriod).forEach((r) => baris.push(`  \u2022 ${r.label}${r.ket ? `: ${r.ket}` : ""}`));
       baris.push(`- Monitoring Display: ${unitDipajang.length} unit dipajang, ${unitLewat} lewat batas, ${unitMendekati} mendekati batas`);
       unitTua.forEach((r) => {
         const snBagian = r.serial_number ? ` (SN ...${r.serial_number.slice(-6)})` : "";
