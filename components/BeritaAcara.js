@@ -85,6 +85,22 @@ function teksSelisihList(row) {
   return (pakai.length ? pakai : daftar).map((b) => teksBarang(b, row.nama));
 }
 function teksSelisih(row) { return teksSelisihList(row).join("; "); }
+// 1 baris Selisih untuk teks WhatsApp, RINGKAS: "NAMA BARIS: nama barang ×jumlah; ..." Jumlah cuma
+// tampil kalau diisi. Kalau belum ada nama barang, pakai keterangan yang diketik; kalau itu juga
+// kosong, cukup nama barisnya. Keterangan yang sama dengan nama barang tidak diulang.
+function ringkasSelisihWA(row) {
+  const norm = (t) => String(t || "").toLowerCase().replace(/\s+/g, " ").trim();
+  const namaBaris = String(row.nama || "").trim() || "\u2014";
+  const ket = String(row.keterangan || "").trim();
+  const barang = daftarBarangSelisih(row)
+    .filter((b) => String(b.nama || "").trim())
+    .map((b) => `${String(b.nama).trim()}${b.qty === "" || b.qty == null ? "" : ` \u00d7${Number(b.qty) || 0}`}`);
+  if (barang.length) {
+    const ketPakai = ket && !barang.some((t) => norm(t).startsWith(norm(ket))) ? ` (${ket})` : "";
+    return `${namaBaris}: ${barang.join("; ")}${ketPakai}`;
+  }
+  return ket ? `${namaBaris}: ${ket}` : namaBaris;
+}
 // Item Inventaris yang Rusak BESERTA catatannya, buat teks WhatsApp (1 item per baris).
 // Format baru (Sept 2026 ke atas): per item ("Kategori \u2013 Item"); format lama: per kategori.
 function detailInventarisRusak(inv, period) {
@@ -912,8 +928,11 @@ export default function BeritaAcara({ profile }) {
 
       baris.push("📝 Berita Acara");
       baris.push(`- Stock Opname: ${stockLengkap} Lengkap, ${stockSelisih.length} Selisih`);
-      // Teks WhatsApp harian sengaja RINGKAS: cuma hitungan Lengkap/Selisih (+ total nilai kalau ada
-      // harganya). Rincian per barang ada di PDF Berita Acara dan slide Daftar Selisih Barang.
+      // Teks WhatsApp: daftar singkat apa saja yang selisih (nama barang + jumlah, tanpa harga),
+      // maksimal 10 baris. Rincian lengkap (kategori, harga) ada di PDF dan slide Daftar Selisih Barang.
+      const MAKS_SELISIH_WA = 10;
+      stockSelisih.slice(0, MAKS_SELISIH_WA).forEach((r) => baris.push(`  \u2022 ${ringkasSelisihWA(r)}`));
+      if (stockSelisih.length > MAKS_SELISIH_WA) baris.push(`  \u2026 dan ${stockSelisih.length - MAKS_SELISIH_WA} selisih lainnya (lihat PDF Berita Acara)`);
       const nilaiSelisihTotal = stockSelisih.reduce((s2, r) => s2 + nilaiSelisihRow(r), 0);
       if (nilaiSelisihTotal > 0) baris.push(`  Total nilai selisih: Rp${nilaiSelisihTotal.toLocaleString("id-ID")}`);
       baris.push(`- Inventaris: ${invHitung.berfungsi} Berfungsi, ${invHitung.rusak} Rusak`);
