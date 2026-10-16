@@ -326,6 +326,16 @@ export async function muatDisplay({ branchId, period, isolate, userId }) {
   const kondisiByUnit = {};
   kondisiPeriode.forEach((k) => { kondisiByUnit[k.display_unit_id] = k; });
 
+  // Catatan perlakuan TIDAK ada di view v_display_monitoring, jadi diambil terpisah dari tabel.
+  // Tanpa ini, catatan yang sudah tersimpan tampil kosong lagi setelah simpan (kelihatan seperti
+  // tidak tersimpan) dan nggak bisa dikoreksi. Kalau query-nya gagal, dianggap kosong (aman).
+  const catatanPerlakuan = {};
+  const idTurun = relevan.filter((u) => !u.masih_dipajang).map((u) => u.id);
+  if (idTurun.length) {
+    const cr = await supabase.from("display_unit").select("id, perlakuan_catatan").in("id", idTurun);
+    (cr.data || []).forEach((c) => { catatanPerlakuan[c.id] = c.perlakuan_catatan || ""; });
+  }
+
   const rows = relevan.map((u) => {
     const k = kondisiByUnit[u.id] || null;
     return {
@@ -350,8 +360,12 @@ export async function muatDisplay({ branchId, period, isolate, userId }) {
       turun: !u.masih_dipajang,
       perlakuan_kode: u.perlakuan_kode || "",
       perlakuan_baru_label: "",
-      perlakuan_catatan: "",
+      perlakuan_catatan: catatanPerlakuan[u.id] || "",
       harga_jual_display: u.harga_jual_display == null ? "" : String(u.harga_jual_display),
+      // Nilai tersimpan saat form dimuat — buat mendeteksi koreksi pada unit yang SUDAH diturunkan
+      perlakuan_kode_asli: u.perlakuan_kode || "",
+      perlakuan_catatan_asli: catatanPerlakuan[u.id] || "",
+      harga_jual_display_asli: u.harga_jual_display == null ? "" : String(u.harga_jual_display),
       baru: false,
     };
   });
@@ -381,6 +395,10 @@ export function periksaDisplay(rows) {
     }
     if (r.turun && !r.perlakuan_kode)
       galat.push(`${nama}: ditandai turun display tapi perlakuannya belum dipilih.`);
+    // Catatan & foto kondisi cuma tersimpan bersama pilihan Kondisi (kolom kondisi_kode wajib diisi).
+    // Dulu kalau kondisinya belum dipilih, catatannya dibuang diam-diam.
+    if (!r.turun && !r.kondisi_kode && (String(r.kondisi_catatan || "").trim() || (r.photos || []).length))
+      galat.push(`${nama}: ada catatan atau foto kondisi, tapi kondisinya belum dipilih (pilih dulu di kolom Kondisi).`);
     if (r.kondisi_kode === OPSI_BARU) {
       if (!r.kondisi_baru_label.trim())
         galat.push(`${nama}: kondisi baru dipilih tapi istilahnya belum ditulis.`);
@@ -523,6 +541,32 @@ export async function simpanDisplay({ rows, branchId, period, auditDate, userId,
         harga_jual_display: r.harga_jual_display === "" ? null : Number(r.harga_jual_display),
       }).eq("id", unitId);
       if (error) throw new Error(`${r.brand} ${r.model}: ${error.message}`);
+    }
+
+    // Unit yang SUDAH diturunkan (mis. di kunjungan sebelumnya pada periode ini): perlakuannya
+    // masih boleh dikoreksi. Dulu blok di atas cuma jalan untuk unit yang baru diturunkan sekarang
+    // (masih_dipajang), jadi koreksi pada unit lama dilewati diam-diam dan setelah simpan kembali
+    // ke nilai lama. Cuma menulis kalau ada yang berubah, dan error kalau diblok izin database.
+    if (r.turun && !r.masih_dipajang && !r.baru && unitId) {
+      const kodeBaru = kodePerlakuan(r) || null;
+      const kodeAsli = r.perlakuan_kode_asli || null;
+      const hargaAsli = r.harga_jual_display_asli === "" || r.harga_jual_display_asli == null ? null : Number(r.harga_jual_display_asli);
+      const hargaIsi = r.harga_jual_display === "" ? null : Number(r.harga_jual_display);
+      const hargaBaru = kodeBaru === "dijual_display" ? hargaIsi : null;
+      const catatanBaru = r.perlakuan_catatan.trim();
+      const catatanBerubah = catatanBaru !== (r.perlakuan_catatan_asli || "").trim();
+      if (kodeBaru !== kodeAsli || hargaBaru !== hargaAsli || catatanBerubah) {
+        const dataUbah = { perlakuan_kode: kodeBaru, harga_jual_display: hargaBaru };
+        if (catatanBerubah) dataUbah.perlakuan_catatan = catatanBaru || null;
+        const { data: terubah, error } = await supabase.from("display_unit").update(dataUbah).eq("id", unitId).select("id");
+        if (error) throw new Error(`${r.brand} ${r.model}: ${error.message}`);
+        if (!terubah || !terubah.length) {
+          throw new Error(
+            `${r.brand} ${r.model}: gagal mengubah perlakuan — kemungkinan besar policy UPDATE ` +
+            `di tabel display_unit (Supabase) belum mengizinkan role auditor mengubah baris ini. Cek RLS policy-nya.`
+          );
+        }
+      }
     }
 
     // Catatan kondisi kunjungan ini
