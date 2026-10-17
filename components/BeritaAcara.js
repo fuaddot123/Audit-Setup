@@ -953,6 +953,14 @@ export default function BeritaAcara({ profile }) {
         const jumlahBerharga = stockSelisih.filter((r) => nilaiSelisihRow(r) > 0).length;
         baris.push(`  Total nilai selisih: Rp${nilaiSelisihTotal.toLocaleString("id-ID")} (${jumlahBerharga} dari ${stockSelisih.length} barang berharga)`);
       }
+      // Barang yang statusnya Lengkap tapi ada catatannya (mis. tipe/SN yang dicek): ikut ditulis supaya
+      // catatannya tidak hilang dari laporan. Hanya yang ADA keterangannya, bukan semua barang Lengkap.
+      const lengkapBerCatatan = semuaStock.filter((r) => r.status === "Lengkap" && String(r.keterangan || "").trim());
+      if (lengkapBerCatatan.length) {
+        baris.push("  Lengkap dengan catatan:");
+        lengkapBerCatatan.slice(0, MAKS_SELISIH_WA).forEach((r) => baris.push(`  \u2022 ${String(r.nama || "").trim() || "\u2014"}: ${String(r.keterangan).trim()}`));
+        if (lengkapBerCatatan.length > MAKS_SELISIH_WA) baris.push(`  \u2026 dan ${lengkapBerCatatan.length - MAKS_SELISIH_WA} catatan lainnya (lihat PDF Berita Acara)`);
+      }
       baris.push(`- Inventaris: ${invHitung.berfungsi} Berfungsi, ${invHitung.rusak} Rusak`);
       detailInventarisRusak(inventaris, viewPeriod).forEach((r) => baris.push(`  \u2022 ${r.label}${r.ket ? `: ${r.ket}` : ""}`));
       baris.push(`- Monitoring Display: ${unitDipajang.length} unit dipajang, ${unitLewat} lewat batas, ${unitMendekati} mendekati batas`);
