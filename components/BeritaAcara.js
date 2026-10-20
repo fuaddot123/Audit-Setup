@@ -855,7 +855,7 @@ export default function BeritaAcara({ profile }) {
       }
 
       const baris = [];
-      baris.push("📋 LAPORAN KUNJUNGAN AUDIT");
+      baris.push("📋 *LAPORAN KUNJUNGAN AUDIT*");
       baris.push(`Cabang: ${selectedBranch.name}`);
       baris.push(`Tanggal: ${new Date(auditDate + "T00:00:00").toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" })}`);
       baris.push(`Auditor: ${profile?.full_name || "-"}`);
@@ -869,9 +869,9 @@ export default function BeritaAcara({ profile }) {
       let ringkasSop = "SOP belum diaudit";
       if (sopRow) {
         const score = sopRow.data.score || 0;
-        baris.push(`✅ SOP Kepatuhan: ${score}% (${scoreInfo(score).lbl})${catatanTgl(sopRow.data.audit_date)}`);
+        baris.push(`✅ *SOP Kepatuhan:* ${score}% (${scoreInfo(score).lbl})${catatanTgl(sopRow.data.audit_date)}`);
         const perKat = perKategoriSOP(sopRow.data);
-        if (perKat.length) baris.push(`Per Kategori: ${perKat.map((k) => `${k.label} ${k.pct}%`).join(", ")}`);
+        if (perKat.length) baris.push(`*Per Kategori:* ${perKat.map((k) => `${k.label} ${k.pct}%`).join(", ")}`);
         // Temuan SOP dijabarkan: 1 baris per butir yang TIDAK tercentang, ada nama kategori,
         // butir Critical (Major) ditaruh paling atas dengan tanda. Critical cuma berlaku di checklist
         // baru (Sept 2026 ke atas); audit lama (checklist 81 butir) nggak punya penanda ini.
@@ -885,46 +885,46 @@ export default function BeritaAcara({ profile }) {
         if (temuan.length) {
           const urut = [...temuan.filter((t) => t.kritis), ...temuan.filter((t) => !t.kritis)];
           baris.push("");
-          baris.push(`Temuan (${urut.length}):`);
+          baris.push(`*Temuan (${urut.length}):*`);
           urut.forEach((t) => baris.push(`${t.kritis ? "\u26a0\ufe0f" : "\u2022"} [${t.catLabel}] ${t.text}`));
         }
         baris.push("");
       } else {
-        baris.push("\u23f3 SOP: belum diaudit bulan ini");
+        baris.push("\u23f3 *SOP:* belum diaudit bulan ini");
         baris.push("");
       }
 
       if (stokSRow || stokKRow) {
-        baris.push("📦 Audit Stok");
+        baris.push("📦 *Audit Stok*");
         if (stokSRow) {
           const d = stokSRow.data;
-          baris.push(`- Service Ratio Laptop: ${formatRatioPct(d.ratio_laptop)} (${d.indikator_laptop}) — ${d.laptop || 0} toko + ${d.user || 0} customer dari ${d.total_unit_laptop || 0} unit${catatanTgl(d.audit_date)}`);
-          baris.push(`- Service Ratio Aksesoris: ${formatRatioPct(d.ratio_aksesoris)} (${d.indikator_aksesoris}) — ${d.aksesoris || 0} toko + ${d.aksesoris_customer || 0} customer dari ${d.total_unit_aksesoris || 0} unit`);
+          baris.push(`- *Service Ratio Laptop:* ${formatRatioPct(d.ratio_laptop)} (${d.indikator_laptop}) — ${d.laptop || 0} toko + ${d.user || 0} customer dari ${d.total_unit_laptop || 0} unit`);
+          baris.push(`- *Service Ratio Aksesoris:* ${formatRatioPct(d.ratio_aksesoris)} (${d.indikator_aksesoris}) — ${d.aksesoris || 0} toko + ${d.aksesoris_customer || 0} customer dari ${d.total_unit_aksesoris || 0} unit`);
         }
         if (stokKRow) {
           const d = stokKRow.data;
-          baris.push(`- Kesehatan Stok: ${formatKesehatanPct(d.kesehatan_pct)} — ${d.temuan_count || 0} temuan, ${d.bonus_count || 0} bonus, untung/rugi ${formatRupiah(d.untung_rugi || 0)}${catatanTgl(d.audit_date)}`);
+          baris.push(`- *Kesehatan Stok:* ${formatKesehatanPct(d.kesehatan_pct)} — ${d.temuan_count || 0} barang tertukar, ${d.bonus_count || 0} bonus, untung/rugi ${formatRupiah(d.untung_rugi || 0)}`);
         }
-        if (!stokSRow) baris.push("- Service Ratio: belum diaudit bulan ini");
-        if (!stokKRow) baris.push("- Kesehatan Stok: belum diaudit bulan ini");
+        if (!stokSRow) baris.push("- *Service Ratio:* belum diaudit bulan ini");
+        if (!stokKRow) baris.push("- *Kesehatan Stok:* belum diaudit bulan ini");
         baris.push("");
       } else {
-        baris.push("\u23f3 Audit Stok: belum diaudit bulan ini");
+        baris.push("\u23f3 *Audit Stok:* belum diaudit bulan ini");
         baris.push("");
       }
 
       if (keuRow && statusKeu) {
-        baris.push("💰 Audit Keuangan");
-        baris.push(`- Saldo bulan sebelumnya: ${formatRupiah(keuRow.saldo_sebelumnya)}${catatanTgl(keuRow.audit_date)}`);
-        baris.push(`- Saldo masuk bulan berjalan: ${formatRupiah(keuRow.saldo_masuk)}`);
-        baris.push(`- Limit kas kecil: ${formatRupiah(keuRow.limit_kas)}`);
-        baris.push(`- Pengeluaran kas kecil: ${formatRupiah(keuRow.pengeluaran)}`);
-        baris.push(`- Sisa Saldo: ${formatRupiah(statusKeu.sisa)}`);
-        baris.push(`- Posisi: ${(statusKeu.posisi * 100).toFixed(0)}% (${statusKeu.indikator})`);
-        if (statusKeu.bawaanMinus < 0) baris.push(`\u26a0\ufe0f Bawaan minus bulan lalu: ${formatRupiah(statusKeu.bawaanMinus)} (ikut mengurangi kas bulan ini)`);
+        baris.push("💰 *Audit Kas Kecil*");
+        baris.push(`- *Saldo bulan sebelumnya:* ${formatRupiah(keuRow.saldo_sebelumnya)}${catatanTgl(keuRow.audit_date)}`);
+        baris.push(`- *Saldo masuk bulan berjalan:* ${formatRupiah(keuRow.saldo_masuk)}`);
+        baris.push(`- *Limit kas kecil:* ${formatRupiah(keuRow.limit_kas)}`);
+        baris.push(`- *Pengeluaran kas kecil:* ${formatRupiah(keuRow.pengeluaran)}`);
+        baris.push(`- *Sisa Saldo:* ${formatRupiah(statusKeu.sisa)}`);
+        baris.push(`- *Posisi:* ${(statusKeu.posisi * 100).toFixed(0)}% (${statusKeu.indikator})`);
+        if (statusKeu.bawaanMinus < 0) baris.push(`\u26a0\ufe0f *Bawaan minus bulan lalu:* ${formatRupiah(statusKeu.bawaanMinus)} (ikut mengurangi kas bulan ini)`);
         baris.push("");
       } else if (!keuRow) {
-        baris.push("\u23f3 Audit Keuangan: belum diaudit bulan ini");
+        baris.push("\u23f3 *Audit Kas Kecil:* belum diaudit bulan ini");
         baris.push("");
       }
 
@@ -941,8 +941,8 @@ export default function BeritaAcara({ profile }) {
         .filter((r) => r.status_umur === "Lewat Batas" || r.status_umur === "Mendekati Batas")
         .sort((a, b) => b.umur - a.umur);
 
-      baris.push("📝 Berita Acara");
-      baris.push(`- Stock Opname: ${stockLengkap} Lengkap, ${stockSelisih.length} Selisih`);
+      baris.push("📝 *Berita Acara*");
+      baris.push(`- *Stock Opname:* ${stockLengkap} Lengkap, ${stockSelisih.length} Selisih`);
       // Teks WhatsApp: daftar singkat apa saja yang selisih (nama barang + jumlah, tanpa harga),
       // maksimal 10 baris. Rincian lengkap (kategori, harga) ada di PDF dan slide Daftar Selisih Barang.
       const MAKS_SELISIH_WA = 10;
@@ -957,15 +957,15 @@ export default function BeritaAcara({ profile }) {
       // catatannya tidak hilang dari laporan. Hanya yang ADA keterangannya, bukan semua barang Lengkap.
       const lengkapBerCatatan = semuaStock.filter((r) => r.status === "Lengkap" && String(r.keterangan || "").trim());
       if (lengkapBerCatatan.length) {
-        baris.push("  Lengkap dengan catatan:");
+        baris.push("  *Lengkap dengan catatan:*");
         lengkapBerCatatan.slice(0, MAKS_SELISIH_WA).forEach((r) => baris.push(`  \u2022 ${String(r.nama || "").trim() || "\u2014"}: ${String(r.keterangan).trim()}`));
         if (lengkapBerCatatan.length > MAKS_SELISIH_WA) baris.push(`  \u2026 dan ${lengkapBerCatatan.length - MAKS_SELISIH_WA} catatan lainnya (lihat PDF Berita Acara)`);
       }
-      baris.push(`- Inventaris: ${invHitung.berfungsi} Berfungsi, ${invHitung.rusak} Rusak`);
+      baris.push(`- *Inventaris:* ${invHitung.berfungsi} Berfungsi, ${invHitung.rusak} Rusak`);
       detailInventarisRusak(inventaris, viewPeriod).forEach((r) => baris.push(`  \u2022 ${r.label}${r.ket ? `: ${r.ket}` : ""}`));
-      baris.push(`- Monitoring Display: ${unitDipajang.length} unit dipajang, ${unitLewat} lewat batas, ${unitMendekati} mendekati batas`);
+      baris.push(`- *Monitoring Display:* ${unitDipajang.length} unit dipajang, ${unitLewat} lewat batas, ${unitMendekati} mendekati batas`);
       unitTua.forEach((r) => {
-        const snBagian = r.serial_number ? ` (SN ...${r.serial_number.slice(-6)})` : "";
+        const snBagian = r.serial_number ? ` (SN ${r.serial_number})` : "";
         const ket = r.status_umur === "Lewat Batas" ? `, lewat ${r.umur - r.batas_hari} hari`
           : r.status_umur === "Mendekati Batas" ? ", mendekati batas" : "";
         baris.push(`  • ${r.brand} ${r.model}${snBagian} - ${r.umur} hari${ket}`);
@@ -980,7 +980,7 @@ export default function BeritaAcara({ profile }) {
         `${unitLewat} display lewat batas`,
       ];
       if (keuRow && statusKeu) bagianRingkas.push(`kas ${statusKeu.indikator}`);
-      baris.splice(baris.indexOf("━━━━━━━━━━━━━━━━━━━") + 1, 0, `\ud83d\udccc Ringkasan: ${bagianRingkas.join(" \u00b7 ")}`, "");
+      baris.splice(baris.indexOf("━━━━━━━━━━━━━━━━━━━") + 1, 0, `\ud83d\udccc *Ringkasan:* ${bagianRingkas.join(" \u00b7 ")}`, "");
 
       const teks = baris.join("\n");
       setLaporanKunjunganTeks(teks);
