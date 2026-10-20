@@ -118,6 +118,25 @@ function detailInventarisRusak(inv, period) {
   });
   return out;
 }
+// Item Inventaris yang Berfungsi TAPI ada catatannya (mis. "kabel agak longgar", "perlu diservis bulan depan"),
+// buat teks WhatsApp. Hanya yang ADA keterangannya; item Berfungsi tanpa catatan tidak ditulis satu per satu.
+function detailInventarisBerfungsiCatatan(inv, period) {
+  if (!pakaiFormatBaru(period)) {
+    return INVENTARIS_CATEGORIES
+      .filter((cat) => statusKategori(inv, cat) !== "Rusak")
+      .map((cat) => ({ label: cat, ket: String(inv[cat]?.keterangan || "").trim() }))
+      .filter((r) => r.ket);
+  }
+  const out = [];
+  INVENTARIS_ITEMS.forEach((g) => {
+    g.items.forEach((nama) => {
+      const d = inv[kunciItem(g.kategori, nama)];
+      const ket = String(d?.keterangan || "").trim();
+      if (d?.status === "Berfungsi" && ket) out.push({ label: `${g.kategori} \u2013 ${nama}`, ket });
+    });
+  });
+  return out;
+}
 function shortDate(d) {
   if (!d) return "\u2014";
   return new Date(d + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
@@ -963,6 +982,12 @@ export default function BeritaAcara({ profile }) {
       }
       baris.push(`- *Inventaris:* ${invHitung.berfungsi} Berfungsi, ${invHitung.rusak} Rusak`);
       detailInventarisRusak(inventaris, viewPeriod).forEach((r) => baris.push(`  \u2022 ${r.label}${r.ket ? `: ${r.ket}` : ""}`));
+      const invBerCatatan = detailInventarisBerfungsiCatatan(inventaris, viewPeriod);
+      if (invBerCatatan.length) {
+        baris.push("  *Berfungsi dengan catatan:*");
+        invBerCatatan.slice(0, MAKS_SELISIH_WA).forEach((r) => baris.push(`  \u2022 ${r.label}: ${r.ket}`));
+        if (invBerCatatan.length > MAKS_SELISIH_WA) baris.push(`  \u2026 dan ${invBerCatatan.length - MAKS_SELISIH_WA} catatan lainnya (lihat PDF Berita Acara)`);
+      }
       baris.push(`- *Monitoring Display:* ${unitDipajang.length} unit dipajang, ${unitLewat} lewat batas, ${unitMendekati} mendekati batas`);
       unitTua.forEach((r) => {
         const snBagian = r.serial_number ? ` (SN ${r.serial_number})` : "";
