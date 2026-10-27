@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { supabase } from "../../lib/supabaseClient";
 import { sortBranches } from "../../lib/branchOrder";
 import {
@@ -6,6 +6,7 @@ import {
   scoreInfo, scoreColor, formatRupiah, nowPeriode, periodeLabel,
 } from "../../lib/sopConfig";
 import { buildSummaryReportHtml, openPrintWindow } from "../../lib/pdfReportTemplate";
+import { submittedSopFindings } from "../../lib/sopReportFindings";
 import BranchMultiSelect from "../BranchMultiSelect";
 
 export default function SopLaporan({ profile }) {
@@ -15,9 +16,11 @@ export default function SopLaporan({ profile }) {
   const [targetRows, setTargetRows] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [generating, setGenerating] = useState(null);
 
   const [pdfPeriod, setPdfPeriod] = useState(nowPeriode());
   const [pdfBranchIds, setPdfBranchIds] = useState([]);
+  const loadSeq = useRef(0);
 
   // Isolasi per-auditor mulai Agustus 2026 ke depan (Jan-Jul 2026 tetep gabungan semua kayak
   // biasa). Laporan yang di-generate auditor buat periode >= cutoff otomatis jadi versi
@@ -25,11 +28,13 @@ export default function SopLaporan({ profile }) {
   const ISOLATION_START_PERIOD = "2026-08";
   const isPersonalView = profile?.role === "auditor" && pdfPeriod >= ISOLATION_START_PERIOD;
 
-  useEffect(() => { loadAll(); }, []);
+  useEffect(() => { loadAll(); }, [profile?.id, profile?.role]);
 
   async function loadAll() {
+    const seq = ++loadSeq.current;
     setLoading(true);
     setError(null);
+    setSopRecords([]);
     try {
       let sopQuery = supabase.from("audit_generic").select("*").eq("module", "sop").order("updated_at", { ascending: false });
       if (profile?.role === "auditor") {
@@ -41,6 +46,7 @@ export default function SopLaporan({ profile }) {
         supabase.from("ranking_scores").select("*"),
         supabase.from("sales_targets").select("*"),
       ]);
+      if (seq !== loadSeq.current) return;
       if (brRes.error) throw brRes.error;
       if (sopRes.error) throw sopRes.error;
       const sortedBr = sortBranches(brRes.data || []);
@@ -50,9 +56,9 @@ export default function SopLaporan({ profile }) {
       setRankingRows(rankRes.data || []);
       setTargetRows(tgtRes.data || []);
     } catch (err) {
-      setError("Gagal memuat data: " + err.message);
+      if (seq === loadSeq.current) setError("Gagal memuat data: " + err.message);
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }
 
@@ -71,23 +77,56 @@ export default function SopLaporan({ profile }) {
   // ── EXCEL: laporan 1 periode ──
 
   // ── PDF: buka jendela cetak berisi ringkasan eksekutif + lampiran checklist ──
-  function exportPDF() {
+  async function exportPDF(mode) {
+    if (generating) return;
     setError(null);
     const targets = branches.filter((b) => pdfBranchIds.includes(b.id) && latestFor(b.id, pdfPeriod) && !latestFor(b.id, pdfPeriod).data?.tidak_visit);
 
     if (!targets.length) { setError("Tidak ada cabang dengan data audit pada periode ini."); return; }
 
-    const pagesHtml = targets.map((b) => {
-      const rec = latestFor(b.id, pdfPeriod);
-      if (!rec) return "";
-      const w = calcWeightedFromRecord(rec.data);
-      const s = scoreInfo(w);
-      return buildExecutiveSummaryHtml(b, rec, w, s) + buildBranchPageHtml(b, rec, w, s);
-    }).join("");
-
     const win = window.open("", "_blank");
     if (!win) { setError("Popup diblokir browser. Izinkan popup untuk mencetak PDF."); return; }
-    win.document.write(`<!DOCTYPE html><html><head><title>${isPersonalView ? "Laporan Audit SOP - Data Saya" : "Laporan Audit SOP"}</title><meta charset="utf-8">
+    win.document.write("<p style='font:16px Arial;padding:24px'>Menyiapkan laporan audit SOP…</p>");
+    setGenerating(mode);
+
+    try {
+      const aiByRecord = new Map();
+      if (mode === "critical") {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) throw new Error("Sesi berakhir. Masuk kembali ke aplikasi.");
+        const response = await fetch("/api/sop-critical-findings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${session.access_token}` },
+          body: JSON.stringify({ recordIds: targets.map((b) => latestFor(b.id, pdfPeriod).id) }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "Analisis temuan krusial gagal.");
+        for (const finding of result.findings || []) {
+          const list = aiByRecord.get(finding.recordId) || [];
+          list.push(finding);
+          aiByRecord.set(finding.recordId, list);
+        }
+      }
+
+      const pagesHtml = targets.map((b) => {
+        const rec = latestFor(b.id, pdfPeriod);
+        const w = calcWeightedFromRecord(rec.data);
+        const s = scoreInfo(w);
+        const allFindings = submittedSopFindings(rec.data);
+        const selected = mode === "critical"
+          ? new Map((aiByRecord.get(rec.id) || []).map((finding) => [finding.key, finding]))
+          : null;
+        const reportFindings = selected
+          ? allFindings.filter((finding) => selected.has(finding.key))
+            .map((finding) => ({ ...finding, ...selected.get(finding.key) }))
+          : allFindings;
+        return buildExecutiveSummaryHtml(b, rec, w, s, reportFindings, allFindings.length, mode)
+          + buildFindingsPageHtml(b, rec, reportFindings, mode)
+          + (mode === "all" ? buildBranchPageHtml(b, rec, w, s) : "");
+      }).join("");
+
+      win.document.open();
+      win.document.write(`<!DOCTYPE html><html><head><title>${mode === "critical" ? "Laporan Utama - Temuan Krusial" : "Laporan Semua Temuan"}</title><meta charset="utf-8">
       <style>
         * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
         @page { margin: 8mm; }
@@ -166,17 +205,31 @@ export default function SopLaporan({ profile }) {
         table.ptbl { width: 100%; border-collapse: collapse; font-size: 9.5px; margin-bottom: 10px; }
         table.ptbl th { background: #f5f3fa; text-align: left; padding: 5px 7px; }
         table.ptbl td { padding: 4px 7px; border-bottom: 1px solid #eee; vertical-align: top; }
+        table.finding-tbl { width: 100%; border-collapse: collapse; font-size: 9px; }
+        table.finding-tbl thead { display: table-header-group; }
+        table.finding-tbl th { background: #2A1F52; color: #fff; text-align: left; padding: 7px; }
+        table.finding-tbl td { border-bottom: 1px solid #e9e4ef; padding: 7px; vertical-align: top; }
+        table.finding-tbl tr { break-inside: avoid; }
+        .finding-note { margin-top: 4px; color: #775d24; font-size: 8.5px; }
+        .finding-photos { display: flex; gap: 4px; margin-top: 5px; }
+        .finding-photos img { width: 45px; height: 45px; object-fit: cover; border: 1px solid #ddd; }
         .cat-head { padding: 5px 8px; color: #fff; font-size: 10px; font-weight: 700; display: flex; justify-content: space-between; margin-top: 8px; border-radius: 4px 4px 0 0; }
         .footer { font-size: 8.5px; color: #999; display: flex; justify-content: space-between; margin-top: 18px; border-top: 1px solid #eee; padding-top: 6px; }
         @media print { .page { padding: 14px 20px; } }
       </style></head><body>${pagesHtml}
       <script>window.onload = () => setTimeout(() => window.print(), 300);<\/script>
       </body></html>`);
-    win.document.close();
+      win.document.close();
+    } catch (err) {
+      win.close();
+      setError(err.message || "Gagal membuat laporan audit.");
+    } finally {
+      setGenerating(null);
+    }
   }
 
   // ── Halaman Executive Summary per cabang (halaman pertama, sebelum lampiran checklist) ──
-  function buildExecutiveSummaryHtml(branch, rec, weightedScore, statusInfo) {
+  function buildExecutiveSummaryHtml(branch, rec, weightedScore, statusInfo, reportFindings, allCount, mode) {
     const printDate = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
     const printTime = new Date().toLocaleTimeString("id-ID", { hour: "2-digit", minute: "2-digit" });
     const inputDate = rec.data?.audit_date ? formatDate(rec.data.audit_date) : "\u2014";
@@ -189,16 +242,11 @@ export default function SopLaporan({ profile }) {
     const bermasalah = catStatus.filter((c) => !c.sempurna);
     const sempurna = catStatus.filter((c) => c.sempurna);
 
-    const failedItems = [];
-    CATS.forEach((c) => {
-      c.items.forEach((text, i) => {
-        const key = c.id + "_" + i;
-        const checks = rec.data?.checks || {};
-        const isOk = Object.keys(checks).length ? !!checks[key] : true;
-        if (!isOk) failedItems.push(text);
-      });
-    });
-    const top5 = failedItems.slice(0, 5);
+    const top5 = reportFindings.slice(0, 5);
+    const findingLabel = mode === "critical" ? "Temuan Krusial" : "Total Temuan";
+    const focusCategories = mode === "critical"
+      ? bermasalah.filter((cat) => reportFindings.some((finding) => finding.category === cat.cat.label))
+      : bermasalah;
 
     // Kata-katanya disamain sumbernya sama badge skor (scoreInfo) — biar nggak pernah beda
     // kayak kasus "85% Baik" di badge tapi "cukup baik, perlu diperbaiki segera" di teks ini.
@@ -228,8 +276,8 @@ export default function SopLaporan({ profile }) {
         </div>
       </div>
 
-      <div class="title2">LAPORAN AUDIT SOP</div>
-      <div class="subtitle2">Ringkasan eksekutif hasil audit checklist SOP cabang</div>
+      <div class="title2">${mode === "critical" ? "LAPORAN UTAMA — TEMUAN KRUSIAL" : "LAPORAN AUDIT SOP — SEMUA TEMUAN"}</div>
+      <div class="subtitle2">${mode === "critical" ? "Temuan berdampak pada SOP/operasional dipilih dengan bantuan AI; keputusan tindak lanjut tetap pada auditor." : "Seluruh temuan yang ditandai auditor sebagai tidak sesuai."}</div>
 
       <div class="info-row">
         <div class="info-box"><div class="l">Cabang</div><div class="v">${esc(branch.name)}</div></div>
@@ -243,7 +291,7 @@ export default function SopLaporan({ profile }) {
           <div class="l">Skor SOP</div><div class="v" style="color:${statusInfo.color}">${weightedScore}%</div><div class="s" style="color:${statusInfo.color}">${esc(statusInfo.lbl)}</div>
         </div>
         <div class="score-card" style="background:#a3202012;border-color:#a3202055;">
-          <div class="l">Total Temuan</div><div class="v" style="color:#a32020">${failedItems.length}</div><div class="s" style="color:#a32020">dari ${TOTAL_ITEMS} item</div>
+          <div class="l">${findingLabel}</div><div class="v" style="color:#a32020">${reportFindings.length}</div><div class="s" style="color:#a32020">${mode === "critical" ? `dari ${allCount} temuan tercatat` : `dari ${TOTAL_ITEMS} item`}</div>
         </div>
         <div class="score-card" style="background:#1a9e6e12;border-color:#1a9e6e55;">
           <div class="l">Kategori Sempurna</div><div class="v" style="color:#1a9e6e">${sempurna.length}</div><div class="s" style="color:#1a9e6e">dari ${CATS.length} kategori</div>
@@ -254,7 +302,7 @@ export default function SopLaporan({ profile }) {
       </div>
 
       <div class="metric-row">
-        <div class="metric-card" style="border-color:#a32020;"><div class="l">Total Temuan</div><div class="v">${failedItems.length}</div></div>
+        <div class="metric-card" style="border-color:#a32020;"><div class="l">${findingLabel}</div><div class="v">${reportFindings.length}</div></div>
         <div class="metric-card" style="border-color:#b07212;"><div class="l">Kategori Bermasalah</div><div class="v">${bermasalah.length}</div></div>
         <div class="metric-card" style="border-color:#1a9e6e;"><div class="l">Kategori Sempurna</div><div class="v">${sempurna.length}</div></div>
         <div class="metric-card" style="border-color:#7c3aed;"><div class="l">Kategori Diaudit</div><div class="v">${CATS.length}</div></div>
@@ -263,14 +311,14 @@ export default function SopLaporan({ profile }) {
       <div class="box2" style="background:#f5f3fa;border:1px solid #e0d8f0;">
         <div class="box2-title" style="color:#2A1F52;">Ringkasan Audit</div>
         <div style="font-size:10.5px;">Skor SOP cabang <b>${esc(branch.name)}</b> periode ${esc(periodeLabel(rec.period))} adalah <b>${weightedScore}% (${esc(statusInfo.lbl)})</b>.</div>
-        ${bermasalah.length ? `<div style="font-size:10px;margin-top:6px;">Fokus perbaikan utama:</div><ul>${bermasalah.map((c) => `<li>${esc(c.cat.label)}</li>`).join("")}</ul>` : `<div style="font-size:10px;margin-top:6px;color:#1a9e6e;">Semua kategori sudah sesuai standar.</div>`}
+        ${focusCategories.length ? `<div style="font-size:10px;margin-top:6px;">Fokus perbaikan utama:</div><ul>${focusCategories.map((c) => `<li>${esc(c.cat.label)}</li>`).join("")}</ul>` : `<div style="font-size:10px;margin-top:6px;">${mode === "critical" ? "Tidak ada temuan yang dipilih AI sebagai krusial; daftar lengkap tersedia di laporan Semua Temuan." : "Semua kategori sudah sesuai standar."}</div>`}
       </div>
 
       <div class="two-col">
         <div>
-          <div class="box2-title" style="color:#a32020;">Top 5 Temuan Audit</div>
+          <div class="box2-title" style="color:#a32020;">${mode === "critical" ? "Top Temuan Krusial" : "Top 5 Temuan Audit"}</div>
           <table class="temuan-tbl"><thead><tr><th>Temuan</th><th style="text-align:right;width:50px;">Jumlah</th></tr></thead>
-          <tbody>${top5.length ? top5.map((t) => `<tr><td>${esc(t)}</td><td style="text-align:right;font-weight:800;color:#a32020;">1</td></tr>`).join("") : `<tr><td colspan="2" style="color:#1a9e6e;">Tidak ada temuan.</td></tr>`}</tbody>
+          <tbody>${top5.length ? top5.map((t) => `<tr><td>${esc(t.text)}</td><td style="text-align:right;font-weight:800;color:#a32020;">1</td></tr>`).join("") : `<tr><td colspan="2" style="color:#1a9e6e;">Tidak ada temuan pada laporan ini.</td></tr>`}</tbody>
           </table>
         </div>
         <div class="area-list">
@@ -408,7 +456,7 @@ export default function SopLaporan({ profile }) {
       {error && <div style={{ margin: "14px 28px 0", background: "var(--danger-bg)", border: "1px solid rgba(248,113,113,0.35)", color: "var(--danger-text)", padding: "10px 14px", borderRadius: 8, fontSize: 13 }}>{error}</div>}
 
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 16, maxWidth: 640 }}>
-        <ReportCard title="Export PDF Audit" desc="Ringkasan eksekutif + lampiran checklist lengkap, siap dicetak/disimpan sebagai PDF lewat dialog print browser.">
+        <ReportCard title="Generate Laporan Audit SOP" desc="Pilih periode dan cabang, lalu tentukan apakah laporan menampilkan temuan krusial atau semua temuan yang dicatat auditor.">
           <Row label="Periode">
             <select className="input" value={pdfPeriod} onChange={(e) => setPdfPeriod(e.target.value)}>
               {periodOptions.map((p) => <option key={p} value={p}>{periodeLabel(p)}</option>)}
@@ -417,10 +465,23 @@ export default function SopLaporan({ profile }) {
           <Row label="Cabang">
             <BranchMultiSelect branches={branches} selectedIds={pdfBranchIds} onChange={setPdfBranchIds} />
           </Row>
-          <div style={{ display: "flex", gap: 8 }}>
-            <button className="btn" onClick={exportPDF}>Cetak Detail per Cabang</button>
-            <button className="btn-ghost" onClick={exportSummaryPDF}>{isPersonalView ? "Cetak Ringkasan Cabang Saya" : "Cetak Ringkasan Semua Cabang"}</button>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+            Temuan krusial dianalisis OpenAI dari teks temuan dan catatan auditor; foto tidak dikirim. Hasil AI perlu ditinjau sebelum tindak lanjut.
           </div>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button className="btn" onClick={() => exportPDF("critical")} disabled={!!generating || loading}>
+              {generating === "critical" ? "Menganalisis temuan…" : "Generate Temuan Krusial"}
+            </button>
+            <button className="btn-ghost" onClick={() => exportPDF("all")} disabled={!!generating || loading}>
+              {generating === "all" ? "Menyiapkan laporan…" : "Generate Semua Temuan"}
+            </button>
+          </div>
+          <details style={{ fontSize: 12, color: "var(--text-secondary)" }}>
+            <summary style={{ cursor: "pointer" }}>Ringkasan statistik (format lama)</summary>
+            <button className="btn-ghost" onClick={exportSummaryPDF} disabled={!!generating || loading} style={{ fontSize: 12, marginTop: 8 }}>
+              {isPersonalView ? "Cetak Ringkasan Cabang Saya" : "Cetak Ringkasan Semua Cabang"}
+            </button>
+          </details>
         </ReportCard>
       </div>
     </div>
@@ -460,6 +521,38 @@ function normalizePhotosForPdf(raw) {
 
 function esc(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function buildFindingsPageHtml(branch, rec, findings, mode) {
+  const critical = mode === "critical";
+  const rows = findings.map((finding, index) => {
+    const media = normalizePhotosForPdf(rec.data?.photos?.[finding.key])
+      .filter((item) => item.type !== "video" && /^https?:\/\//i.test(item.url || ""))
+      .slice(0, 3);
+    const photos = media.length
+      ? `<div class="finding-photos">${media.map((item) => `<img src="${esc(item.url)}" alt="Foto temuan" />`).join("")}</div>`
+      : "";
+    return `<tr>
+      <td style="width:28px;text-align:center;">${index + 1}</td>
+      <td style="width:110px;">${esc(finding.category)}</td>
+      <td><strong>${esc(finding.text)}</strong>${finding.note ? `<div class="finding-note">Catatan auditor: ${esc(finding.note)}</div>` : ""}${photos}</td>
+      ${critical ? `<td style="width:100px;">${esc(finding.impact)}</td><td>${esc(finding.reason)}<div class="finding-note">Tindak lanjut: ${esc(finding.action)}</div></td>` : ""}
+    </tr>`;
+  }).join("");
+
+  return `<div class="page">
+    <div class="hdr"><div><div class="co">PT. KLA Teknologi Indonesia</div><div class="sub">Audit Management System — Laporan Audit SOP</div></div>
+      <div class="per">${esc(periodeLabel(rec.period))}</div></div>
+    <div class="title">${critical ? "TEMUAN KRUSIAL" : "SEMUA TEMUAN"} — ${esc(branch.name)}</div>
+    <div class="info-grid">
+      <div><span>Tanggal Audit</span><strong>${esc(formatDate(rec.data?.audit_date))}</strong></div>
+      <div><span>Jumlah Temuan dalam Laporan</span><strong>${findings.length}</strong></div>
+    </div>
+    ${critical ? `<div class="alert">Pilihan dan alasan dampak dibantu OpenAI berdasarkan temuan serta catatan auditor. Tinjau kembali sebelum tindak lanjut.</div>` : ""}
+    <table class="finding-tbl"><thead><tr><th>No</th><th>Kategori</th><th>Temuan yang Dicatat</th>${critical ? "<th>Dampak</th><th>Alasan dan Tindak Lanjut</th>" : ""}</tr></thead>
+      <tbody>${rows || `<tr><td colspan="${critical ? 5 : 3}">Tidak ada temuan pada laporan ini.</td></tr>`}</tbody></table>
+    <div class="footer"><span>PT. KLA Teknologi Indonesia &bull; Confidential</span><span>${esc(branch.name)} &bull; ${esc(periodeLabel(rec.period))}</span></div>
+  </div>`;
 }
 
 function buildBranchPageHtml(branch, rec, weightedScore, statusInfo) {
