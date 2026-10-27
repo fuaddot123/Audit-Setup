@@ -52,6 +52,10 @@ Pada periode bulan berjalan, kolom **Sisa saldo** di Audit Keuangan membaca sald
 
 Saldo dimuat ulang setiap dua menit saat halaman Audit Keuangan terbuka, saat jendela kembali aktif, dan sekali lagi sebelum audit disimpan. Jika spreadsheet tidak bisa dibaca atau tab cabang tidak ada, penyimpanan audit bulan berjalan dibatalkan dengan pesan kesalahan agar angka lama tidak tersimpan tanpa disadari. Audit periode lampau tetap memakai angka yang sudah tersimpan di Supabase. Spreadsheet harus tetap dapat diakses melalui tautan; server membaca ekspor XLSX, sementara endpoint aplikasi hanya melayani pengguna yang sudah login. ID spreadsheet dapat diganti lewat `GOOGLE_SHEET_ID_KAS_KECIL` di environment server.
 
+## Laporan Audit SOP dengan AI
+
+Di **Audit SOP → Laporan Audit**, tombol **Generate Temuan Krusial** memakai OpenAI untuk memilih temuan yang berdampak material pada SOP atau operasional. Tambahkan `OPENAI_API_KEY` sebagai environment variable **server** di Vercel; jangan memakai awalan `NEXT_PUBLIC_`. Model dapat diganti lewat `OPENAI_SOP_MODEL` (default `gpt-4.1-mini`). Aplikasi mengirim teks temuan dan catatan auditor, tanpa foto, lalu memeriksa agar hasil AI hanya merujuk temuan yang memang tersimpan. **Generate Semua Temuan** tidak memanggil OpenAI dan mencetak semua jawaban gagal beserta catatan dan lampiran checklist lengkap.
+
 - `schema.sql` — seluruh struktur database, termasuk keamanan (RLS) supaya:
   - Auditor cuma bisa isi/edit data yang statusnya masih draft
   - Cuma CEO (atau admin) yang bisa mengubah status jadi "Disetujui"/"Ditolak" — ini dicek di **server**, bukan di tampilan, jadi tidak bisa dicurangi dari browser
