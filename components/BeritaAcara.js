@@ -9,6 +9,8 @@ import {
 } from "./AuditInventaris";
 import { pakaiFormatBaru, namaPeriode, INVENTARIS_ITEMS, kunciItem, statusKategori } from "../lib/format-ba";
 import { cetakBaruHtml } from "./BeritaAcaraCetakBaru";
+import { NexaOpnameImport, NexaImportedRow } from "./NexaOpnameImport";
+import { nexaBaReference, nexaAppendixHtml } from "../lib/nexaOpnameImport";
 import { barisDisplayHtml } from "../lib/baris-display";
 import {
   DisplaySection, muatDisplay, simpanDisplay, periksaDisplay,
@@ -375,8 +377,9 @@ export default function BeritaAcara({ profile }) {
 
   function copyFromPrevMonth() {
     if (!prevMonthData) return;
-    setStockKat1(prevMonthData.stockKat1.map((r) => ({ nama: r.nama, status: "Lengkap", keterangan: "" })));
-    setStockKat2(prevMonthData.stockKat2.map((r) => ({ nama: r.nama, status: "Lengkap", keterangan: "" })));
+    // Opname Nexa is dated evidence, not a reusable monthly checklist label.
+    setStockKat1(prevMonthData.stockKat1.filter((r) => !r.nexa).map((r) => ({ nama: r.nama, status: "Lengkap", keterangan: "" })));
+    setStockKat2(prevMonthData.stockKat2.filter((r) => !r.nexa).map((r) => ({ nama: r.nama, status: "Lengkap", keterangan: "" })));
     if (prevMonthData.storeLeaderName) setStoreLeaderName(prevMonthData.storeLeaderName);
     if (prevMonthData.storeManagerName) setStoreManagerName(prevMonthData.storeManagerName);
     if (prevMonthData.inventarisCategories) {
@@ -566,6 +569,11 @@ export default function BeritaAcara({ profile }) {
   async function saveRecord() {
     if (!canEdit) { setError("Kamu tidak punya izin untuk menyimpan."); return; }
     if (!auditDate) { setError("Tanggal audit wajib diisi."); return; }
+    for (const row of [...stockKat1, ...stockKat2].filter((r) => r.nexa)) {
+      if (row.nexa.branchId !== selectedBranch.id || row.nexa.date.slice(0, 7) !== viewPeriod || row.nexa.date > auditDate) {
+        setError(`${row.nexa.code}: cabang/periode/tanggal sumber tidak sesuai BA. Periksa tanggal audit atau hapus impor yang tidak sesuai.`); return;
+      }
+    }
     setSaving(true);
     setError(null);
     try {
@@ -1025,6 +1033,7 @@ export default function BeritaAcara({ profile }) {
 
   async function exportPDF() {
     if (!selectedBranch) { setError("Cabang belum kepilih \u2014 nggak bisa cetak PDF."); return; }
+    if (!selectedEntryId && [...stockKat1, ...stockKat2].some((r) => r.nexa)) { setError("Simpan BA terlebih dahulu untuk memperoleh nomor referensi acuan adjust stock."); return; }
     const printDate = new Date().toLocaleDateString("id-ID", { day: "2-digit", month: "long", year: "numeric" });
 
     if (tidakVisit) {
@@ -1215,6 +1224,7 @@ export default function BeritaAcara({ profile }) {
         storeManager: storeManagerName,
         inventaris,
         stokBarisHtml,
+        nexaLampiranHtml: nexaAppendixHtml([...stockKat1, ...stockKat2], selectedEntryId, esc),
         stokTotal: stockTotalCount,
         stokSelisih: stockSelisihCount,
         stokPct: stockPct,
@@ -1477,6 +1487,7 @@ export default function BeritaAcara({ profile }) {
           </div>
         </div>
 
+        ${nexaAppendixHtml([...stockKat1, ...stockKat2], selectedEntryId, esc)}
         <div class="footer-row">
           <div class="sign-box">
             <div class="t">MENGETAHUI</div>
@@ -1767,7 +1778,7 @@ export default function BeritaAcara({ profile }) {
                 <div style={{ fontSize: 13, color: "#7c3aed" }}>
                   <b>Salin struktur dari {prevMonthData.periodLabel}?</b>
                   <div style={{ fontSize: 12, color: "var(--text-secondary)", marginTop: 2 }}>
-                    {prevMonthData.stockKat1.length + prevMonthData.stockKat2.length} item Stock Opname akan disalin, semua status di-reset ke "Lengkap" & "Berfungsi" — tinggal ubah yang beda aja.
+                    {[...prevMonthData.stockKat1, ...prevMonthData.stockKat2].filter((r) => !r.nexa).length} baris manual Stock Opname akan disalin, semua status di-reset ke "Lengkap" & "Berfungsi". Impor Nexa perlu diambil ulang untuk periode baru.
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: 8, flexShrink: 0 }}>
@@ -1851,6 +1862,9 @@ export default function BeritaAcara({ profile }) {
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>📦 Audit Stock Opname</div>
 
+              {canEdit && <NexaOpnameImport key={`${selectedBranch.id}/${selectedEntryId || "baru"}/${auditDate}`} branch={selectedBranch} period={viewPeriod} auditDate={auditDate} existingRows={[...stockKat1, ...stockKat2]}
+                onImport={(category, rows) => { (category === 1 ? setStockKat1 : setStockKat2)((old) => [...old, ...rows]); setSaved(false); }} />}
+              {[...stockKat1, ...stockKat2].some((r) => r.nexa) && <p style={{ fontSize: 12, overflowWrap: "anywhere" }}>Referensi acuan adjust stock: <b>{nexaBaReference(selectedEntryId)}</b></p>}
               <StockSubSection title="Kategori 1" rows={stockKat1} canEdit={canEdit} filter={stockFilter}
                 onAdd={() => addRow(setStockKat1)}
                 onUpdate={(i, f, v) => updateRow(setStockKat1, i, f, v)}
@@ -1963,6 +1977,7 @@ function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove, onUp
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {shown.map(({ row, i }) => {
+            if (row.nexa) return <NexaImportedRow key={i} row={row} canEdit={canEdit} onRemove={() => onRemove(i)} onNote={(v) => onUpdate(i, "keterangan", v)} onPrice={(j, v) => onUpdateBarang(i, j, "harga", v)} />;
             const isSelisih = row.status === "Selisih";
             return (
               <div key={i} style={{ display: "grid", gridTemplateColumns: "1.6fr auto 1.8fr auto", gap: 8, alignItems: "center", background: "var(--surface-alt)", padding: "10px 10px 10px 12px", borderRadius: 8, borderLeft: `3px solid ${isSelisih ? "#a32020" : "#1a9e6e55"}` }}>
