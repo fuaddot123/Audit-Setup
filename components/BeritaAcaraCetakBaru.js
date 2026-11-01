@@ -230,7 +230,7 @@ export function cetakBaruHtml({
   cabang, periodeTeks, tanggalCetakTeks, waktuAudit,
   auditor, teamLeader, storeManager,
   inventaris,
-  stokBarisHtml, stokTotal, stokSelisih, stokPct, kat1Pct, kat2Pct,
+  stokBarisHtml, stokTotal, stokSelisih, stokPct, kat1Pct, kat2Pct, nexaLampiranHtml = "",
   displayBarisHtml, displayFotoHtml, displayDipajang, displayLewat, displayBatas,
   skorD, displayInfo,
   // Bawaannya MATI. Lihat catatan SKRIP_CETAK di bawah.
@@ -288,6 +288,7 @@ export function cetakBaruHtml({
   + `<th style="width:26%">Kategori</th><th style="width:34%">Item</th>`
   + `<th style="width:16%">Kelengkapan</th><th>Keterangan</th></tr></thead>`
   + `<tbody>${stokBarisHtml}</tbody></table>`
+  + nexaLampiranHtml
 
   + `<div class="k-strip"><span>2. AUDIT INVENTARIS</span>`
   + `<span class="kanan">${inv.total} item \u00b7 ${inv.berfungsi} berfungsi \u00b7 ${inv.rusak} rusak`
