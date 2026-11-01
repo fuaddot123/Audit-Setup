@@ -9,6 +9,7 @@ import AuditSOP from "../components/AuditSOP";
 import AuditStok from "../components/AuditStok";
 import AuditKPI from "../components/AuditKPI";
 import BeritaAcara from "../components/BeritaAcara";
+import RekapStockOpname from "../components/RekapStockOpname";
 import LaporanBulanan from "../components/LaporanBulanan";
 import LaporanTahunan from "../components/LaporanTahunan";
 import BiayaDinas from "../components/BiayaDinas";
@@ -83,6 +84,8 @@ export default function Dashboard() {
         <AuditKPI profile={profileEfektif} />
       ) : active === "berita_acara" ? (
         <BeritaAcara profile={profileEfektif} />
+      ) : active === "rekap_stock_opname" ? (
+        <RekapStockOpname profile={profileEfektif} />
       ) : active === "biaya_dinas" ? (
         <BiayaDinas profile={profileEfektif} />
       ) : active === "master" ? (
