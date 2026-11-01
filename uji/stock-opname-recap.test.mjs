@@ -75,6 +75,43 @@ test("monthly numbering is repeatable and distinct by month, population and audi
   assert.notEqual(recapDocumentNumber("2026-10"), recapDocumentNumber("2026-11"));
   assert.notEqual(recapDocumentNumber("2026-10", "all", "fuad"), recapDocumentNumber("2026-10", "all", "yuni"));
   assert.throws(() => recapDocumentNumber("2026-13"));
+  const branchNumber = recapDocumentNumber("2026-10", "all", null, 2);
+  assert.equal(branchNumber, "BA-REKAP-SO/KLA/2026/10/CB-2/SEMUA");
+  assert.equal(branchNumber, recapDocumentNumber("2026-10", "all", null, "2"));
+  assert.notEqual(branchNumber, recapDocumentNumber("2026-10"));
+  assert.notEqual(branchNumber, recapDocumentNumber("2026-10", "all", null, 1));
+  assert.throws(() => recapDocumentNumber("2026-10", "all", null, 0));
+});
+
+test("branch scope includes only the selected branch and preserves auditor isolation", () => {
+  const data = [makeRecord(), makeRecord({ id: "ba-2", branch_id: 2 }), makeRecord({ id: "ba-3", branch_id: 2, submitted_by: "yuni" })];
+  const branch = run(data, { branchId: 2 });
+  assert.equal(branch.totals.branches, 1);
+  assert.equal(branch.totals.auditCount, 2);
+  assert.equal(branch.branchName, "Yogyakarta");
+  assert.ok(branch.sources.every((source) => source.branch === "Yogyakarta"));
+  assert.equal(run(data, { branchId: "2", ownerId: "fuad" }).totals.auditCount, 1);
+  const missing = run(data, { branchId: 3 });
+  assert.equal(missing.summaries.length, 1);
+  assert.equal(missing.summaries[0].status, "Belum ada BA");
+  assert.equal(missing.totals.auditCount, 0);
+});
+
+test("branch PDF and workbook carry branch scope and exclude other branch sources", () => {
+  const data = [makeRecord({ stock_opname_kat1: [{ nama: "Semarang only", status: "Selisih", qty: 50, harga: 1000 }] }),
+    makeRecord({ id: "ba-yogya", branch_id: 2, stock_opname_kat1: [{ nama: "Keyboard", status: "Selisih", qty: 2, harga: 1000 }] })];
+  const recap = run(data, { branchId: 2 });
+  const number = recapDocumentNumber(recap.period, recap.mode, recap.ownerId, recap.branchId);
+  const workbook = createRecapWorkbook(XLSX, recap, number, "01/11/2026");
+  const summary = XLSX.utils.sheet_to_json(workbook.Sheets["Ringkasan Cabang"], { header: 1 });
+  assert.equal(workbook.Sheets["Ringkasan Cabang"].D6.v, "Yogyakarta");
+  assert.equal(summary.at(-1)[7], 2000);
+  assert.ok(!JSON.stringify(workbook).includes("Semarang"));
+  const pdf = createRecapPdf(jsPDF, autoTable, recap, number, "01/11/2026");
+  const text = pdf.internal.pages.flat().join("\n");
+  assert.ok(text.includes(number));
+  assert.ok(text.includes("Yogyakarta"));
+  assert.ok(!text.includes("Semarang"));
 });
 
 test("Excel roundtrip keeps prices numeric, source IDs, missing cells and text safe from formulas", () => {

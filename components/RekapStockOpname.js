@@ -15,6 +15,7 @@ const cell = { padding: "10px 12px", borderBottom: "1px solid var(--border)", ve
 export default function RekapStockOpname({ profile }) {
   const [period, setPeriod] = useState(previousPeriod);
   const [mode, setMode] = useState("all");
+  const [selectedBranch, setSelectedBranch] = useState("all");
   const [branches, setBranches] = useState([]);
   const [records, setRecords] = useState([]);
   const [profiles, setProfiles] = useState([]);
@@ -27,11 +28,17 @@ export default function RekapStockOpname({ profile }) {
   const loadSeq = useRef(0);
   const ownerId = profile?.role === "auditor" && period >= ISOLATION_START_PERIOD ? profile.id : null;
   const queryKey = `${period}|${profile?.id}|${profile?.role}`;
-  const scopeKey = `${queryKey}|${mode}`;
+  const branchId = selectedBranch === "all" ? null : Number(selectedBranch);
+  const scopeKey = `${queryKey}|${mode}|${branchId ?? "all"}`;
   const isCurrent = loadedFor === queryKey;
-  const recap = useMemo(() => buildStockRecap({ branches, records: isCurrent ? records : [], profiles, period, mode, ownerId }),
-    [branches, records, profiles, period, mode, ownerId, isCurrent]);
-  const number = generatedFor === scopeKey ? recapDocumentNumber(period, mode, ownerId) : "";
+  const recap = useMemo(() => buildStockRecap({ branches, records: isCurrent ? records : [], profiles, period, mode, ownerId, branchId }),
+    [branches, records, profiles, period, mode, ownerId, branchId, isCurrent]);
+  const branchOptions = useMemo(() => {
+    const ids = new Set(branches.map((branch) => branch.id));
+    return [...branches, ...[...new Set((isCurrent ? records : []).map((record) => record.branch_id))]
+      .filter((id) => !ids.has(id)).map((id) => ({ id, name: `Cabang #${id}` }))];
+  }, [branches, records, isCurrent]);
+  const number = generatedFor === scopeKey ? recapDocumentNumber(period, mode, ownerId, branchId) : "";
 
   function changePeriod(value) {
     if (/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) setPeriod(value);
@@ -81,9 +88,10 @@ export default function RekapStockOpname({ profile }) {
   async function exportReport(type) {
     if (loading || exporting || !isCurrent || !recap.sources.length) return;
     setExporting(type); setError(""); setGeneratedFor(scopeKey);
-    const docNumber = recapDocumentNumber(period, mode, ownerId);
+    const docNumber = recapDocumentNumber(period, mode, ownerId, branchId);
     const stamp = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
-    const filename = `Rekap-Stock-Opname-${period}-${mode === "all" ? "Semua-BA" : "Audit-Terakhir"}${ownerId ? "-Data-Saya" : ""}`;
+    const branchSlug = recap.branchName?.normalize("NFKD").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "");
+    const filename = `Rekap-Stock-Opname-${period}${branchId == null ? "" : `-Cabang-${branchId}-${branchSlug}`}-${mode === "all" ? "Semua-BA" : "Audit-Terakhir"}${ownerId ? "-Data-Saya" : ""}`;
     try {
       if (type === "excel") {
         const XLSX = await import("xlsx");
@@ -106,7 +114,7 @@ export default function RekapStockOpname({ profile }) {
     <main style={{ flex: 1, minWidth: 0 }}>
       <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)" }}>
         <h1 className="display" style={{ fontSize: 20, fontWeight: 600, margin: 0 }}>Rekap Stock Opname</h1>
-        <div style={{ color: "var(--text-secondary)", fontSize: 12.5, marginTop: 5 }}>Gabungan berita acara seluruh cabang per bulan, lengkap dengan rincian selisih dan sumber audit.</div>
+        <div style={{ color: "var(--text-secondary)", fontSize: 12.5, marginTop: 5 }}>Berita acara stock opname per cabang atau gabungan seluruh cabang per bulan, lengkap dengan rincian selisih dan sumber audit.</div>
       </div>
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 18 }}>
         <section style={panel}>
@@ -120,6 +128,12 @@ export default function RekapStockOpname({ profile }) {
                 <button aria-label="Bulan berikutnya" type="button" className="btn-ghost" disabled={!!exporting} onClick={() => movePeriod(1)}>&gt;</button>
               </div>
             </div>
+            <label style={{ fontSize: 12, display: "grid", gap: 7 }}>Cabang
+              <select aria-label="Cabang rekap" className="input" value={selectedBranch} disabled={busy || !!exporting} onChange={(e) => setSelectedBranch(e.target.value)}>
+                <option value="all">Semua cabang (gabungan)</option>
+                {branchOptions.map((branch) => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+              </select>
+            </label>
             <label style={{ fontSize: 12, display: "grid", gap: 7 }}>Sumber audit
               <select aria-label="Sumber audit" className="input" value={mode} disabled={!!exporting} onChange={(e) => setMode(e.target.value)}>
                 <option value="all">Semua berita acara</option>
@@ -130,7 +144,8 @@ export default function RekapStockOpname({ profile }) {
           </div>
           <p style={{ fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6, marginBottom: 0 }}>
             {mode === "all" ? "Setiap berita acara pada bulan ini dihitung, termasuk beberapa kunjungan ke cabang yang sama." : "Satu berita acara terbaru per cabang dipakai berdasarkan tanggal audit, lalu waktu dibuat."}
-            {ownerId ? " Akun auditor hanya menampilkan data auditnya sendiri sesuai hak akses." : " Cakupan: seluruh cabang yang dapat diakses akun ini."}
+            {branchId != null ? ` Cakupan: ${recap.branchName}.` : " Cakupan: seluruh cabang yang dapat diakses akun ini."}
+            {ownerId && " Akun auditor hanya menampilkan data auditnya sendiri sesuai hak akses."}
           </p>
         </section>
         {error && <div role="alert" style={{ ...panel, color: "var(--danger-text)", background: "var(--danger-bg)" }}>{error}</div>}
@@ -138,7 +153,7 @@ export default function RekapStockOpname({ profile }) {
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 7 }}>Nomor Berita Acara Rekap</div>
             <strong style={{ fontSize: 13, overflowWrap: "anywhere" }}>{number || "Dibuat saat generate atau ekspor"}</strong>
-            <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 7 }}>Nomor tetap untuk bulan dan cakupan yang sama; PDF dan Excel memakai nomor yang sama.</div>
+            <div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 7 }}>Nomor tetap untuk bulan, cabang, dan sumber audit yang sama; PDF dan Excel memakai nomor yang sama.</div>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             <button className="btn-ghost" disabled={busy || !!exporting || !recap.sources.length} onClick={() => setGeneratedFor(scopeKey)}>Generate Nomor BA</button>
@@ -153,13 +168,13 @@ export default function RekapStockOpname({ profile }) {
               ["Baris selisih", totals.differenceRows], ["Nilai selisih terisi", rupiah(totals.knownValue)],
             ].map(([label, value]) => <div key={label} style={panel}><div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>{label}</div><strong style={{ fontSize: 22 }}>{value}</strong></div>)}
           </div>
-          {!recap.sources.length && <div style={panel}>Belum ada berita acara untuk {periodLabel(period)} pada cakupan ini. Cabang tanpa BA tetap tercantum pada ringkasan.</div>}
+          {!recap.sources.length && <div style={panel}>Belum ada berita acara untuk {periodLabel(period)}{branchId != null ? ` di ${recap.branchName}` : " pada cakupan ini"}. Cabang tanpa BA tetap tercantum pada ringkasan.</div>}
           {(totals.unpriced > 0 || totals.unclassified > 0) && <div style={{ ...panel, fontSize: 12, color: "var(--warning-text, #b07212)" }}>
             {totals.unpriced > 0 && <div>{totals.unpriced} rincian belum memiliki harga atau jumlah valid. Nilainya ditampilkan sebagai “Belum diisi”, bukan dianggap nol.</div>}
             {totals.unclassified > 0 && <div>{totals.unclassified} baris memiliki status yang perlu diperiksa.</div>}
           </div>}
           <section style={{ ...panel, padding: 0, overflow: "hidden" }}>
-            <h2 style={{ fontSize: 15, margin: 0, padding: "18px 20px" }}>Ringkasan Cabang - {periodLabel(period)}</h2>
+            <h2 style={{ fontSize: 15, margin: 0, padding: "18px 20px" }}>Ringkasan {branchId != null ? recap.branchName : "Cabang"} - {periodLabel(period)}</h2>
             <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", whiteSpace: "nowrap" }}>
               <thead><tr>{["Cabang", "Jumlah BA", "Baris diperiksa", "Lengkap", "Baris selisih", "Rincian selisih", "Nilai terisi", "Belum bernilai", "Status"].map((heading) => <th key={heading} style={{ ...cell, background: "var(--surface-alt)" }}>{heading}</th>)}</tr></thead>
               <tbody>{recap.summaries.map((row) => <tr key={row.branchId}>{[row.branch, row.auditCount, row.checked, row.complete, row.differenceRows, row.detailCount, rupiah(row.knownValue), row.unpriced, row.status].map((value, index) => <td key={index} style={{ ...cell, fontWeight: index === 0 || index === 4 ? 600 : 400 }}>{value}</td>)}</tr>)}</tbody>

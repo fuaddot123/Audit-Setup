@@ -78,6 +78,8 @@ Kabari saya modul mana yang mau dilanjutkan dulu.
 
 Menu **Rekap Stock Opname** (`/dashboard?m=rekap_stock_opname`) membaca data `berita_acara` untuk bulan yang dipilih. Default memakai bulan sebelumnya dan semua berita acara, dengan opsi audit terakhir per cabang. Ringkasan memisahkan baris pemeriksaan berstatus Selisih dari rincian barang pada baris tersebut. Semua BA mengakumulasi kunjungan berulang; mode terakhir memilih menurut tanggal audit, waktu dibuat, lalu ID. Data auditor sejak Agustus 2026 tetap dibatasi ke pemiliknya melalui filter dan RLS yang sudah ada.
 
+Pilih satu cabang untuk rekap, PDF dan Excel khusus cabang tersebut, atau **Semua cabang (gabungan)**. Nomor per cabang menambahkan kode ID cabang, misalnya `BA-REKAP-SO/KLA/2026/10/CB-2/SEMUA`, sehingga berbeda dari nomor gabungan dan cabang lain. Judul, cakupan, rincian, sumber BA, total, dan nama file mengikuti pilihan cabang.
+
 Tombol **Generate Nomor BA** atau ekspor membentuk nomor rekap bulanan deterministik `BA-REKAP-SO/KLA/YYYY/MM/SEMUA` (atau `TERAKHIR`; data personal menambahkan ID auditor). Ini nomor dokumen rekap per bulan/cakupan, bukan urutan penerbitan atau nomor baru pada BA cabang. Export ulang memakai nomor yang sama, tanpa perubahan skema. PDF diunduh langsung; Excel berisi Ringkasan Cabang, Detail Selisih, dan Sumber Berita Acara dengan ID sumber.
 
 Jumlah kosong mengikuti form lama (1); harga atau jumlah tidak valid tetap belum bernilai. Jalankan `node --test uji/stock-opname-recap.test.mjs` untuk menguji agregasi, nomor, dan ekspor.
