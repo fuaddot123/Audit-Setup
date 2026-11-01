@@ -25,6 +25,7 @@ const MODULES = [
     ],
   },
   { key: "berita_acara", label: "Berita Acara", ready: true },
+  { key: "rekap_stock_opname", label: "Rekap Stock Opname", ready: true },
   { key: "kpi", label: "KPI", ready: true },
   { key: "biaya_dinas", label: "Biaya Dinas", ready: true },
   { key: "laporan_bulanan", label: "Laporan Bulanan", ready: true },
