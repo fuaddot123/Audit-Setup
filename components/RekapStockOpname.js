@@ -33,6 +33,15 @@ export default function RekapStockOpname({ profile }) {
     [branches, records, profiles, period, mode, ownerId, isCurrent]);
   const number = generatedFor === scopeKey ? recapDocumentNumber(period, mode, ownerId) : "";
 
+  function changePeriod(value) {
+    if (/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) setPeriod(value);
+  }
+  function movePeriod(delta) {
+    const [year, month] = period.split("-").map(Number);
+    const date = new Date(year, month - 1 + delta, 1);
+    changePeriod(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`);
+  }
+
   useEffect(() => {
     const seq = ++loadSeq.current;
     let cancelled = false;
@@ -102,10 +111,15 @@ export default function RekapStockOpname({ profile }) {
       <div style={{ padding: 24, display: "flex", flexDirection: "column", gap: 18 }}>
         <section style={panel}>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 16, alignItems: "end" }}>
-            <label style={{ fontSize: 12, display: "grid", gap: 7 }}>Periode
-              <input aria-label="Periode rekap" className="input" type="month" value={period} disabled={!!exporting}
-                onChange={(e) => { if (/^\d{4}-(0[1-9]|1[0-2])$/.test(e.target.value)) setPeriod(e.target.value); }} />
-            </label>
+            <div style={{ fontSize: 12, display: "grid", gap: 7 }}>
+              <label htmlFor="stock-recap-period">Periode</label>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                <button aria-label="Bulan sebelumnya" type="button" className="btn-ghost" disabled={!!exporting} onClick={() => movePeriod(-1)}>&lt;</button>
+                <input id="stock-recap-period" aria-label="Periode rekap" className="input" type="month" value={period} disabled={!!exporting}
+                  onInput={(e) => changePeriod(e.currentTarget.value)} onChange={(e) => changePeriod(e.target.value)} />
+                <button aria-label="Bulan berikutnya" type="button" className="btn-ghost" disabled={!!exporting} onClick={() => movePeriod(1)}>&gt;</button>
+              </div>
+            </div>
             <label style={{ fontSize: 12, display: "grid", gap: 7 }}>Sumber audit
               <select aria-label="Sumber audit" className="input" value={mode} disabled={!!exporting} onChange={(e) => setMode(e.target.value)}>
                 <option value="all">Semua berita acara</option>
