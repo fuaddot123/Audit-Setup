@@ -51,12 +51,12 @@ export function NexaOpnameImport({ branch, period, auditDate, existingRows, onIm
       if (!chosen.length) throw new Error("Pilih minimal satu nomor opname yang sesuai cabang dan tanggal BA.");
       const rows = makeNexaRows(chosen, { branch, period, auditDate, existingRows, ...book, importedAt: new Date().toISOString() });
       onImport(Number(category), rows);
-      setPreview(null); setBook(null); setNotice(`${rows.length} opname ditambahkan. Periksa rinciannya, lalu klik Simpan BA.`);
+      setPreview(null); setBook(null); setNotice(`${rows.length} opname ditambahkan ke pratinjau. Periksa rinciannya, lalu klik Simpan impor ke rekap.`);
     } catch (e) { setError(e.message); }
   }
   return <details style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 14, marginBottom: 16, fontSize: 12 }}>
     <summary style={{ cursor: "pointer", fontWeight: 700 }}>Impor Excel Stock Opname Nexa</summary>
-    <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>Di Nexa, buka hasil opname → tampilkan All → ekspor Excel rincian barang. Pilih file, periksa sumbernya, lalu tambahkan ke BA. Satu nomor opname menjadi satu baris pemeriksaan; seluruh barangnya tersimpan sebagai rincian sumber.</p>
+    <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>Di Nexa, buka hasil opname → tampilkan All → ekspor Excel rincian barang. Pilih file, periksa sumbernya, lalu tambahkan ke pratinjau rekap. Satu nomor opname menjadi satu baris pemeriksaan; seluruh barangnya tersimpan sebagai rincian sumber.</p>
     <label style={{ display: "block", fontSize: 12 }}>File Excel Nexa <input type="file" accept=".xlsx,.xls" disabled={busy} onChange={(e) => { openFile(e.target.files?.[0]); e.target.value = ""; }} /></label>
     {busy && <p role="status">Membaca Excel…</p>}
     {book && <div style={{ display: "grid", gap: 10, marginTop: 12 }}>
@@ -82,14 +82,14 @@ export function NexaOpnameImport({ branch, period, auditDate, existingRows, onIm
         {preview.filter((g) => selected.includes(g.code)).flatMap((g) => g.items.slice(0, 10).map((i) => <tr key={`${g.code}/${i.sku}`}><td>{g.code}</td><td>{i.sku}<br />{i.name}</td><td>{i.systemQty}</td><td>{i.countedQty}</td><td>{i.difference}</td></tr>))}
       </tbody></table></div>
       <p style={{ fontSize: 12 }}>Pratinjau menampilkan maksimal 10 barang per opname. Semua rincian opname terpilih akan disimpan. Selisih = fisik − sistem; nilai harga tidak diambil jika tidak ada pada sumber.</p>
-      <button type="button" className="btn" disabled={!selected.length} onClick={applyImport}>Tambahkan {selected.length} opname ke BA</button>
+      <button type="button" className="btn" disabled={!selected.length} onClick={applyImport}>Tambahkan {selected.length} opname ke pratinjau rekap</button>
     </div>}
     {error && <p role="alert" style={{ color: "var(--danger-text)" }}>{error}</p>}
     {notice && <p role="status" style={{ color: "#1a9e6e" }}>{notice}</p>}
   </details>;
 }
 
-export function NexaImportedRow({ row, canEdit, onRemove, onNote, onPrice }) {
+export function NexaImportedRow({ row, canEdit, onRemove, onNote, onPrice, removeLabel }) {
   const source = row.nexa;
   return <div style={{ border: "1px solid var(--border)", borderLeft: `3px solid ${row.status === "Selisih" ? "#a32020" : "#1a9e6e"}`, padding: 14, borderRadius: 8 }}>
     <b>{source.code} · {row.status} (jumlah)</b>
@@ -100,7 +100,7 @@ export function NexaImportedRow({ row, canEdit, onRemove, onNote, onPrice }) {
     </tbody></table></div></details>
     <label style={{ display: "block", marginTop: 12 }}>Catatan pemeriksaan / alasan tindak lanjut <textarea className="input" value={row.keterangan} disabled={!canEdit} onChange={(e) => onNote(e.target.value)} /></label>
     {!!row.barang?.length && <details style={{ marginTop: 10 }}><summary style={{ cursor: "pointer" }}>Harga satuan {row.barang.length} barang selisih (opsional)</summary>{row.barang.map((b, j) => <label key={j} style={{ display: "block", fontSize: 12, marginTop: 8 }}>{b.nama} · jumlah selisih {b.qty}<input className="input" type="number" min="0" placeholder="Harga satuan jika diketahui (Rp)" value={b.harga} disabled={!canEdit} onChange={(e) => onPrice(j, e.target.value)} /></label>)}</details>}
-    {canEdit && <button type="button" className="btn-ghost" style={{ marginTop: 10 }} onClick={onRemove}>Hapus impor {source.code} dari BA ini</button>}
+    {canEdit && <button type="button" className="btn-ghost" style={{ marginTop: 10 }} onClick={onRemove}>{removeLabel || `Hapus impor ${source.code} dari BA ini`}</button>}
   </div>;
 }
 

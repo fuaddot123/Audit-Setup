@@ -9,7 +9,7 @@ import {
 } from "./AuditInventaris";
 import { pakaiFormatBaru, namaPeriode, INVENTARIS_ITEMS, kunciItem, statusKategori } from "../lib/format-ba";
 import { cetakBaruHtml } from "./BeritaAcaraCetakBaru";
-import { NexaOpnameImport, NexaImportedRow } from "./NexaOpnameImport";
+import { NexaImportedRow } from "./NexaOpnameImport";
 import { nexaBaReference, nexaAppendixHtml } from "../lib/nexaOpnameImport";
 import { barisDisplayHtml } from "../lib/baris-display";
 import {
@@ -1862,8 +1862,6 @@ export default function BeritaAcara({ profile }) {
             <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 14, padding: 20, marginBottom: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 14, marginBottom: 14 }}>📦 Audit Stock Opname</div>
 
-              {canEdit && <NexaOpnameImport key={`${selectedBranch.id}/${selectedEntryId || "baru"}/${auditDate}`} branch={selectedBranch} period={viewPeriod} auditDate={auditDate} existingRows={[...stockKat1, ...stockKat2]}
-                onImport={(category, rows) => { (category === 1 ? setStockKat1 : setStockKat2)((old) => [...old, ...rows]); setSaved(false); }} />}
               {[...stockKat1, ...stockKat2].some((r) => r.nexa) && <p style={{ fontSize: 12, overflowWrap: "anywhere" }}>Referensi acuan adjust stock: <b>{nexaBaReference(selectedEntryId)}</b></p>}
               <StockSubSection title="Kategori 1" rows={stockKat1} canEdit={canEdit} filter={stockFilter}
                 onAdd={() => addRow(setStockKat1)}
