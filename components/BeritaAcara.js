@@ -1196,7 +1196,7 @@ export default function BeritaAcara({ profile }) {
       }).join("");
       const stokBarisBase = barisStok("Kategori 1", stockKat1) + barisStok("Kategori 2", stockKat2);
       const stokNilaiTotal = [...stockKat1, ...stockKat2].filter((r) => r.status === "Selisih").reduce((s2, r) => s2 + nilaiSelisihRow(r), 0);
-      const stokTotalRow = stokNilaiTotal > 0
+      const stokTotalRow = stokNilaiTotal !== 0
         ? `<tr><td colspan="4" style="text-align:right;font-weight:800;color:#a32020">TOTAL NILAI SELISIH: Rp${stokNilaiTotal.toLocaleString("id-ID")}</td></tr>`
         : "";
       const stokBarisHtml = stokBarisBase

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { readNexaTable, makeNexaRows, warehouseMatchesBranch } from "../lib/nexaOpnameImport";
+import StockNexaDetails from "./StockNexaDetails";
 
 export function NexaOpnameImport({ branch, period, auditDate, existingRows, onImport }) {
   const [book, setBook] = useState(null), [sheet, setSheet] = useState("");
@@ -54,7 +55,7 @@ export function NexaOpnameImport({ branch, period, auditDate, existingRows, onIm
       setPreview(null); setBook(null); setNotice(`${rows.length} opname ditambahkan ke pratinjau. Periksa rinciannya, lalu klik Simpan impor ke rekap.`);
     } catch (e) { setError(e.message); }
   }
-  return <details style={{ border: "1px solid var(--border)", borderRadius: 10, padding: 14, marginBottom: 16, fontSize: 12 }}>
+  return <details className="stock-import-file" open>
     <summary style={{ cursor: "pointer", fontWeight: 700 }}>Impor Excel Stock Opname Nexa</summary>
     <p style={{ fontSize: 12, color: "var(--text-secondary)" }}>Di Nexa, buka hasil opname → tampilkan All → ekspor Excel rincian barang. Pilih file, periksa sumbernya, lalu tambahkan ke pratinjau rekap. Satu nomor opname menjadi satu baris pemeriksaan; seluruh barangnya tersimpan sebagai rincian sumber.</p>
     <label style={{ display: "block", fontSize: 12 }}>File Excel Nexa <input type="file" accept=".xlsx,.xls" disabled={busy} onChange={(e) => { openFile(e.target.files?.[0]); e.target.value = ""; }} /></label>
@@ -89,17 +90,13 @@ export function NexaOpnameImport({ branch, period, auditDate, existingRows, onIm
   </details>;
 }
 
-export function NexaImportedRow({ row, canEdit, onRemove, onNote, onPrice, removeLabel }) {
+export function NexaImportedRow({ row, canEdit, onRemove, onNote, removeLabel }) {
   const source = row.nexa;
-  return <div style={{ border: "1px solid var(--border)", borderLeft: `3px solid ${row.status === "Selisih" ? "#a32020" : "#1a9e6e"}`, padding: 14, borderRadius: 8 }}>
-    <b>{source.code} · {row.status} (jumlah)</b>
-    <p style={{ fontSize: 12 }}>{source.date} · {source.warehouse}<br />{source.fileName} · {source.items.length} barang</p>
-    {!!source.manualMetadata?.length && <p style={{ fontSize: 12 }}>Diisi saat impor karena tidak tercantum di Excel: {source.manualMetadata.join(", ")}</p>}
-    <details><summary style={{ cursor: "pointer" }}>Rincian sistem, fisik, dan selisih dari Nexa</summary><div style={{ overflowX: "auto", maxHeight: 400 }}><table className="nexa-import-table"><thead><tr>{["Kode / Barang", "Sistem", "Fisik", "Selisih", "Serial / Keterangan"].map((h) => <th key={h}>{h}</th>)}</tr></thead><tbody>
-      {source.items.map((i) => <tr key={i.sku}><td>{i.sku}<br />{i.name}</td><td>{i.systemQty}</td><td>{i.countedQty}</td><td>{i.difference}</td><td>{i.serial}<br />{i.note}</td></tr>)}
-    </tbody></table></div></details>
-    <label style={{ display: "block", marginTop: 12 }}>Catatan pemeriksaan / alasan tindak lanjut <textarea className="input" value={row.keterangan} disabled={!canEdit} onChange={(e) => onNote(e.target.value)} /></label>
-    {!!row.barang?.length && <details style={{ marginTop: 10 }}><summary style={{ cursor: "pointer" }}>Harga satuan {row.barang.length} barang selisih (opsional)</summary>{row.barang.map((b, j) => <label key={j} style={{ display: "block", fontSize: 12, marginTop: 8 }}>{b.nama} · jumlah selisih {b.qty}<input className="input" type="number" min="0" placeholder="Harga satuan jika diketahui (Rp)" value={b.harga} disabled={!canEdit} onChange={(e) => onPrice(j, e.target.value)} /></label>)}</details>}
+  return <div className="stock-opname-card">
+    <div className="stock-section-heading"><div><span className="stock-eyebrow">HASIL OPNAME</span><h3>{source.code}</h3><p>{source.date} · {source.warehouse} · {source.items.length} barang</p></div><span className={`stock-pill ${row.status === "Selisih" ? "is-bad" : "is-good"}`}>{row.status} (jumlah)</span></div>
+    <StockNexaDetails items={source.items} compact />
+    <label className="stock-audit-note">Catatan pemeriksaan / alasan tindak lanjut <textarea className="input" value={row.keterangan} disabled={!canEdit} onChange={(e) => onNote(e.target.value)} /></label>
+    <details className="stock-source-meta"><summary>Sumber data: {source.fileName}</summary><p>SHA-256: {source.fileSha256}</p>{!!source.manualMetadata?.length && <p>Diisi saat impor: {source.manualMetadata.join(", ")}</p>}</details>
     {canEdit && <button type="button" className="btn-ghost" style={{ marginTop: 10 }} onClick={onRemove}>{removeLabel || `Hapus impor ${source.code} dari BA ini`}</button>}
   </div>;
 }
