@@ -89,3 +89,60 @@ input, select, button { font-family: inherit; }
 .nexa-import-table th, .nexa-import-table td { text-align: left; padding: 8px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; }
 .nexa-import-table th { background: var(--surface-alt); position: sticky; top: 0; }
 .nexa-import-table td:nth-last-child(2), .nexa-import-table td:nth-last-child(3) { font-variant-numeric: tabular-nums; }
+
+/* Stock opname workspace */
+.stock-recap [hidden] { display: none !important; }
+.stock-recap-body { padding: 24px; display: grid; gap: 18px; }
+.stock-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 22px; min-width: 0; }
+.stock-section-heading { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 18px; }
+.stock-section-heading h2, .stock-section-heading h3 { font-size: 17px; margin: 5px 0 7px; line-height: 1.35; }
+.stock-section-heading p, .stock-help { font-size: 12px; line-height: 1.65; color: var(--text-secondary); margin: 0; }
+.stock-eyebrow { font-size: 10px; letter-spacing: .1em; color: var(--text-faint); font-weight: 700; }
+.stock-tabs { display: flex; gap: 5px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.stock-tabs button { background: transparent; border: 0; border-bottom: 3px solid transparent; padding: 13px 18px; color: var(--text-secondary); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; }
+.stock-tabs button.is-active { border-bottom-color: var(--accent); color: var(--text-primary); background: var(--accent-tint); font-weight: 700; border-radius: 9px 9px 0 0; }
+.stock-import-workspace { display: grid; gap: 18px; }
+.stock-price-source { border-left: 4px solid var(--accent); }
+.stock-pill { display: inline-flex; align-items: center; padding: 5px 10px; border-radius: 6px; background: var(--surface-alt); border: 1px solid var(--border); color: var(--text-secondary); font-size: 11px; font-weight: 700; white-space: nowrap; }
+.stock-pill.is-good { background: rgba(16,185,129,.12); color: #34d399; border-color: rgba(16,185,129,.25); }
+.stock-pill.is-bad { background: rgba(248,113,113,.1); color: #fb8b8b; border-color: rgba(248,113,113,.24); }
+.stock-table-toolbar { display: flex; align-items: flex-end; gap: 14px; padding: 0 0 16px; }
+.stock-table-toolbar label, .stock-destination, .stock-report-setup label { display: grid; gap: 7px; font-size: 12px; }
+.stock-search { flex: 1; min-width: 180px; }
+.stock-table-toolbar select { min-width: 190px; }
+.stock-table-scroll { overflow: auto; border: 1px solid var(--border); border-radius: 10px; max-height: 620px; }
+.stock-item-table { width: 100%; min-width: 1000px; border-collapse: separate; border-spacing: 0; font-size: 12px; }
+.stock-item-table th { background: var(--surface-alt); color: var(--text-secondary); position: sticky; top: 0; z-index: 1; text-align: left; font-size: 11px; font-weight: 600; padding: 12px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+.stock-item-table td { padding: 14px 12px; border-bottom: 1px solid var(--border); vertical-align: top; line-height: 1.5; }
+.stock-item-table tr:last-child td { border-bottom: 0; }
+.stock-item-table tbody tr:hover { background: var(--accent-tint); }
+.stock-item-table small { display: block; margin-top: 5px; color: var(--text-faint); font-size: 10px; font-weight: 400; line-height: 1.5; }
+.stock-product { min-width: 225px; max-width: 300px; }
+.stock-product strong { display: block; font-weight: 600; }
+.stock-product small { overflow-wrap: anywhere; }
+.stock-item-table .stock-numeric { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stock-amount { font-weight: 700; }
+.stock-negative { color: #fb8b8b; }.stock-positive { color: #34d399; }
+.stock-item-note { min-width: 180px; max-width: 260px; overflow-wrap: anywhere; }
+.stock-table-footer { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding-top: 14px; color: var(--text-faint); font-size: 11px; }
+.stock-table-footer > div { display: flex; gap: 6px; }
+.stock-table-footer button { font-size: 11px; padding: 7px 10px; }
+.stock-fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+.stock-inline-controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin: 14px 0; }
+.stock-upload-button { position: relative; display: inline-flex; padding: 10px 15px; background: var(--accent-tint); border: 1px solid var(--border); border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; overflow: hidden; }
+.stock-upload-button input { position: absolute; inset: 0; opacity: 0; width: 100%; cursor: pointer; }
+.stock-source-info { display: grid; gap: 5px; font-size: 12px; padding: 12px; background: var(--surface-alt); border-radius: 9px; overflow-wrap: anywhere; }
+.stock-source-info span { color: var(--text-secondary); font-size: 11px; }
+.stock-report-setup { display: grid; grid-template-columns: 1fr 150px 160px auto; align-items: flex-end; gap: 12px; margin: 16px 0; }
+.stock-report-setup p { color: var(--text-faint); font-size: 11px; line-height: 1.5; margin: 5px 0; }
+.stock-import-file { border: 1px dashed var(--border); background: var(--surface-alt); padding: 18px; border-radius: 12px; margin-top: 16px; font-size: 12px; }
+.stock-import-file summary { font-weight: 700; cursor: pointer; }
+.stock-opname-card { border: 1px solid var(--border); border-radius: 12px; padding: 18px; min-width: 0; }
+.stock-audit-note { display: grid; gap: 7px; margin-top: 16px; font-size: 12px; }
+.stock-source-meta { color: var(--text-faint); font-size: 10px; margin-top: 12px; overflow-wrap: anywhere; }
+.stock-source-meta summary { cursor: pointer; }
+.stock-draft-group { display: grid; gap: 12px; margin-top: 20px; min-width: 0; }
+.stock-save-bar { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border); font-size: 12px; color: var(--text-secondary); }
+.stock-empty { padding: 30px 16px; text-align: center; color: var(--text-faint); font-size: 12px; }
+.stock-error { color: var(--danger-text); font-size: 12px; }.stock-success { color: #34d399; padding: 14px; border: 1px solid rgba(16,185,129,.25); border-radius: 9px; font-size: 12px; }
+@media(max-width: 850px) { .stock-recap-body { padding: 14px; } .stock-card { padding: 16px; } .stock-section-heading { flex-wrap: wrap; } .stock-report-setup { grid-template-columns: 1fr 1fr; } .stock-table-toolbar { flex-wrap: wrap; } .stock-search { width: 100%; flex-basis: 100%; } .stock-tabs button { padding: 12px; } }

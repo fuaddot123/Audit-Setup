@@ -26,7 +26,7 @@ test("preserves every source item, signed delta, serial, and unknown valuation",
   assert.deepEqual(rows[0].nexa.items.map((i) => i.difference), [0, -2, 1]);
   assert.equal(rows[0].nexa.items[1].serial, "TEST-SN");
   assert.deepEqual(rows[0].nexa.manualMetadata, ["Tanggal opname", "Gudang"]);
-  assert.deepEqual(rows[0].barang.map((i) => i.qty), [2, 1]);
+  assert.deepEqual(rows[0].barang.map((i) => i.qty), [-2, 1]);
   assert.ok(rows[0].barang.every((i) => i.harga === ""));
   assert.deepEqual(JSON.parse(JSON.stringify(rows)), rows);
 });
