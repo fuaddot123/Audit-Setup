@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as X from "xlsx";
 import { readPersediaanTable, valueNexaRow, valueRecord } from "../lib/persediaanValuation.js";
-import { buildStockRecap } from "../lib/stockOpnameRecap.js";
+import { buildStockRecap, rupiah } from "../lib/stockOpnameRecap.js";
 import { createRecapWorkbook, categorySummary } from "../lib/stockOpnameRecapExport.js";
 import { savePersediaanValues } from "../lib/savePersediaanValues.js";
 import { nexaCategory, discrepancyCategory } from "../lib/nexaCategories.js";
@@ -86,6 +86,7 @@ test("references cannot replace real zero book costs, ambiguous keys, or use fut
 });
 
 test("Nexa category codes keep bonus/cabutan distinct and directions follow quantities", () => {
+  assert.equal(rupiah(-0), "Rp0");
   assert.equal(nexaCategory({ sku: "PR-LAP-AX-ABC" }), "LAPTOP");
   assert.equal(nexaCategory({ sku: "PR-BNS-X-ABC" }), "BONUS");
   assert.equal(nexaCategory({ sku: "PR-CB-X-ABC" }), "CABUTAN");
