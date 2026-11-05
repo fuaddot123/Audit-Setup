@@ -12,6 +12,13 @@ const makeRecord = (override = {}) => ({ id: "ba-1", branch_id: 1, period: "2026
   stock_opname_kat1: [{ nama: "Laptop", status: "Lengkap" }], stock_opname_kat2: [], ...override });
 const run = (records, override = {}) => buildStockRecap({ branches, profiles, records, period: "2026-10", ...override });
 
+test("PDF keeps eight-digit unit prices and their cents together in the monetary cell", () => {
+  const recap = run([makeRecord({ stock_opname_kat1: [{ nama: "Laptop", status: "Selisih", barang: [{ nama: "Unit", qty: -1, harga: 21171171.17 }] }] })]);
+  const pdf = createRecapPdf(jsPDF, autoTable, recap, recapDocumentNumber(recap.period), "05/11/2026");
+  assert.ok(pdf.internal.pages.flat().some((line) => line.includes("(Rp21.171.171,17)")));
+  assert.ok(pdf.internal.pages.flat().some((line) => line.includes("(Rp-21.171.171,17)")));
+});
+
 test("one Selisih row expands multiple goods without counting blank extra item editors", () => {
   const result = run([makeRecord({ stock_opname_kat2: [{ nama: "Aksesoris", status: "Selisih", keterangan: "Telusuri mutasi", barang: [
     { nama: "Mouse", qty: 2, harga: 50000 }, { nama: "Keyboard", qty: "", harga: 100000 }, { nama: "", qty: "", harga: "" },
