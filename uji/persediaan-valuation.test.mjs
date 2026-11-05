@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import * as X from "xlsx";
 import { readPersediaanTable, valueNexaRow, valueRecord } from "../lib/persediaanValuation.js";
 import { buildStockRecap } from "../lib/stockOpnameRecap.js";
-import { createRecapWorkbook } from "../lib/stockOpnameRecapExport.js";
+import { createRecapWorkbook, categorySummary } from "../lib/stockOpnameRecapExport.js";
 import { savePersediaanValues } from "../lib/savePersediaanValues.js";
+import { nexaCategory, discrepancyCategory } from "../lib/nexaCategories.js";
 
 const header = ["#", "Kode", "Kode Barang", "Nama Barang", "Qty", "Total", "Qty", "Total", "Qty", "Total", "Qty", "Total", "Qty", "Total"];
 const source = (sku, qty, value) => [1, "TEST", sku, `Barang ${sku}`, 99, 999999, 8, 88888, 7, 77777, 6, 66666, qty, value];
@@ -53,6 +54,58 @@ test("flattened Sisa headers and exact SKU matching are supported without guessi
   const r = readPersediaanTable([["Kode Barang", "Nama Barang", "Sisa Qty", "Sisa Nilai"], [" test-a ", "Nama lain", 4, 100]], meta);
   assert.equal(valueNexaRow(row(), r).barang[0].harga, 25);
   assert.equal(valueNexaRow(row(), r).barang[1].harga, "");
+});
+
+test("opt-in costs recover zero closing stock and prior same-SKU sources with explicit provenance", () => {
+  const now = readPersediaanTable([header, [1, "B1", "TEST-A", "A", 20, 108074673.17, 0, 0, 0, 0, 20, 108074673.17, 0, 0]], { ...meta, allowReferenceCosts: true });
+  const previous = readPersediaanTable([header, [1, "B2", "TEST-B", "B", 2, 448648.65, 0, 0, 0, 0, 2, 448648.65, 0, 0]], { ...meta, period: "2026-09", fileName: "September.xlsx" });
+  now.references = [previous];
+  const valued = valueNexaRow(row(), now).nexa.items;
+  assert.equal(valued[0].valuation.unitCost, 108074673.17 / 20);
+  assert.equal(valued[0].valuation.status, "opening");
+  assert.equal(valued[0].valuation.reportQty, 0);
+  assert.equal(valued[0].valuation.costQty, 20);
+  assert.equal(valued[1].valuation.unitCost, 448648.65 / 2);
+  assert.equal(valued[1].valuation.status, "historical");
+  assert.equal(valued[1].valuation.period, "2026-09");
+  assert.equal(valued[1].valuation.targetPeriod, "2026-10");
+  assert.equal(valued[1].valuation.fileName, "September.xlsx");
+  now.allowReferenceCosts = false;
+  assert.equal(valueNexaRow(row(), now).nexa.items[0].valuation.unitCost, null);
+  assert.equal(valueNexaRow(row(), now).nexa.items[1].valuation.unitCost, null);
+});
+
+test("references cannot replace real zero book costs, ambiguous keys, or use future periods", () => {
+  const now = readPersediaanTable([header, source("TEST-A", 3, 0), source("TEST-B", 0, 50)], { ...meta, allowReferenceCosts: true });
+  now.references = [readPersediaanTable([header, source("TEST-A", 3, 100), source("TEST-B", 3, 100), source("MISSING", 3, 100)], { ...meta, period: "2026-11" })];
+  const valued = valueNexaRow(row(), now).nexa.items;
+  assert.equal(valued[0].valuation.status, "zero_book");
+  assert.equal(valued[0].valuation.unitCost, 0);
+  assert.equal(valued[1].valuation.unitCost, null);
+  assert.equal(valued[2].valuation.unitCost, null);
+});
+
+test("Nexa category codes keep bonus/cabutan distinct and directions follow quantities", () => {
+  assert.equal(nexaCategory({ sku: "PR-LAP-AX-ABC" }), "LAPTOP");
+  assert.equal(nexaCategory({ sku: "PR-BNS-X-ABC" }), "BONUS");
+  assert.equal(nexaCategory({ sku: "PR-CB-X-ABC" }), "CABUTAN");
+  assert.equal(nexaCategory({ sku: "PR-NOTFOUND-X" }), "Belum terpetakan");
+  assert.equal(discrepancyCategory({ difference: -1 }), "Stok kurang");
+  assert.equal(discrepancyCategory({ difference: 1 }), "Stok lebih");
+  assert.equal(discrepancyCategory({ difference: 0 }), "Cocok");
+});
+
+test("category summaries retain shortage/surplus separately and expose unavailable amounts", () => {
+  const summary = categorySummary([
+    { category: "LAPTOP", discrepancyCategory: "Stok kurang", difference: -2, signedValue: -100 },
+    { category: "LAPTOP", discrepancyCategory: "Stok kurang", difference: -1, signedValue: null },
+    { category: "LAPTOP", discrepancyCategory: "Stok lebih", difference: 1, signedValue: 50 },
+    { category: "BONUS", discrepancyCategory: "Stok kurang", difference: -1, signedValue: 0 },
+    { category: "BONUS", discrepancyCategory: "Cocok", difference: 0, signedValue: 0 },
+  ]);
+  assert.equal(summary.length, 3);
+  assert.deepEqual(summary.find((r) => r.category === "LAPTOP" && r.direction === "Stok kurang"), { category: "LAPTOP", direction: "Stok kurang", count: 2, qty: -3, value: -100, unpriced: 1 });
+  assert.equal(summary.find((r) => r.category === "BONUS").unpriced, 0);
 });
 
 test("reused opname codes cannot overwrite another product's quantity or acquire an ambiguous price", () => {

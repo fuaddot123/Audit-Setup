@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { sortBranches } from "../lib/branchOrder";
 import { buildStockRecap, ISOLATION_START_PERIOD, periodLabel, recapDocumentNumber, recapModeLabel, rupiah, stockDetailName, stockDetailNameNote, stockValueLabel } from "../lib/stockOpnameRecap";
-import { createRecapPdf, createRecapWorkbook } from "../lib/stockOpnameRecapExport";
+import { createRecapPdf, createRecapWorkbook, categorySummary } from "../lib/stockOpnameRecapExport";
 import NexaRecapImport from "./NexaRecapImport";
 import NexaBatchImport from "./NexaBatchImport";
 import PersediaanReportInput from "./PersediaanReportInput";
@@ -141,6 +141,7 @@ export default function RekapStockOpname({ profile }) {
   const busy = loading || !isCurrent;
   const totals = recap.totals;
   const manualDetails = recap.details.filter((r) => !r.isNexa);
+  const categoryRows = categorySummary(recap.nexaItems);
   return (
     <main className="stock-recap" style={{ flex: 1, minWidth: 0 }}>
       <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)" }}>
@@ -196,6 +197,7 @@ export default function RekapStockOpname({ profile }) {
         <nav className="stock-tabs" aria-label="Tampilan rekap">{[["summary", "Ringkasan cabang"], ["details", "Detail stok admin & fisik"], ["import", "Impor Excel & sumber nilai"]].map(([id, label]) => <button key={id} type="button" aria-pressed={tab === id} className={tab === id ? "is-active" : ""} disabled={saving} onClick={() => setTab(id)}>{label}</button>)}</nav>
         <div hidden={tab !== "import"} className="stock-import-workspace">
           <PersediaanReportInput key={queryKey} period={period} report={activeReport} disabled={busy || !!exporting || saving} onReport={(r) => { setInventoryReport({ ...r, queryKey }); setValuationNotice(""); }} saveCount={valuationIds.length} onSave={canImportNexa(profile) ? saveValues : null} saving={valuationSaving} />
+          {activeReport?.allowReferenceCosts && <PersediaanReportInput key={`${queryKey}/reference`} reference period={period} report={activeReport.references?.[0]} disabled={busy || !!exporting || saving} onReport={(r) => { setInventoryReport((old) => ({ ...old, references: [r] })); setValuationNotice(""); }} />}
           <NexaBatchImport key={queryKey} profile={profile} period={period} branches={branches} records={records} inventoryReport={activeReport} disabled={busy || !!exporting || saving} onSaving={setImportSaving} onSaved={(record) => setRecords((old) => [...old.filter((r) => r.id !== record.id), record])} />
           <NexaRecapImport key={`${queryKey}/${selectedBranch}/${!!profile?.liatSebagai}`} profile={profile} branch={branchOptions.find((b) => b.id === branchId)} period={period} records={records} profiles={profiles} onSaving={setImportSaving} disabled={busy || !!exporting || valuationSaving} inventoryReport={activeReport}
             onSaved={(record) => { setRecords((old) => [...old.filter((r) => r.id !== record.id), record]); }} />
@@ -204,16 +206,16 @@ export default function RekapStockOpname({ profile }) {
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
             {[
               ["Cabang diperiksa", `${totals.auditedBranches} / ${totals.branches}`], ["Qty kurang (Nexa)", recap.nexaItems.length ? totals.nexaShortageQty : "—"],
-              ["Qty lebih (Nexa)", recap.nexaItems.length ? totals.nexaSurplusQty : "—"], ["Nilai terisi (BA)", stockValueLabel(totals)],
+              ["Qty lebih (Nexa)", recap.nexaItems.length ? totals.nexaSurplusQty : "—"], [recap.nexaItems.length ? "Nilai selisih Nexa" : "Nilai terisi (BA)", recap.nexaItems.length ? `${rupiah(totals.nexaNetValue)}${totals.nexaUnpriced ? " (sebagian)" : ""}` : stockValueLabel(totals)],
             ].map(([label, value]) => <div key={label} style={panel}><div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>{label}</div><strong style={{ fontSize: 22 }}>{value}</strong></div>)}
           </div>
           <div style={{ ...panel, fontSize: 12, lineHeight: 1.7 }}>
-            {recap.nexaItems.length ? <>Nilai selisih Nexa: {totals.nexaUnpriced && !totals.nexaValued ? "Belum dihitung" : `${rupiah(totals.nexaNetValue)}${totals.nexaUnpriced ? " (sebagian)" : ""}`}. {totals.nexaUnpriced > 0 && `${totals.nexaUnpriced} barang selisih belum memiliki harga persediaan yang valid.`}</>
+            {recap.nexaItems.length ? <>{totals.nexaValued} dari {totals.nexaValued + totals.nexaUnpriced} barang selisih sudah dihitung. {recap.nexaItems.filter((i) => i.difference !== 0 && i.unitCost === 0).length} baris bernilai buku Rp0 sesuai sumber. {totals.nexaUnpriced > 0 && `${totals.nexaUnpriced} barang selisih belum memiliki harga persediaan yang valid.`} Harga acuan saldo awal/historis ditandai pada rincian.</>
               : <>Belum ada rincian impor Nexa pada cakupan ini. Nilai BA manual belum dihitung otomatis dari persediaan. Impor stok opname dan muat Report Persediaan bulan yang sama untuk mencocokkan kode barang dan menghitung harga × qty selisih. <button className="btn-ghost" onClick={() => setTab("import")}>Buka impor & sumber nilai</button></>}
           </div>
           {!recap.sources.length && <div style={panel}>Belum ada berita acara untuk {periodLabel(period)}{branchId != null ? ` di ${recap.branchName}` : " pada cakupan ini"}. Cabang tanpa BA tetap tercantum pada ringkasan.</div>}
           {(totals.unpriced > 0 || totals.unclassified > 0) && <div style={{ ...panel, fontSize: 12, color: "var(--warning-text, #b07212)" }}>
-            {totals.unpriced > 0 && <div>{totals.unpriced} rincian belum memiliki harga atau jumlah valid. Nilainya ditampilkan sebagai “Belum diisi”, bukan dianggap nol.</div>}
+            {manualDetails.filter((r) => r.value == null).length > 0 && <div>{manualDetails.filter((r) => r.value == null).length} catatan BA manual lama belum memiliki kode/jumlah/harga rinci. Catatan ini terpisah dari perhitungan barang Nexa.</div>}
             {totals.unclassified > 0 && <div>{totals.unclassified} baris memiliki status yang perlu diperiksa.</div>}
           </div>}
           <section hidden={tab !== "summary"} style={{ ...panel, padding: 0, overflow: "hidden" }}>
@@ -224,6 +226,7 @@ export default function RekapStockOpname({ profile }) {
               <tfoot><tr>{["TOTAL", totals.auditCount, totals.checked, totals.complete, totals.differenceRows, totals.detailCount, stockValueLabel(totals), totals.unpriced, ""].map((value, index) => <td key={index} style={{ ...cell, fontWeight: 700, background: "var(--surface-alt)" }}>{value}</td>)}</tr></tfoot>
             </table></div>
           </section>
+          {!!categoryRows.length && <section hidden={tab !== "summary"} style={panel}><h2 style={{ fontSize: 15, marginTop: 0 }}>Kategori barang & selisih Nexa</h2><div className="stock-table-scroll"><table className="stock-item-table"><thead><tr>{["Kategori barang", "Kategori selisih", "Baris barang", "Qty selisih", "Nilai terhitung", "Belum bernilai"].map((h) => <th key={h}>{h}</th>)}</tr></thead><tbody>{categoryRows.map((r) => <tr key={`${r.category}/${r.direction}`}><td>{r.category}</td><td>{r.direction}</td><td>{r.count}</td><td>{r.qty}</td><td>{rupiah(r.value)}{r.unpriced ? " (sebagian)" : ""}</td><td>{r.unpriced}</td></tr>)}</tbody></table></div></section>}
           <section hidden={tab !== "details"} className="stock-card">
             <div className="stock-section-heading"><div><span className="stock-eyebrow">RINCIAN BARANG</span><h2>Stok admin, stok fisik & nilai selisih</h2><p>{activeReport ? `Harga otomatis dari ${activeReport.fileName} · ${activeReport.period}` : "Harga mengikuti sumber persediaan yang tersimpan pada BA. Muat report untuk menghitung ulang."}</p></div><span className="stock-pill">{recap.nexaItems.length} barang</span></div>
             {recap.nexaItems.length ? <StockNexaDetails items={recap.nexaItems} /> : <div className="stock-empty">Belum ada rincian Excel Nexa pada cakupan ini. <button className="btn-ghost" onClick={() => setTab("import")}>Impor Excel Nexa</button></div>}
@@ -248,7 +251,7 @@ export default function RekapStockOpname({ profile }) {
             </table></div>
           </details>
           <p style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, margin: 0 }}>
-            Nilai Nexa = Sisa Nilai ÷ Sisa Qty × (fisik − admin). Baris manual mengikuti jumlah × harga BA; jumlah kosong dengan harga terisi ditandai asumsi 1. Nama tanpa rincian barang memakai nama baris BA, dengan keterangan asli tetap ditampilkan. Sumber: {recapModeLabel(mode)}.
+            Nilai Nexa = nominal persediaan ÷ qty persediaan × (fisik − admin). Harga acuan saldo awal/historis mencantumkan dasar dan bulan sumber. Nilai buku Rp0 tetap ditampilkan sesuai sumber. Kategori barang mengikuti kode kategori Nexa; kategori selisih berdasarkan perbandingan fisik dan admin. Sumber: {recapModeLabel(mode)}.
           </p>
         </>}
       </div>
