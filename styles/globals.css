@@ -121,6 +121,7 @@ input, select, button { font-family: inherit; }
 .stock-product strong { display: block; font-weight: 600; }
 .stock-product small { overflow-wrap: anywhere; }
 .stock-item-table .stock-numeric { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.stock-item-table .stock-numeric small { white-space: normal; min-width: 120px; max-width: 180px; overflow-wrap: anywhere; }
 .stock-amount { font-weight: 700; }
 .stock-negative { color: #fb8b8b; }.stock-positive { color: #34d399; }
 .stock-item-note { min-width: 180px; max-width: 260px; overflow-wrap: anywhere; }
