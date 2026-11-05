@@ -10,6 +10,7 @@ import StockNexaDetails from "./StockNexaDetails";
 import { valueRecord } from "../lib/persediaanValuation";
 import { savePersediaanValues } from "../lib/savePersediaanValues";
 import { canImportNexa } from "../lib/nexaRecapSave";
+import ManualStockReconciliation from "./ManualStockReconciliation";
 
 function previousPeriod() {
   const date = new Date();
@@ -196,6 +197,7 @@ export default function RekapStockOpname({ profile }) {
         </section>
         <nav className="stock-tabs" aria-label="Tampilan rekap">{[["summary", "Ringkasan cabang"], ["details", "Detail stok admin & fisik"], ["import", "Impor Excel & sumber nilai"]].map(([id, label]) => <button key={id} type="button" aria-pressed={tab === id} className={tab === id ? "is-active" : ""} disabled={saving} onClick={() => setTab(id)}>{label}</button>)}</nav>
         <div hidden={tab !== "import"} className="stock-import-workspace">
+          <ManualStockReconciliation key={`${queryKey}/manual`} period={period} profile={profile} records={valuedRecords} disabled={busy || !!exporting || saving} onSaving={setImportSaving} onSaved={(record) => setRecords((old) => old.map((r) => r.id === record.id ? record : r))} />
           <PersediaanReportInput key={queryKey} period={period} report={activeReport} disabled={busy || !!exporting || saving} onReport={(r) => { setInventoryReport({ ...r, queryKey }); setValuationNotice(""); }} saveCount={valuationIds.length} onSave={canImportNexa(profile) ? saveValues : null} saving={valuationSaving} />
           {activeReport?.allowReferenceCosts && <PersediaanReportInput key={`${queryKey}/reference`} reference period={period} report={activeReport.references?.[0]} disabled={busy || !!exporting || saving} onReport={(r) => { setInventoryReport((old) => ({ ...old, references: [r] })); setValuationNotice(""); }} />}
           <NexaBatchImport key={queryKey} profile={profile} period={period} branches={branches} records={records} inventoryReport={activeReport} disabled={busy || !!exporting || saving} onSaving={setImportSaving} onSaved={(record) => setRecords((old) => [...old.filter((r) => r.id !== record.id), record])} />
@@ -215,7 +217,7 @@ export default function RekapStockOpname({ profile }) {
           </div>
           {!recap.sources.length && <div style={panel}>Belum ada berita acara untuk {periodLabel(period)}{branchId != null ? ` di ${recap.branchName}` : " pada cakupan ini"}. Cabang tanpa BA tetap tercantum pada ringkasan.</div>}
           {(totals.unpriced > 0 || totals.unclassified > 0) && <div style={{ ...panel, fontSize: 12, color: "var(--warning-text, #b07212)" }}>
-            {manualDetails.filter((r) => r.value == null).length > 0 && <div>{manualDetails.filter((r) => r.value == null).length} catatan BA manual lama belum memiliki kode/jumlah/harga rinci. Catatan ini terpisah dari perhitungan barang Nexa.</div>}
+            {manualDetails.filter((r) => r.value == null).length > 0 && <div>{manualDetails.filter((r) => r.value == null).length} rincian BA manual perlu verifikasi. Alasan ditampilkan pada detail dan PDF. {manualDetails.filter((r) => r.nexaLink).length} rincian manual sudah ditautkan ke Nexa dan tidak dijumlah ulang.</div>}
             {totals.unclassified > 0 && <div>{totals.unclassified} baris memiliki status yang perlu diperiksa.</div>}
           </div>}
           <section hidden={tab !== "summary"} style={{ ...panel, padding: 0, overflow: "hidden" }}>
@@ -239,8 +241,8 @@ export default function RekapStockOpname({ profile }) {
                 <td style={cell}>{row.branch}<div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{row.auditDate || "Tanggal belum diisi"}</div></td>
                 <td style={cell}>{row.item}<div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{row.group}</div></td>
                 <td style={cell}>{stockDetailName(row)}<div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{row.category}</div><div style={{ fontSize: 10, color: "var(--text-faint)", marginTop: 4 }}>{stockDetailNameNote(row)}</div></td>
-                <td style={cell}>{row.qty ?? "Tidak tercatat / tidak valid"}{row.qtyAssumed && <div style={{ fontSize: 10, color: "var(--text-faint)" }}>Asumsi 1</div>}</td>
-                <td style={cell}>{rupiah(row.price)}</td><td style={cell}>{rupiah(row.value)}</td><td style={{ ...cell, minWidth: 220, whiteSpace: "pre-wrap" }}>{row.note || "-"}</td>
+                <td style={cell}>{row.qty ?? "Perlu verifikasi"}{row.nexaLink && <div style={{ fontSize: 10, marginTop: 4 }}>Admin {row.systemQty} · Fisik {row.countedQty}<br />{row.discrepancyCategory}</div>}{row.qtyAssumed && <div style={{ fontSize: 10, color: "var(--text-faint)" }}>Asumsi 1</div>}</td>
+                <td style={cell}>{row.price == null && row.pendingReason ? "Perlu verifikasi" : rupiah(row.price)}</td><td style={cell}>{row.value == null && row.pendingReason ? "Perlu verifikasi" : rupiah(row.value)}{row.excludedFromTotal && <div style={{ fontSize: 10 }}>Sudah dihitung di Nexa</div>}</td><td style={{ ...cell, minWidth: 220, whiteSpace: "pre-wrap" }}>{row.note || "-"}</td>
               </tr>)}{!recap.details.length && <tr><td colSpan={7} style={cell}>Tidak ada selisih pada data yang dipilih.</td></tr>}</tbody>
             </table></div>
           </section>
