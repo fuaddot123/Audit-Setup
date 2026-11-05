@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { sortBranches } from "../lib/branchOrder";
-import { buildStockRecap, ISOLATION_START_PERIOD, periodLabel, recapDocumentNumber, recapModeLabel, rupiah } from "../lib/stockOpnameRecap";
+import { buildStockRecap, ISOLATION_START_PERIOD, periodLabel, recapDocumentNumber, recapModeLabel, rupiah, stockDetailName, stockDetailNameNote } from "../lib/stockOpnameRecap";
 import { createRecapPdf, createRecapWorkbook } from "../lib/stockOpnameRecapExport";
 import NexaRecapImport from "./NexaRecapImport";
 import PersediaanReportInput from "./PersediaanReportInput";
@@ -225,12 +225,12 @@ export default function RekapStockOpname({ profile }) {
           <section hidden={tab !== "details" || !manualDetails.length} style={{ ...panel, padding: 0, overflow: "hidden" }}>
             <h2 style={{ fontSize: 15, margin: 0, padding: "18px 20px" }}>Catatan selisih audit manual ({manualDetails.length})</h2>
             <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000 }}>
-              <thead><tr>{["Cabang / Tanggal", "Baris pemeriksaan", "Barang selisih / Kategori", "Jumlah", "Harga", "Nilai", "Keterangan"].map((heading) => <th key={heading} style={{ ...cell, background: "var(--surface-alt)" }}>{heading}</th>)}</tr></thead>
+              <thead><tr>{["Cabang / Tanggal", "Baris pemeriksaan", "Barang / Acuan BA", "Jumlah", "Harga", "Nilai", "Keterangan"].map((heading) => <th key={heading} style={{ ...cell, background: "var(--surface-alt)" }}>{heading}</th>)}</tr></thead>
               <tbody>{manualDetails.map((row, index) => <tr key={`${row.auditId}-${index}`}>
                 <td style={cell}>{row.branch}<div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{row.auditDate || "Tanggal belum diisi"}</div></td>
                 <td style={cell}>{row.item}<div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{row.group}</div></td>
-                <td style={cell}>{row.missingItem || "Nama barang belum diisi"}<div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{row.category}</div></td>
-                <td style={cell}>{row.qty ?? "Belum valid"}{row.qtyAssumed && <div style={{ fontSize: 10, color: "var(--text-faint)" }}>Asumsi 1</div>}</td>
+                <td style={cell}>{stockDetailName(row)}<div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{row.category}</div><div style={{ fontSize: 10, color: "var(--text-faint)", marginTop: 4 }}>{stockDetailNameNote(row)}</div></td>
+                <td style={cell}>{row.qty ?? "Tidak tercatat / tidak valid"}{row.qtyAssumed && <div style={{ fontSize: 10, color: "var(--text-faint)" }}>Asumsi 1</div>}</td>
                 <td style={cell}>{rupiah(row.price)}</td><td style={cell}>{rupiah(row.value)}</td><td style={{ ...cell, minWidth: 220, whiteSpace: "pre-wrap" }}>{row.note || "-"}</td>
               </tr>)}{!recap.details.length && <tr><td colSpan={7} style={cell}>Tidak ada selisih pada data yang dipilih.</td></tr>}</tbody>
             </table></div>
@@ -242,7 +242,7 @@ export default function RekapStockOpname({ profile }) {
             </table></div>
           </details>
           <p style={{ fontSize: 11, color: "var(--text-faint)", lineHeight: 1.6, margin: 0 }}>
-            Nilai selisih mengikuti jumlah × harga yang dicatat pada BA. Jumlah kosong mengikuti form BA: 1. Nilai ini bukan penetapan kerugian atau denda. Sumber yang dipakai: {recapModeLabel(mode)}.
+            Nilai Nexa = Sisa Nilai ÷ Sisa Qty × (fisik − admin). Baris manual mengikuti jumlah × harga BA; jumlah kosong dengan harga terisi ditandai asumsi 1. Nama tanpa rincian barang memakai nama baris BA, dengan keterangan asli tetap ditampilkan. Sumber: {recapModeLabel(mode)}.
           </p>
         </>}
       </div>

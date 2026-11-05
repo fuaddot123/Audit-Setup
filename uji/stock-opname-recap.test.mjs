@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
-import { buildStockRecap, recapDocumentNumber } from "../lib/stockOpnameRecap.js";
+import { buildStockRecap, recapDocumentNumber, stockDetailName, stockDetailNameNote } from "../lib/stockOpnameRecap.js";
 import { createRecapPdf, createRecapWorkbook } from "../lib/stockOpnameRecapExport.js";
 
 const branches = [{ id: 1, name: "Semarang" }, { id: 2, name: "Yogyakarta" }, { id: 3, name: "Bandung" }];
@@ -36,6 +36,61 @@ test("missing values remain unknown while explicit zero and legacy detail remain
   assert.equal(result.details[1].value, null);
   assert.equal(result.details[2].value, 0);
   assert.equal(result.totals.knownValue, 375000);
+});
+
+test("legacy BA names and original notes survive PDF and Excel without false missing-name labels", () => {
+  const note = "1 Unit WA854RE Service";
+  const recap = run([makeRecord({ stock_opname_kat1: [
+    { nama: "TP-LINK", status: "Selisih", keterangan: note },
+    { nama: "LOGITECH", status: "Selisih", barang: [{ nama: "Mouse Bluetooth Logitech M240 White", qty: 1, harga: 250000 }] },
+    { nama: "SUPPLIES", status: "Selisih", barang: [{ nama: "", qty: "", harga: "" }], keterangan: "Tinta pengajuan inventaris" },
+  ] })]);
+  const [legacy, detailed, emptyEditor] = recap.details;
+  assert.equal(legacy.missingItem, "TP-LINK");
+  assert.equal(legacy.nameSource, "row");
+  assert.equal(legacy.note, note);
+  assert.equal(legacy.qty, null);
+  assert.equal(legacy.qtyAssumed, false);
+  assert.equal(detailed.missingItem, "Mouse Bluetooth Logitech M240 White");
+  assert.equal(detailed.nameSource, "item");
+  assert.equal(emptyEditor.missingItem, "SUPPLIES");
+  assert.equal(recap.totals.knownValue, 250000);
+  assert.equal(recap.totals.detailCount, 3);
+  assert.equal(recap.totals.unpriced, 2);
+  const number = recapDocumentNumber(recap.period);
+  const pdf = createRecapPdf(jsPDF, autoTable, recap, number, "05/11/2026");
+  const pdfContent = pdf.internal.pages.flat().join("\n");
+  assert.ok(!/Nama (barang|baris) belum diisi/.test(pdfContent));
+  assert.ok(pdfContent.includes("TP-LINK"));
+  assert.ok(pdfContent.includes(note));
+  assert.ok(pdfContent.includes("nama baris BA"));
+  const workbook = createRecapWorkbook(XLSX, recap, number, "05/11/2026");
+  const detail = workbook.Sheets["Detail Selisih"];
+  assert.equal(detail.G11.v, "TP-LINK");
+  assert.equal(detail.I11, undefined);
+  assert.equal(detail.M11.v, note);
+  assert.equal(detail.O11.v, stockDetailNameNote(legacy));
+  assert.equal(detail.G12.v, detailed.missingItem);
+  assert.equal(detail.O12.v, "Rincian barang BA");
+});
+
+test("genuinely unnamed discrepancies remain traceable and do not acquire invented identities", () => {
+  const recap = run([makeRecord({ stock_opname_kat1: [
+    { nama: "", status: "Selisih", keterangan: "Catatan saja", barang: [{}, {}] },
+    { nama: "Kategori", status: "Selisih", barang: [{ nama: "", qty: 2, harga: 1000 }, { nama: "Barang B", qty: 1, harga: 0 }, {}] },
+    { nama: "Warisan", status: "Selisih", harga: 5000 },
+  ] })]);
+  assert.equal(recap.details.length, 4);
+  assert.equal(recap.details[0].nameSource, "missing");
+  assert.equal(stockDetailName(recap.details[0]), "Identitas tidak tercatat di BA");
+  assert.equal(recap.details[0].auditId, "ba-1");
+  assert.equal(recap.details[0].note, "Catatan saja");
+  assert.equal(recap.details[1].nameSource, "row");
+  assert.equal(recap.details[1].qty, 2);
+  assert.equal(recap.details[2].nameSource, "item");
+  assert.equal(recap.details[3].qtyAssumed, true);
+  assert.equal(recap.details[3].value, 5000);
+  assert.equal(recap.totals.knownValue, 7000);
 });
 
 test("all visits and latest-per-branch are separate populations with deterministic date tie breaks", () => {
