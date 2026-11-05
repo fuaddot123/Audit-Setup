@@ -73,6 +73,16 @@ test("monthly tables group by source number with merged metadata; only selected 
   assert.equal(warehouseMatchesBranch("Gudang Sementara Tegal,Tegal,Tegal Service", "Tegal"), true);
 });
 
+test("a reused Nexa code keeps distinct product names and counts as separate source items", () => {
+  const reused = structuredClone(table);
+  reused.push([4, "TEST-B", "Produk berbeda dengan kode sama", 6, 0, -6, "", "-", "Serial"]);
+  const result = readNexaTable(reused, context);
+  assert.equal(result[0].items.length, 4);
+  const row = makeNexaRows(result, options)[0];
+  assert.deepEqual(row.barang.map((b) => b.qty), [-2, 1, -6]);
+  assert.equal(row.barang[2].nexaItemName, "Produk berbeda dengan kode sama");
+});
+
 test("blocks wrong month, future source date, and repeat import in either BA category", () => {
   assert.throws(() => makeNexaRows(groups(), { ...options, period: "2026-09" }), /periode/);
   assert.throws(() => makeNexaRows(groups(), { ...options, auditDate: "2026-10-30" }), /tanggal audit/);

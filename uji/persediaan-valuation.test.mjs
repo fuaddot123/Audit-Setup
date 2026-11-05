@@ -55,6 +55,23 @@ test("flattened Sisa headers and exact SKU matching are supported without guessi
   assert.equal(valueNexaRow(row(), r).barang[1].harga, "");
 });
 
+test("reused opname codes cannot overwrite another product's quantity or acquire an ambiguous price", () => {
+  const source = row();
+  source.nexa.items.push({ sku: "TEST-A", name: "Produk berbeda", systemQty: 6, countedQty: 0, difference: -6 });
+  source.barang.push({ sku: "TEST-A", nexaItemName: "Produk berbeda", nama: "TEST-A — Produk berbeda", qty: 6, harga: 999 });
+  const valued = valueNexaRow(source, report());
+  assert.deepEqual(valued.barang.map((b) => b.qty), [-2, 1, -1, -6]);
+  assert.equal(valued.barang[0].harga, "");
+  assert.equal(valued.barang[3].harga, "");
+  assert.equal(valued.nexa.items[0].valuation.status, "ambiguous_source");
+  assert.equal(valued.nexa.items[3].valuation.status, "ambiguous_source");
+  const recap = buildStockRecap({ branches: [{ id: 1, name: "Semarang" }], records: [{ ...ba(), stock_opname_kat1: [valued] }], period: "2026-10" });
+  assert.equal(recap.details[0].qty, -2);
+  assert.equal(recap.details[3].qty, -6);
+  assert.equal(recap.nexaItems[0].signedValue, null);
+  assert.equal(recap.nexaItems[3].signedValue, null);
+});
+
 test("recap and Excel keep signed monetary differences and the report denominator/numerator", () => {
   const valued = valueRecord(ba(), report());
   const recap = buildStockRecap({ branches: [{ id: 1, name: "Semarang" }], records: [valued], period: "2026-10" });
