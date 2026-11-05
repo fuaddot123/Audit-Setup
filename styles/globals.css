@@ -92,7 +92,8 @@ input, select, button { font-family: inherit; }
 
 /* Stock opname workspace */
 .stock-recap [hidden] { display: none !important; }
-.stock-recap-body { padding: 24px; display: grid; gap: 18px; }
+.stock-recap-body { padding: 24px; display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; gap: 18px; }
+.stock-recap-body > *, .stock-import-workspace > * { min-width: 0; }
 .stock-card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 22px; min-width: 0; }
 .stock-section-heading { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; margin-bottom: 18px; }
 .stock-section-heading h2, .stock-section-heading h3 { font-size: 17px; margin: 5px 0 7px; line-height: 1.35; }
