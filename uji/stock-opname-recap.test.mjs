@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import * as XLSX from "xlsx";
 import { jsPDF } from "jspdf";
 import { autoTable } from "jspdf-autotable";
-import { buildStockRecap, recapDocumentNumber, stockDetailName, stockDetailNameNote } from "../lib/stockOpnameRecap.js";
+import { buildStockRecap, recapDocumentNumber, stockDetailName, stockDetailNameNote, stockValueInfo, stockValueLabel } from "../lib/stockOpnameRecap.js";
 import { createRecapPdf, createRecapWorkbook } from "../lib/stockOpnameRecapExport.js";
 
 const branches = [{ id: 1, name: "Semarang" }, { id: 2, name: "Yogyakarta" }, { id: 3, name: "Bandung" }];
@@ -91,6 +91,32 @@ test("genuinely unnamed discrepancies remain traceable and do not acquire invent
   assert.equal(recap.details[3].qtyAssumed, true);
   assert.equal(recap.details[3].value, 5000);
   assert.equal(recap.totals.knownValue, 7000);
+});
+
+test("unpriced summaries are unknown rather than zero, while verified zero and partial totals stay distinct", () => {
+  const unpriced = run([makeRecord({ stock_opname_kat1: [{ nama: "LAPTOP", status: "Selisih", keterangan: "Unit service" }] })]);
+  assert.deepEqual(stockValueInfo(unpriced.summaries[0]), { value: null, status: "Belum dihitung" });
+  assert.equal(stockValueLabel(unpriced.totals), "Belum dihitung");
+  assert.deepEqual(stockValueInfo(unpriced.summaries[1]), { value: null, status: "Belum ada BA" });
+  const complete = run([makeRecord()]);
+  assert.equal(stockValueLabel(complete.summaries[0]), "Rp0");
+  const unknownStatus = run([makeRecord({ stock_opname_kat1: [{ nama: "Laptop", status: "Draft" }] })]);
+  assert.equal(stockValueInfo(unknownStatus.totals).value, null);
+  const noItems = run([makeRecord({ stock_opname_kat1: [] })]);
+  assert.equal(stockValueInfo(noItems.totals).value, null);
+  const partial = run([makeRecord({ stock_opname_kat1: [{ nama: "Mouse", status: "Selisih", qty: 1, harga: 250000 }, { nama: "Laptop", status: "Selisih" }] })]);
+  assert.equal(stockValueLabel(partial.totals), "Rp250.000 (sebagian)");
+  const zeroPartial = run([makeRecord({ stock_opname_kat1: [{ nama: "Nol tercatat", status: "Selisih", qty: 0, harga: 0 }, { nama: "Belum dihitung", status: "Selisih" }] })]);
+  assert.equal(stockValueLabel(zeroPartial.totals), "Rp0 (sebagian)");
+  const number = recapDocumentNumber(unpriced.period);
+  const wb = createRecapWorkbook(XLSX, unpriced, number, "05/11/2026");
+  assert.equal(wb.Sheets["Ringkasan Cabang"].H11, undefined);
+  assert.equal(wb.Sheets["Ringkasan Cabang"].M11.v, "Belum dihitung");
+  assert.equal(wb.Sheets["Detail Selisih"].L12, undefined);
+  const pdf = createRecapPdf(jsPDF, autoTable, unpriced, number, "05/11/2026");
+  const text = pdf.internal.pages.flat().join("\n");
+  assert.ok(text.includes("Belum dihitung"));
+  assert.ok(!text.includes("Rp0"));
 });
 
 test("all visits and latest-per-branch are separate populations with deterministic date tie breaks", () => {
