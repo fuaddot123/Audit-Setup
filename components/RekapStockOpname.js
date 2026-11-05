@@ -4,6 +4,7 @@ import { sortBranches } from "../lib/branchOrder";
 import { buildStockRecap, ISOLATION_START_PERIOD, periodLabel, recapDocumentNumber, recapModeLabel, rupiah, stockDetailName, stockDetailNameNote, stockValueLabel } from "../lib/stockOpnameRecap";
 import { createRecapPdf, createRecapWorkbook } from "../lib/stockOpnameRecapExport";
 import NexaRecapImport from "./NexaRecapImport";
+import NexaBatchImport from "./NexaBatchImport";
 import PersediaanReportInput from "./PersediaanReportInput";
 import StockNexaDetails from "./StockNexaDetails";
 import { valueRecord } from "../lib/persediaanValuation";
@@ -195,6 +196,7 @@ export default function RekapStockOpname({ profile }) {
         <nav className="stock-tabs" aria-label="Tampilan rekap">{[["summary", "Ringkasan cabang"], ["details", "Detail stok admin & fisik"], ["import", "Impor Excel & sumber nilai"]].map(([id, label]) => <button key={id} type="button" aria-pressed={tab === id} className={tab === id ? "is-active" : ""} disabled={saving} onClick={() => setTab(id)}>{label}</button>)}</nav>
         <div hidden={tab !== "import"} className="stock-import-workspace">
           <PersediaanReportInput key={queryKey} period={period} report={activeReport} disabled={busy || !!exporting || saving} onReport={(r) => { setInventoryReport({ ...r, queryKey }); setValuationNotice(""); }} saveCount={valuationIds.length} onSave={canImportNexa(profile) ? saveValues : null} saving={valuationSaving} />
+          <NexaBatchImport key={queryKey} profile={profile} period={period} branches={branches} records={records} inventoryReport={activeReport} disabled={busy || !!exporting || saving} onSaving={setImportSaving} onSaved={(record) => setRecords((old) => [...old.filter((r) => r.id !== record.id), record])} />
           <NexaRecapImport key={`${queryKey}/${selectedBranch}/${!!profile?.liatSebagai}`} profile={profile} branch={branchOptions.find((b) => b.id === branchId)} period={period} records={records} profiles={profiles} onSaving={setImportSaving} disabled={busy || !!exporting || valuationSaving} inventoryReport={activeReport}
             onSaved={(record) => { setRecords((old) => [...old.filter((r) => r.id !== record.id), record]); }} />
         </div>

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { readPersediaanTable } from "../lib/persediaanValuation";
+import ExcelSourcePicker from "./ExcelSourcePicker";
 
 export default function PersediaanReportInput({ period, report, onReport, disabled, saveCount, onSave, saving }) {
   const [file, setFile] = useState(null), [sheet, setSheet] = useState("");
@@ -37,7 +38,7 @@ export default function PersediaanReportInput({ period, report, onReport, disabl
     <div className="stock-section-heading"><div><span className="stock-eyebrow">SUMBER NILAI OTOMATIS</span><h2>Report Persediaan</h2><p>Harga satuan = Sisa Nilai ÷ Sisa Qty. Nilai selisih = harga satuan × (stok fisik − stok admin).</p></div><span className={`stock-pill ${report ? "is-good" : ""}`}>{report ? `${report.priced.toLocaleString("id-ID")} kode bernilai` : "Belum dimuat"}</span></div>
     {report && <div className="stock-source-info"><strong>{report.fileName}</strong><span>Periode {report.period} · {report.count.toLocaleString("id-ID")} kode barang · pencocokan berdasarkan kode barang</span></div>}
     <fieldset disabled={disabled || reading} className="stock-fieldset">
-      <div className="stock-inline-controls"><label className="stock-upload-button">{reading ? "Membaca report…" : report ? "Ganti Excel persediaan" : "Muat Excel persediaan"}<input type="file" accept=".xlsx,.xls" onChange={(e) => { readFile(e.target.files?.[0]); e.target.value = ""; }} /></label>
+      <div className="stock-inline-controls"><ExcelSourcePicker name="persediaan" label={reading ? "Membaca report…" : report ? "Ganti Excel persediaan" : "Muat Excel persediaan"} disabled={disabled || reading} onFile={readFile} />
         {report && onSave && <button type="button" className="btn-ghost" disabled={!saveCount || saving} onClick={onSave}>{saving ? "Menyimpan nilai…" : `Simpan nilai ke ${saveCount} BA`}</button>}
       </div>
       {file && <div className="stock-report-setup"><div><b>{file.fileName}</b><p>Isi bulan report sesuai filter di Nexa. Tanggal pada nama file adalah tanggal ekspor.</p></div><label>Sheet<select className="input" value={sheet} onChange={(e) => setSheet(e.target.value)}>{file.tables.map((s) => <option key={s.name}>{s.name}</option>)}</select></label><label>Periode report<input className="input" type="month" value={sourcePeriod} onInput={(e) => setSourcePeriod(e.currentTarget.value)} onChange={(e) => setSourcePeriod(e.target.value)} /></label><button type="button" className="btn" disabled={!sourcePeriod} onClick={apply}>Gunakan report & hitung nilai</button></div>}
