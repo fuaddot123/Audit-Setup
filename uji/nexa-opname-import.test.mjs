@@ -71,6 +71,8 @@ test("monthly tables group by source number with merged metadata; only selected 
   assert.equal(warehouseMatchesBranch("Surabaya Babatan", "Surabaya MERR"), false);
   assert.equal(warehouseMatchesBranch("Sagan YK,Sagan YK Display", "Yogyakarta"), true);
   assert.equal(warehouseMatchesBranch("Gudang Sementara Tegal,Tegal,Tegal Service", "Tegal"), true);
+  assert.equal(warehouseMatchesBranch("Service Slawi,Slawi,Slawi Display", "Slawi"), true);
+  assert.equal(warehouseMatchesBranch("Service Slawi,Slawi,Slawi Display", "Tegal"), false);
 });
 
 test("a reused Nexa code keeps distinct product names and counts as separate source items", () => {
