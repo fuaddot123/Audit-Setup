@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { sortBranches } from "../lib/branchOrder";
-import { buildStockRecap, ISOLATION_START_PERIOD, periodLabel, recapDocumentNumber, recapModeLabel, rupiah, stockDetailName, stockDetailNameNote } from "../lib/stockOpnameRecap";
+import { buildStockRecap, ISOLATION_START_PERIOD, periodLabel, recapDocumentNumber, recapModeLabel, rupiah, stockDetailName, stockDetailNameNote, stockValueLabel } from "../lib/stockOpnameRecap";
 import { createRecapPdf, createRecapWorkbook } from "../lib/stockOpnameRecapExport";
 import NexaRecapImport from "./NexaRecapImport";
 import PersediaanReportInput from "./PersediaanReportInput";
@@ -201,9 +201,13 @@ export default function RekapStockOpname({ profile }) {
         {busy ? <div style={{ color: "var(--text-secondary)" }}>{error ? "Data belum dapat dimuat. Klik Perbarui data untuk mencoba kembali." : "Memuat rekap stock opname…"}</div> : <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
             {[
-              ["Cabang diperiksa", `${totals.auditedBranches} / ${totals.branches}`], ["Qty kurang (Nexa)", totals.nexaShortageQty],
-              ["Qty lebih (Nexa)", totals.nexaSurplusQty], [totals.nexaUnpriced ? "Nilai terhitung (sebagian)" : "Nilai selisih Nexa", totals.nexaUnpriced && !totals.nexaValued ? "Belum tersedia" : rupiah(totals.nexaNetValue)],
+              ["Cabang diperiksa", `${totals.auditedBranches} / ${totals.branches}`], ["Qty kurang (Nexa)", recap.nexaItems.length ? totals.nexaShortageQty : "—"],
+              ["Qty lebih (Nexa)", recap.nexaItems.length ? totals.nexaSurplusQty : "—"], ["Nilai terisi (BA)", stockValueLabel(totals)],
             ].map(([label, value]) => <div key={label} style={panel}><div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>{label}</div><strong style={{ fontSize: 22 }}>{value}</strong></div>)}
+          </div>
+          <div style={{ ...panel, fontSize: 12, lineHeight: 1.7 }}>
+            {recap.nexaItems.length ? <>Nilai selisih Nexa: {totals.nexaUnpriced && !totals.nexaValued ? "Belum dihitung" : `${rupiah(totals.nexaNetValue)}${totals.nexaUnpriced ? " (sebagian)" : ""}`}. {totals.nexaUnpriced > 0 && `${totals.nexaUnpriced} barang selisih belum memiliki harga persediaan yang valid.`}</>
+              : <>Belum ada rincian impor Nexa pada cakupan ini. Nilai BA manual belum dihitung otomatis dari persediaan. Impor stok opname dan muat Report Persediaan bulan yang sama untuk mencocokkan kode barang dan menghitung harga × qty selisih. <button className="btn-ghost" onClick={() => setTab("import")}>Buka impor & sumber nilai</button></>}
           </div>
           {!recap.sources.length && <div style={panel}>Belum ada berita acara untuk {periodLabel(period)}{branchId != null ? ` di ${recap.branchName}` : " pada cakupan ini"}. Cabang tanpa BA tetap tercantum pada ringkasan.</div>}
           {(totals.unpriced > 0 || totals.unclassified > 0) && <div style={{ ...panel, fontSize: 12, color: "var(--warning-text, #b07212)" }}>
@@ -214,8 +218,8 @@ export default function RekapStockOpname({ profile }) {
             <h2 style={{ fontSize: 15, margin: 0, padding: "18px 20px" }}>Ringkasan {branchId != null ? recap.branchName : "Cabang"} - {periodLabel(period)}</h2>
             <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", whiteSpace: "nowrap" }}>
               <thead><tr>{["Cabang", "Jumlah BA", "Baris diperiksa", "Lengkap", "Baris selisih", "Rincian selisih", "Nilai terisi", "Belum bernilai", "Status"].map((heading) => <th key={heading} style={{ ...cell, background: "var(--surface-alt)" }}>{heading}</th>)}</tr></thead>
-              <tbody>{recap.summaries.map((row) => <tr key={row.branchId}>{[row.branch, row.auditCount, row.checked, row.complete, row.differenceRows, row.detailCount, rupiah(row.knownValue), row.unpriced, row.status].map((value, index) => <td key={index} style={{ ...cell, fontWeight: index === 0 || index === 4 ? 600 : 400 }}>{value}</td>)}</tr>)}</tbody>
-              <tfoot><tr>{["TOTAL", totals.auditCount, totals.checked, totals.complete, totals.differenceRows, totals.detailCount, rupiah(totals.knownValue), totals.unpriced, ""].map((value, index) => <td key={index} style={{ ...cell, fontWeight: 700, background: "var(--surface-alt)" }}>{value}</td>)}</tr></tfoot>
+              <tbody>{recap.summaries.map((row) => <tr key={row.branchId}>{[row.branch, row.auditCount, row.checked, row.complete, row.differenceRows, row.detailCount, stockValueLabel(row), row.unpriced, row.status].map((value, index) => <td key={index} style={{ ...cell, fontWeight: index === 0 || index === 4 ? 600 : 400 }}>{value}</td>)}</tr>)}</tbody>
+              <tfoot><tr>{["TOTAL", totals.auditCount, totals.checked, totals.complete, totals.differenceRows, totals.detailCount, stockValueLabel(totals), totals.unpriced, ""].map((value, index) => <td key={index} style={{ ...cell, fontWeight: 700, background: "var(--surface-alt)" }}>{value}</td>)}</tr></tfoot>
             </table></div>
           </section>
           <section hidden={tab !== "details"} className="stock-card">
