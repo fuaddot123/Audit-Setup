@@ -3,6 +3,7 @@ import { supabase } from "../lib/supabaseClient";
 import { calcWeightedFromRecord, CATS, CONDITION_ITEMS, isLegacyChecklistRecord, listFailedItems, nowPeriode, periodeLabel, addMonthsToPeriod } from "../lib/sopConfig";
 import { kesehatanStatusInfo, serviceStatusInfo, laptopStatusInfo } from "../lib/stokConfig";
 import { INVENTARIS_CATEGORIES } from "./AuditInventaris";
+import { bentukPerItem, statusKategori } from "../lib/format-ba";
 import BranchMultiSelect from "./BranchMultiSelect";
 import { sortBranches } from "../lib/branchOrder";
 import { kpiItemsFor, calcKPI, totalKpiInfo } from "../lib/kpiConfig";
@@ -94,7 +95,10 @@ function countStokTemuan(stokRecord) {
 const OVERLAP_INVENTARIS_CATS = ["Penerangan", "Furniture & Fixture", "Listrik & Utilitas"];
 function countRusakNonOverlap(inventarisData) {
   if (!inventarisData) return 0;
-  return INVENTARIS_CATEGORIES.filter((c) => !OVERLAP_INVENTARIS_CATS.includes(c) && inventarisData[c]?.status === "Rusak").length;
+  // statusKategori membaca kedua bentuk data: format lama (kunci = kategori) dan format September 2026
+  // ke atas (kunci "Kategori|Item", kategori Rusak kalau ADA satu itemnya Rusak). Membaca
+  // inventarisData[c] langsung selalu 0 untuk format baru, jadi temuan Inventaris nggak ikut terhitung.
+  return INVENTARIS_CATEGORIES.filter((c) => !OVERLAP_INVENTARIS_CATS.includes(c) && statusKategori(inventarisData, c) === "Rusak").length;
 }
 
 function keuanganSisa(entry) {
@@ -152,7 +156,9 @@ function loadPptxGenJS() {
 // Identitas 1 temuan: teks yang dinormalisasi (SOP: teks butir checklist; Inventaris: nama item
 // yang berstatus Rusak). Dibandingkan antar audit untuk 1 cabang. Bulan yang nggak diaudit
 // DILEWATI — pembandingnya selalu audit terakhir sebelumnya yang ada datanya.
-const normTemuan = (t) => String(t || "").toLowerCase().replace(/\s+/g, " ").trim();
+// Hanya huruf & angka yang dipakai untuk mencocokkan: emoji (mis. ❌), simbol, dan tanda baca dibuang,
+// jadi butir yang sama tetap dikenali walau penulisan simbolnya beda antar audit.
+const normTemuan = (t) => String(t || "").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
 function auditValid(rec) { return !!rec && !rec.data?.tidak_visit; }
 
 // Kumpulan temuan 1 audit (SOP + Inventaris). `has` = sumber mana yang datanya ada, supaya
@@ -160,6 +166,7 @@ function auditValid(rec) { return !!rec && !rec.data?.tidak_visit; }
 function temuanMapOf(sopRec, invRec) {
   const map = new Map();
   const has = { sop: auditValid(sopRec), inv: auditValid(invRec) };
+  let perItem; // bentuk data Inventaris audit ini (undefined kalau Inventaris nggak diaudit)
   if (has.sop) {
     const notes = sopRec.data?.notes || {};
     listFailedItems(sopRec.data).forEach(({ key, text, catLabel }) => {
@@ -168,13 +175,16 @@ function temuanMapOf(sopRec, invRec) {
   }
   if (has.inv) {
     const cats = invRec.data?.categories || {};
+    // Format Berita Acara September 2026 ke atas menyimpan Inventaris PER ITEM (kunci "Kategori|Item");
+    // format lama per KATEGORI (kunci = nama kategori). Dua bentuk ini nggak bisa dicocokkan langsung.
+    perItem = bentukPerItem(cats);
     Object.keys(cats).forEach((name) => {
       if (cats[name]?.status === "Rusak") {
-        map.set("inv|" + normTemuan(name), { src: "inv", text: name.replace("|", " \u2013 "), cat: "Inventaris", note: cats[name].keterangan || "" });
+        map.set("inv|" + normTemuan(name), { src: "inv", text: name.replace("|", " \u2013 "), cat: "Inventaris", note: cats[name].keterangan || "", perItem, catKey: "inv|" + normTemuan(name.split("|")[0]) });
       }
     });
   }
-  return { map, has };
+  return { map, has, perItem };
 }
 
 // Riwayat audit 1 cabang SEBELUM bulan ini, urut dari yang terbaru: [{ period, sop, inv }].
@@ -194,6 +204,17 @@ function riwayatCabang(branchId, histSop, histInv) {
     .filter((e) => auditValid(e.sop) || auditValid(e.inv));
 }
 
+// Apakah audit `t` memuat temuan `v` (kunci k)? Kunci sama = ya. Khusus Inventaris yang bentuk datanya
+// beda (kategori lama vs item baru, melintasi batas September 2026), dicocokkan di tingkat KATEGORI:
+// kategori lama "Rusak" dianggap sama dengan item baru di kategori itu yang "Rusak".
+function punyaTemuan(t, v, k) {
+  if (t.map.has(k)) return true;
+  if (v.src === "inv" && t.perItem !== undefined && t.perItem !== v.perItem) {
+    for (const x of t.map.values()) if (x.src === "inv" && x.catKey === v.catKey) return true;
+  }
+  return false;
+}
+
 // Bandingkan temuan bulan ini (cur) dengan audit terakhir sebelumnya (riwayat[0]).
 // berulang = ada di keduanya (streak = berapa audit berturut-turut sudah muncul, termasuk sekarang);
 // baru = hanya sekarang; diperbaiki = hanya di audit sebelumnya. Cuma sumber yang datanya ada di
@@ -209,9 +230,12 @@ function analisisBerulang(cur, riwayat) {
   const berulang = [], baru = [], diperbaiki = [];
   cur.map.forEach((v, k) => {
     if (!komparabel(v.src)) return;
-    if (prevT.map.has(k)) {
+    if (punyaTemuan(prevT, v, k)) {
       let streak = 2;
-      for (let i = 1; i < hist.length; i++) { if (hist[i].map.has(k)) streak++; else break; }
+      for (let i = 1; i < hist.length; i++) {
+        if (!hist[i].has[v.src]) continue; // sumber ini nggak diaudit di bulan itu: dilewati, bukan memutus streak
+        if (punyaTemuan(hist[i], v, k)) streak++; else break;
+      }
       berulang.push({ ...v, streak });
     } else baru.push(v);
   });
@@ -219,12 +243,14 @@ function analisisBerulang(cur, riwayat) {
   prevT.map.forEach((v, k) => {
     if (!komparabel(v.src)) return;
     prevCount += 1;
-    if (!cur.map.has(k)) diperbaiki.push(v);
+    if (!punyaTemuan(cur, v, k)) diperbaiki.push(v);
   });
   berulang.sort((a, b) => b.streak - a.streak || a.text.localeCompare(b.text));
+  baru.sort((a, b) => a.text.localeCompare(b.text));
   let status;
   if (berulang.length > 0 && diperbaiki.length === 0) status = { lbl: "Tidak ada perubahan", color: RED };
   else if (berulang.length > 0) status = { lbl: "Sebagian belum berubah", color: AMBER };
+  else if (prevCount > 0 && baru.length > 0) status = { lbl: "Diperbaiki, ada temuan baru", color: AMBER };
   else if (prevCount > 0) status = { lbl: "Semua sudah diperbaiki", color: GREEN };
   else if (baru.length > 0) status = { lbl: "Temuan baru", color: AMBER };
   else status = { lbl: "Tanpa temuan", color: GREEN };
@@ -630,7 +656,7 @@ export default function LaporanBulanan({ profile }) {
           Object.keys(invCats).forEach((catName) => {
             const item = invCats[catName];
             if (item?.status === "Rusak") {
-              findings.push({ text: catName, note: item.keterangan || "", media: item.photos || [], cat: "Inventaris" });
+              findings.push({ text: catName.replace("|", " \u2013 "), note: item.keterangan || "", media: item.photos || [], cat: "Inventaris" });
             }
           });
         }
@@ -1239,7 +1265,7 @@ export default function LaporanBulanan({ profile }) {
         if (selisihList.length) {
           const th = (t, align) => ({ text: t, options: { fill: { color: PURPLE }, color: WHITE, bold: true, fontSize: 12.5, align: align || "center" } });
           const tot = (t, extra) => ({ text: t, options: Object.assign({ fontSize: 12.5, bold: true, fill: { color: PURPLE }, color: WHITE }, extra || {}) });
-          const grandTotal = selisihList.reduce((s2, x) => s2 + x.total, 0);
+          const grandTotal = selisihList.reduce((s2, x) => s2 + Math.round(x.total), 0); // dari angka per cabang yang sudah dibulatkan, biar jumlah di tabel cocok
           const grandItems = selisihList.reduce((s2, x) => s2 + x.items.length, 0);
           const tblBorder = { type: "solid", color: "E5E5E5", pt: 0.5 };
 
@@ -1804,9 +1830,10 @@ export default function LaporanBulanan({ profile }) {
           const estLines = (txt, cpl) => Math.max(1, Math.ceil(String(txt || "").length / cpl));
           const rowH = (r) => Math.max(estLines(r.text, 48), estLines(r.cat, 13), estLines(r.note, 38)) * 0.2 + 0.14;
           const MAX_H = 4.5;
-          analisis.filter((a) => a.berulang.length > 0).forEach((a) => {
+          analisis.filter((a) => a.berulang.length > 0 || a.baru.length > 0).forEach((a) => {
             const baris = [
               ...a.berulang.map((t) => ({ ...t, status: `BERULANG \u00d7${t.streak}`, color: RED })),
+              ...a.baru.map((t) => ({ ...t, status: "BARU", color: AMBER })),
               ...a.diperbaiki.map((t) => ({ ...t, note: "", status: "DIPERBAIKI", color: GREEN })),
             ];
             const halaman = [];
@@ -1834,7 +1861,7 @@ export default function LaporanBulanan({ profile }) {
               });
               s.addTable([[th("No"), th("Temuan", "left"), th("Asal", "left"), th("Status"), th("Catatan Auditor", "left")]].concat(body),
                 { x: 0.35, y: 1.4, w: 12.6, colW: [0.5, 5.4, 1.7, 2.0, 3.0], border: tblBorder, autoPage: false, margin: [3, 5, 3, 5] });
-              s.addText("BERULANG \u00d7n = temuan yang sama muncul di n audit berturut-turut (termasuk bulan ini), artinya belum ada perubahan. DIPERBAIKI = ada di audit sebelumnya, sudah tidak muncul.",
+              s.addText("BERULANG \u00d7n = temuan yang sama muncul di n audit berturut-turut (termasuk bulan ini), artinya belum ada perubahan. BARU = hanya muncul di audit bulan ini. DIPERBAIKI = ada di audit sebelumnya, sudah tidak muncul.",
                 { x: 0.35, y: 6.75, w: 10.8, h: 0.5, fontSize: 10, color: GREY, margin: 0, valign: "top" });
             });
           });

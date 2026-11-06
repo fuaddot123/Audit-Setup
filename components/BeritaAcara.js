@@ -1294,9 +1294,9 @@ export default function BeritaAcara({ profile }) {
       .table-block-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px; }
       .table-block-hdr .lbl { font-weight: 800; font-size: 9.3px; color: #2A1F52; }
       .table-block-hdr .pill { font-size: 8px; font-weight: 800; padding: 2px 9px; border-radius: 20px; color: #fff; }
-      table.data { width: 100%; border-collapse: collapse; font-size: 8px; border: 1px solid #e4dff2; }
-      table.data th { background: #2A1F52; color: #fff; text-align: left; padding: 3.2px 6px; font-size: 7px; text-transform: uppercase; letter-spacing: 0.02em; }
-      table.data td { padding: 2.4px 6px; border-bottom: 1px solid #efecf7; vertical-align: middle; }
+      table.data { width: 100%; border-collapse: collapse; font-size: 8px; border: 1px solid #2A1F52; }
+      table.data th { background: #2A1F52; color: #fff; text-align: left; padding: 3.2px 6px; font-size: 7px; text-transform: uppercase; letter-spacing: 0.02em; border: 1px solid #2A1F52; }
+      table.data td { padding: 2.4px 6px; border: 1px solid #8f89a8; vertical-align: middle; }
       .inv-photos { display: flex; gap: 3px; margin-top: 3px; flex-wrap: wrap; }
       .inv-thumb { width: 30px; height: 30px; object-fit: cover; border-radius: 3px; border: 1px solid #ddd; }
       table.data tr.kat-row td { background: #ece8f7; color: #2A1F52; font-weight: 800; font-size: 7.4px; padding: 2.2px 6px; }
