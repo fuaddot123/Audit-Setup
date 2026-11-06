@@ -1635,7 +1635,7 @@ export default function BeritaAcara({ profile }) {
                             <span style={{ fontSize: 11, color: "var(--text-faint)" }}>selisih dari {totalItem} item</span>
                           </div>
                           <span style={{ display: "inline-block", marginTop: 6, padding: "2px 9px", borderRadius: 20, background: selisihCount > 0 ? "#a3202022" : "#1a9e6e22", color: selisihCount > 0 ? "#a32020" : "#1a9e6e", fontSize: 10.5, fontWeight: 600 }}>
-                            {selisihCount > 0 ? "Ada temuan" : "Semua lengkap"}
+                            {selisihCount > 0 ? "Ada temuan" : [...kat1, ...kat2].some((r) => r.status === "Di luar filter") ? "Tidak ada selisih sesuai filter" : "Semua lengkap"}
                           </span>
                           <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 6 }}>Terakhir: {shortDate(entry.audit_date)}</div>
                         </>
