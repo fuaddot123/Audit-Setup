@@ -11,6 +11,7 @@ import { valueRecord } from "../lib/persediaanValuation";
 import { savePersediaanValues } from "../lib/savePersediaanValues";
 import { canImportNexa } from "../lib/nexaRecapSave";
 import ManualStockReconciliation from "./ManualStockReconciliation";
+import { TEMPORARY_ADJUST_FILTER, ADJUST_FILTER_DESCRIPTION } from "../lib/stockAdjustFilter";
 
 function previousPeriod() {
   const date = new Date();
@@ -51,14 +52,14 @@ export default function RekapStockOpname({ profile }) {
   const activeReport = inventoryReport?.queryKey === queryKey ? inventoryReport : null;
   const saving = importSaving || valuationSaving;
   const valuedRecords = useMemo(() => isCurrent ? records.map((r) => valueRecord(r, activeReport)) : [], [records, activeReport, isCurrent]);
-  const recap = useMemo(() => buildStockRecap({ branches, records: valuedRecords, profiles, period, mode, ownerId, branchId }),
+  const recap = useMemo(() => buildStockRecap({ branches, records: valuedRecords, profiles, period, mode, ownerId, branchId, adjustOnly: TEMPORARY_ADJUST_FILTER }),
     [branches, valuedRecords, profiles, period, mode, ownerId, branchId]);
   const valuationIds = recap.sources.filter((s) => {
     const r = records.find((r) => r.id === s.id);
     return r && canImportNexa(profile) && (profile.role === "super_admin" || r.submitted_by === profile.id)
       && [r.stock_opname_kat1, r.stock_opname_kat2].some((rows) => Array.isArray(rows) && rows.some((row) => row.nexa));
   }).map((s) => s.id);
-  const number = generatedFor === scopeKey ? recapDocumentNumber(period, mode, ownerId, branchId) : "";
+  const number = generatedFor === scopeKey ? recapDocumentNumber(period, mode, ownerId, branchId, recap.adjustOnly) : "";
 
   function changePeriod(value) {
     if (/^\d{4}-(0[1-9]|1[0-2])$/.test(value)) setPeriod(value);
@@ -108,10 +109,10 @@ export default function RekapStockOpname({ profile }) {
   async function exportReport(type) {
     if (loading || exporting || saving || !isCurrent || !currentBranch || !recap.sources.length) return;
     setExporting(type); setError(""); setGeneratedFor(scopeKey);
-    const docNumber = recapDocumentNumber(period, mode, ownerId, branchId);
+    const docNumber = recapDocumentNumber(period, mode, ownerId, branchId, recap.adjustOnly);
     const stamp = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
     const branchSlug = recap.branchName?.normalize("NFKD").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-|-$/g, "");
-    const filename = `Rekap-Stock-Opname-${period}${branchId == null ? "" : `-Cabang-${branchId}-${branchSlug}`}-${mode === "all" ? "Semua-BA" : "Audit-Terakhir"}${ownerId ? "-Data-Saya" : ""}`;
+    const filename = `Rekap-Stock-Opname-${period}${branchId == null ? "" : `-Cabang-${branchId}-${branchSlug}`}-${mode === "all" ? "Semua-BA" : "Audit-Terakhir"}${ownerId ? "-Data-Saya" : ""}${recap.adjustOnly ? "-Kategori-Adjust" : ""}`;
     try {
       if (type === "excel") {
         const XLSX = await import("xlsx");
@@ -144,6 +145,7 @@ export default function RekapStockOpname({ profile }) {
   const totals = recap.totals;
   const manualDetails = recap.details.filter((r) => !r.isNexa);
   const categoryRows = categorySummary(recap.nexaItems);
+  const hasNexaSource = recap.filterInfo.sourceNexaItems > 0;
   return (
     <main className="stock-recap" style={{ flex: 1, minWidth: 0 }}>
       <div style={{ background: "var(--surface)", padding: "18px 28px", borderBottom: "1px solid var(--border)" }}>
@@ -184,6 +186,7 @@ export default function RekapStockOpname({ profile }) {
         </section>
         {error && <div role="alert" style={{ ...panel, color: "var(--danger-text)", background: "var(--danger-bg)" }}>{error}</div>}
         {valuationNotice && <div role="status" className="stock-success">{valuationNotice}</div>}
+        {recap.adjustOnly && <section style={{ ...panel, fontSize: 12, lineHeight: 1.7 }} aria-label="Filter alasan adjust"><strong>Filter kategori adjust sementara aktif</strong><p style={{ margin: "6px 0 0", color: "var(--text-secondary)" }}>{ADJUST_FILTER_DESCRIPTION}</p>{!busy && <div style={{ marginTop: 8 }}>{recap.nexaItems.length} dari {recap.filterInfo.sourceNexaDifferences} rincian selisih Nexa masuk filter; {recap.filterInfo.excludedNexaDifferences} tidak masuk. {recap.filterInfo.excludedManualDetails} rincian manual di luar filter.</div>}</section>}
         <section style={{ ...panel, display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 16, alignItems: "center" }}>
           <div style={{ minWidth: 0 }}>
             <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 7 }}>Nomor Berita Acara Rekap</div>
@@ -208,12 +211,13 @@ export default function RekapStockOpname({ profile }) {
         {busy ? <div style={{ color: "var(--text-secondary)" }}>{error ? "Data belum dapat dimuat. Klik Perbarui data untuk mencoba kembali." : "Memuat rekap stock opname…"}</div> : <>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
             {[
-              ["Berita acara cabang", totals.auditCount], ["Qty kurang (Nexa)", recap.nexaItems.length ? totals.nexaShortageQty : "—"],
-              ["Qty lebih (Nexa)", recap.nexaItems.length ? totals.nexaSurplusQty : "—"], [recap.nexaItems.length ? "Nilai selisih Nexa" : "Nilai terisi (BA)", recap.nexaItems.length ? `${rupiah(totals.nexaNetValue)}${totals.nexaUnpriced ? " (sebagian)" : ""}` : stockValueLabel(totals)],
+              ["Berita acara cabang", totals.auditCount], ["Qty kurang (Nexa)", hasNexaSource ? totals.nexaShortageQty : "—"],
+              ["Qty lebih (Nexa)", hasNexaSource ? totals.nexaSurplusQty : "—"], [hasNexaSource ? "Nilai selisih Nexa" : "Nilai terisi (BA)", hasNexaSource ? `${rupiah(totals.nexaNetValue)}${totals.nexaUnpriced ? " (sebagian)" : ""}` : stockValueLabel(totals)],
             ].map(([label, value]) => <div key={label} style={panel}><div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 8 }}>{label}</div><strong style={{ fontSize: 22 }}>{value}</strong></div>)}
           </div>
           <div style={{ ...panel, fontSize: 12, lineHeight: 1.7 }}>
-            {recap.nexaItems.length ? <>{totals.nexaValued} dari {totals.nexaValued + totals.nexaUnpriced} barang selisih sudah dihitung. {recap.nexaItems.filter((i) => i.difference !== 0 && i.unitCost === 0).length} baris bernilai buku Rp0 sesuai sumber. {totals.nexaUnpriced > 0 && `${totals.nexaUnpriced} barang selisih belum memiliki harga persediaan yang valid.`} Harga acuan saldo awal/historis ditandai pada rincian.</>
+            {hasNexaSource && recap.adjustOnly && !recap.nexaItems.length && <p style={{ marginTop: 0 }}><strong>Tidak ada selisih yang memenuhi kategori adjust.</strong> Nilai Rp0 karena tidak ada temuan yang masuk filter pada cabang/periode ini.</p>}
+            {hasNexaSource ? <>{totals.nexaValued} dari {totals.nexaValued + totals.nexaUnpriced} barang selisih sesuai filter sudah dihitung. {recap.nexaItems.filter((i) => i.difference !== 0 && i.unitCost === 0).length} baris bernilai buku Rp0 sesuai sumber. {totals.nexaUnpriced > 0 && `${totals.nexaUnpriced} barang selisih belum memiliki harga persediaan yang valid.`} Harga acuan saldo awal/historis ditandai pada rincian.</>
               : <>Belum ada rincian impor Nexa pada cakupan ini. Nilai BA manual belum dihitung otomatis dari persediaan. Impor stok opname dan muat Report Persediaan bulan yang sama untuk mencocokkan kode barang dan menghitung harga × qty selisih. <button className="btn-ghost" onClick={() => setTab("import")}>Buka impor & sumber nilai</button></>}
           </div>
           {!recap.sources.length && <div style={panel}>Belum ada berita acara untuk {periodLabel(period)}{branchId != null ? ` di ${recap.branchName}` : " pada cakupan ini"}. Cabang tanpa BA tetap tercantum pada ringkasan.</div>}
@@ -233,7 +237,7 @@ export default function RekapStockOpname({ profile }) {
           {!!categoryRows.length && <section hidden={tab !== "summary"} style={panel}><h2 style={{ fontSize: 15, marginTop: 0 }}>Kategori barang & selisih Nexa</h2><div className="stock-table-scroll"><table className="stock-item-table"><thead><tr>{["Kategori barang", "Kategori selisih", "Baris barang", "Qty selisih", "Nilai terhitung", "Belum bernilai"].map((h) => <th key={h}>{h}</th>)}</tr></thead><tbody>{categoryRows.map((r) => <tr key={`${r.category}/${r.direction}`}><td>{r.category}</td><td>{r.direction}</td><td>{r.count}</td><td>{r.qty}</td><td>{rupiah(r.value)}{r.unpriced ? " (sebagian)" : ""}</td><td>{r.unpriced}</td></tr>)}</tbody></table></div></section>}
           <section hidden={tab !== "details"} className="stock-card">
             <div className="stock-section-heading"><div><span className="stock-eyebrow">RINCIAN BARANG</span><h2>Stok admin, stok fisik & nilai selisih</h2><p>{activeReport ? `Harga otomatis dari ${activeReport.fileName} · ${activeReport.period}` : "Harga mengikuti sumber persediaan yang tersimpan pada BA. Muat report untuk menghitung ulang."}</p></div><span className="stock-pill">{recap.nexaItems.length} barang</span></div>
-            {recap.nexaItems.length ? <StockNexaDetails key={`${period}/${branchId}/${mode}`} items={recap.nexaItems} /> : <div className="stock-empty">Belum ada rincian Excel Nexa pada cakupan ini. <button className="btn-ghost" onClick={() => setTab("import")}>Impor Excel Nexa</button></div>}
+            {recap.nexaItems.length ? <StockNexaDetails key={`${period}/${branchId}/${mode}`} items={recap.nexaItems} /> : <div className="stock-empty">{hasNexaSource ? "Tidak ada selisih Nexa yang memenuhi kategori adjust pada cabang/periode ini." : <>Belum ada rincian Excel Nexa pada cakupan ini. <button className="btn-ghost" onClick={() => setTab("import")}>Impor Excel Nexa</button></>}</div>}
           </section>
           <section hidden={tab !== "details" || !manualDetails.length} style={{ ...panel, padding: 0, overflow: "hidden" }}>
             <h2 style={{ fontSize: 15, margin: 0, padding: "18px 20px" }}>Catatan selisih audit manual ({manualDetails.length})</h2>
@@ -242,7 +246,7 @@ export default function RekapStockOpname({ profile }) {
               <tbody>{manualDetails.map((row, index) => <tr key={`${row.auditId}-${index}`}>
                 <td style={cell}>{row.branch}<div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{row.auditDate || "Tanggal belum diisi"}</div></td>
                 <td style={cell}>{row.item}<div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{row.group}</div></td>
-                <td style={cell}>{stockDetailName(row)}<div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{row.category}</div><div style={{ fontSize: 10, color: "var(--text-faint)", marginTop: 4 }}>{stockDetailNameNote(row)}</div></td>
+                <td style={cell}>{stockDetailName(row)}<div style={{ fontSize: 11, color: "var(--text-faint)", marginTop: 4 }}>{row.category}</div>{row.adjustCategory && <div style={{ fontSize: 11, marginTop: 4 }}>{row.adjustCategory}</div>}<div style={{ fontSize: 10, color: "var(--text-faint)", marginTop: 4 }}>{stockDetailNameNote(row)}</div></td>
                 <td style={cell}>{row.qty ?? "Perlu verifikasi"}{row.nexaLink && <div style={{ fontSize: 10, marginTop: 4 }}>Admin {row.systemQty} · Fisik {row.countedQty}<br />{row.discrepancyCategory}</div>}{row.qtyAssumed && <div style={{ fontSize: 10, color: "var(--text-faint)" }}>Asumsi 1</div>}</td>
                 <td style={cell}>{row.price == null && row.pendingReason ? "Perlu verifikasi" : rupiah(row.price)}</td><td style={cell}>{row.value == null && row.pendingReason ? "Perlu verifikasi" : rupiah(row.value)}{row.excludedFromTotal && <div style={{ fontSize: 10 }}>Sudah dihitung di Nexa</div>}</td><td style={{ ...cell, minWidth: 220, whiteSpace: "pre-wrap" }}>{row.note || "-"}</td>
               </tr>)}{!recap.details.length && <tr><td colSpan={7} style={cell}>Tidak ada selisih pada data yang dipilih.</td></tr>}</tbody>
