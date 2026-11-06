@@ -1,3 +1,4 @@
+import { TEMPORARY_ADJUST_FILTER } from "../lib/stockAdjustFilter";
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { sortBranches } from "../lib/branchOrder";
@@ -1224,7 +1225,7 @@ export default function BeritaAcara({ profile }) {
         storeManager: storeManagerName,
         inventaris,
         stokBarisHtml,
-        nexaLampiranHtml: nexaAppendixHtml([...stockKat1, ...stockKat2], selectedEntryId, esc),
+        nexaLampiranHtml: nexaAppendixHtml([...stockKat1, ...stockKat2], selectedEntryId, esc, TEMPORARY_ADJUST_FILTER),
         stokTotal: stockTotalCount,
         stokSelisih: stockSelisihCount,
         stokPct: stockPct,
@@ -1487,7 +1488,7 @@ export default function BeritaAcara({ profile }) {
           </div>
         </div>
 
-        ${nexaAppendixHtml([...stockKat1, ...stockKat2], selectedEntryId, esc)}
+        ${nexaAppendixHtml([...stockKat1, ...stockKat2], selectedEntryId, esc, TEMPORARY_ADJUST_FILTER)}
         <div class="footer-row">
           <div class="sign-box">
             <div class="t">MENGETAHUI</div>
@@ -1843,7 +1844,7 @@ export default function BeritaAcara({ profile }) {
               return (
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 16px", marginBottom: 16 }}>
                   <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)" }}>
-                    {allRows.length} item dicek &middot; {selisihCount === 0 ? "semua lengkap" : `${selisihCount} selisih ditemukan`}
+                    {allRows.length} item dicek &middot; {selisihCount === 0 ? (allRows.some((r) => r.status === "Di luar filter") ? "tidak ada selisih sesuai filter" : "semua lengkap") : `${selisihCount} selisih ditemukan`}
                   </span>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <span style={{ fontSize: 20, fontWeight: 800, color: selisihCount > 0 ? "#a32020" : "#1a9e6e" }}>{selisihCount}</span>
@@ -1971,7 +1972,7 @@ function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove, onUp
       {rows.length === 0 ? (
         <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Belum ada baris.</div>
       ) : shown.length === 0 ? (
-        <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Semua item di kategori ini "Lengkap" &mdash; nggak ada yang selisih.</div>
+        <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Tidak ada item berstatus selisih sesuai filter pada kategori ini.</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {shown.map(({ row, i }) => {
@@ -1980,13 +1981,13 @@ function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove, onUp
             return (
               <div key={i} style={{ display: "grid", gridTemplateColumns: "1.6fr auto 1.8fr auto", gap: 8, alignItems: "center", background: "var(--surface-alt)", padding: "10px 10px 10px 12px", borderRadius: 8, borderLeft: `3px solid ${isSelisih ? "#a32020" : "#1a9e6e55"}` }}>
                 <input className="input" placeholder="Nama Barang/Brand" value={row.nama} disabled={!canEdit} onChange={(e) => onUpdate(i, "nama", e.target.value)} style={{ fontSize: 12.5 }} />
-                <StatusToggle
+                {row.status === "Di luar filter" ? <span className="stock-pill">Di luar filter</span> : <StatusToggle
                   value={row.status}
                   onChange={(v) => onUpdate(i, "status", v)}
                   disabled={!canEdit}
                   okLabel="Lengkap"
                   badLabel="Selisih"
-                />
+                />}
                 <input className="input" placeholder="Keterangan" value={row.keterangan} disabled={!canEdit} onChange={(e) => onUpdate(i, "keterangan", e.target.value)} style={{ fontSize: 12.5 }} />
                 {canEdit && <span onClick={() => onRemove(i)} style={{ cursor: "pointer", color: "var(--danger-text)", fontSize: 18, textAlign: "center" }}>&times;</span>}
                 {isSelisih && (() => {

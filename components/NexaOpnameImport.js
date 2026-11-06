@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { readNexaTable, makeNexaRows, warehouseMatchesBranch } from "../lib/nexaOpnameImport";
 import StockNexaDetails from "./StockNexaDetails";
+import { TEMPORARY_ADJUST_FILTER, classifyStockAdjust } from "../lib/stockAdjustFilter";
 
 export function NexaOpnameImport({ branch, period, auditDate, existingRows, onImport }) {
   const [book, setBook] = useState(null), [sheet, setSheet] = useState("");
@@ -92,11 +93,13 @@ export function NexaOpnameImport({ branch, period, auditDate, existingRows, onIm
 
 export function NexaImportedRow({ row, canEdit, onRemove, onNote, removeLabel }) {
   const source = row.nexa;
+  const shown = TEMPORARY_ADJUST_FILTER ? source.items.filter(classifyStockAdjust) : source.items;
+  const label = TEMPORARY_ADJUST_FILTER && source.items.some((i) => i.difference !== 0) ? (shown.length ? "Selisih" : "Di luar filter") : row.status;
   return <div className="stock-opname-card">
-    <div className="stock-section-heading"><div><span className="stock-eyebrow">HASIL OPNAME</span><h3>{source.code}</h3><p>{source.date} · {source.warehouse} · {source.items.length} barang</p></div><span className={`stock-pill ${row.status === "Selisih" ? "is-bad" : "is-good"}`}>{row.status} (jumlah)</span></div>
-    <StockNexaDetails items={source.items} compact />
+    <div className="stock-section-heading"><div><span className="stock-eyebrow">HASIL OPNAME</span><h3>{source.code}</h3><p>{source.date} · {source.warehouse} · {shown.length} barang{TEMPORARY_ADJUST_FILTER ? " sesuai filter adjust" : ""}</p></div><span className={`stock-pill ${label === "Selisih" ? "is-bad" : label === "Lengkap" ? "is-good" : ""}`}>{label}</span></div>
+    {shown.length ? <StockNexaDetails items={shown} compact /> : <p style={{ fontSize: 12 }}>Tidak ada selisih sesuai filter adjust pada opname ini.</p>}
     <label className="stock-audit-note">Catatan pemeriksaan / alasan tindak lanjut <textarea className="input" value={row.keterangan} disabled={!canEdit} onChange={(e) => onNote(e.target.value)} /></label>
-    <details className="stock-source-meta"><summary>Sumber data: {source.fileName}</summary><p>SHA-256: {source.fileSha256}</p>{!!source.manualMetadata?.length && <p>Diisi saat impor: {source.manualMetadata.join(", ")}</p>}</details>
+    <details className="stock-source-meta"><summary>Sumber data: {source.fileName}</summary><p>{source.items.length} barang sumber tetap tersimpan, termasuk barang di luar filter.</p><p>SHA-256: {source.fileSha256}</p>{!!source.manualMetadata?.length && <p>Diisi saat impor: {source.manualMetadata.join(", ")}</p>}</details>
     {canEdit && <button type="button" className="btn-ghost" style={{ marginTop: 10 }} onClick={onRemove}>{removeLabel || `Hapus impor ${source.code} dari BA ini`}</button>}
   </div>;
 }

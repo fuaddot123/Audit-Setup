@@ -11,6 +11,7 @@ import { valueRecord } from "../lib/persediaanValuation";
 import { savePersediaanValues } from "../lib/savePersediaanValues";
 import { canImportNexa } from "../lib/nexaRecapSave";
 import ManualStockReconciliation from "./ManualStockReconciliation";
+import StockDataCorrection from "./StockDataCorrection";
 import { TEMPORARY_ADJUST_FILTER, ADJUST_FILTER_DESCRIPTION } from "../lib/stockAdjustFilter";
 
 function previousPeriod() {
@@ -201,6 +202,7 @@ export default function RekapStockOpname({ profile }) {
         </section>
         <nav className="stock-tabs" aria-label="Tampilan rekap">{[["summary", "Ringkasan cabang"], ["details", "Detail stok admin & fisik"], ["import", "Impor Excel & sumber nilai"]].map(([id, label]) => <button key={id} type="button" aria-pressed={tab === id} className={tab === id ? "is-active" : ""} disabled={saving} onClick={() => setTab(id)}>{label}</button>)}</nav>
         <div hidden={tab !== "import"} className="stock-import-workspace">
+          <StockDataCorrection key={`${queryKey}/correction`} period={period} profile={profile} records={isCurrent ? records : []} disabled={busy || !!exporting || saving} onSaving={setImportSaving} onSaved={(record) => setRecords((old) => old.map((r) => r.id === record.id ? record : r))} />
           <ManualStockReconciliation key={`${queryKey}/${branchId}/manual`} period={period} profile={profile} records={valuedRecords.filter((r) => r.branch_id === branchId)} disabled={busy || !!exporting || saving || !currentBranch} onSaving={setImportSaving} onSaved={(record) => setRecords((old) => old.map((r) => r.id === record.id ? record : r))} />
           <PersediaanReportInput key={queryKey} period={period} report={activeReport} disabled={busy || !!exporting || saving} onReport={(r) => { setInventoryReport({ ...r, queryKey }); setValuationNotice(""); }} saveCount={valuationIds.length} onSave={canImportNexa(profile) ? saveValues : null} saving={valuationSaving} />
           {activeReport?.allowReferenceCosts && <PersediaanReportInput key={`${queryKey}/reference`} reference period={period} report={activeReport.references?.[0]} disabled={busy || !!exporting || saving} onReport={(r) => { setInventoryReport((old) => ({ ...old, references: [r] })); setValuationNotice(""); }} />}
