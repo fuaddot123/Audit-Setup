@@ -211,8 +211,8 @@ console.log("\n=== 9. PEMANGGILNYA memakai kelas yang benar ===");
   const sebelumMulai = { ...valid, display_unit_id: "belum-pajang", audit_date: "2026-10-15" };
   const standar = { maks_hari_pajang: 60, bobot_umur: 70, bobot_kondisi: 30 };
   const skor = M.hitungSkorDisplayBA([november, sebelumMulai, valid], standar, new Map(), batas);
-  cek("skor mengeluarkan unit November dan penilaian sebelum mulai pajang",
-    skor.unit_dinilai === 1 && skor.unit_dalam_batas === 1 && skor.skor_display === 92.5);
+  cek("skor mengeluarkan hanya unit di luar batas BA dan mempertahankan catatan bulanan",
+    skor.unit_dinilai === 2 && skor.unit_dalam_batas === 2 && skor.skor_display === 92.5);
   cek("unit baru masuk pada hari mulai pajang", !M.mulaiSetelahBA(november.unit, "2026-11-01"));
 }
 
