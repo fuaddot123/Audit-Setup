@@ -118,6 +118,17 @@ console.log("\n=== 4. Umur dihitung terhadap TANGGAL AUDIT ===");
   cek("tanggal ngawur tidak melempar", M.umurTerhadap("bukan-tanggal", "2026-09-19") === 0);
 }
 
+{
+  const row = { ...UNIT_LEWAT, umur_hari: 72, status_umur: "Lewat Batas", peringatan_sebelum_hari: 5 };
+  const saatAudit = M.displaySaatAudit(row, "2026-09-05");
+  cek("umur form mengikuti tanggal audit dan ambang peringatan master",
+    saatAudit.umur_hari === 58 && saatAudit.status_umur === "Mendekati Batas");
+  const h = M.barisDisplayHtml([saatAudit], { ...OPSI_BARU, tglAudit: undefined });
+  cek("PDF menampilkan umur dari data form dan tidak menandai lewat", h.includes("58 hr / 60") && !h.includes('class="k-bad"'));
+  const turun = M.displaySaatAudit({ ...row, turun: true, tanggal_turun: "2026-09-02" }, "2026-09-05");
+  cek("umur unit yang diturunkan berhenti di tanggal turun", turun.umur_hari === 55);
+}
+
 console.log("\n=== 5. Program brand & catatan kondisi ===");
 {
   const h = M.barisDisplayHtml([UNIT_PROGRAM], OPSI_BARU);
@@ -175,9 +186,10 @@ console.log("\n=== 9. PEMANGGILNYA memakai kelas yang benar ===");
   cek("jalur BARU tidak memakai status-*", !!baru && !baru.includes("status-"));
   cek("jalur BARU menyertakan catatan perlakuan",
     !!baru && /sertakanCatatan:\s*true/.test(baru), (baru || "").trim().slice(0, 90));
-  cek("keduanya memberi tanggal audit, bukan hari ini",
-    panggilan.every((p) => p.includes("tglAudit: auditDate")),
-    panggilan.map((p) => (p.match(/tglAudit:[^,]*/) || ["?"])[0]).join(" | "));
+  cek("jalur lama memakai tanggal audit", !!lama && lama.includes("tglAudit: auditDate"));
+  cek("jalur baru menerima umur audit yang dipakai form", !!baru && !baru.includes("tglAudit:")
+    && ba.includes("formatBaru ? displayRowsSaatAudit : displayRows")
+    && ba.includes("rows={displayRowsSaatAudit}"));
 
   // Gaya cetak format baru memang hanya punya k-*; kalau suatu saat ia
   // menambah .status-*, pagar di atas jadi kurang berarti dan perlu ditinjau.

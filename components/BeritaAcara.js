@@ -12,11 +12,11 @@ import { pakaiFormatBaru, namaPeriode, INVENTARIS_ITEMS, kunciItem, statusKatego
 import { cetakBaruHtml } from "./BeritaAcaraCetakBaru";
 import { NexaImportedRow } from "./NexaOpnameImport";
 import { nexaBaReference, nexaAppendixHtml } from "../lib/nexaOpnameImport";
-import { barisDisplayHtml } from "../lib/baris-display";
+import { barisDisplayHtml, displaySaatAudit, umurTerhadap } from "../lib/baris-display";
 import {
   DisplaySection, muatDisplay, simpanDisplay, periksaDisplay,
   barisDisplayBaru, uploadDisplayMedia, hapusDisplayUntukPeriode,
-  resetDisplayUntukCabang, hitungUmurHari,
+  resetDisplayUntukCabang,
 } from "./DisplayMonitoring";
 import { listFailedItems, scoreInfo, formatRupiah, getCatsForRecord, isCriticalItem, isLegacyChecklistRecord } from "../lib/sopConfig";
 import { formatRatioPct, formatKesehatanPct } from "../lib/stokConfig";
@@ -230,6 +230,7 @@ export default function BeritaAcara({ profile }) {
   const [kondisiOpsi, setKondisiOpsi] = useState([]);
   const [displayUploadIdx, setDisplayUploadIdx] = useState(null);
   const [displayError, setDisplayError] = useState(null);
+  const displayRowsSaatAudit = displayRows.map((row) => displaySaatAudit(row, auditDate));
 
   // ── Laporan Kunjungan (teks ringkas buat WA/chat ke bos) ──
   const [laporanKunjunganTeks, setLaporanKunjunganTeks] = useState(null);
@@ -961,11 +962,11 @@ export default function BeritaAcara({ profile }) {
       const stockLengkap = semuaStock.filter((r) => r.status === "Lengkap").length;
       const stockSelisih = semuaStock.filter((r) => r.status === "Selisih");
       const invHitung = hitungInventaris(inventaris, viewPeriod);
-      const unitDipajang = displayRows.filter((r) => !r.turun);
+      const unitDipajang = displayRowsSaatAudit.filter((r) => !r.turun);
       const unitLewat = unitDipajang.filter((r) => r.status_umur === "Lewat Batas").length;
       const unitMendekati = unitDipajang.filter((r) => r.status_umur === "Mendekati Batas").length;
       const unitTua = unitDipajang
-        .map((r) => ({ ...r, umur: r.baru ? hitungUmurHari(r.tanggal_pajang) : r.umur_hari }))
+        .map((r) => ({ ...r, umur: r.umur_hari }))
         .filter((r) => r.status_umur === "Lewat Batas" || r.status_umur === "Mendekati Batas")
         .sort((a, b) => b.umur - a.umur);
 
@@ -1132,18 +1133,15 @@ export default function BeritaAcara({ profile }) {
 
     // Umur dihitung terhadap TANGGAL AUDIT, bukan hari ini. Berita Acara
     // Agustus yang dicetak ulang bulan Desember harus memuat angka yang sama.
-    function umurSaatAudit(tglPajang) {
-      if (!tglPajang || !auditDate) return 0;
-      const a = new Date(tglPajang + "T00:00:00");
-      const b = new Date(auditDate + "T00:00:00");
-      return Math.max(0, Math.round((b - a) / 86400000));
-    }
     const labelKondisi = (kode) => (kondisiOpsi.find((k) => k.kode === kode) || {}).label || "\u2014";
     const labelPerlakuan = (kode) => (perlakuanOpsi.find((p) => p.kode === kode) || {}).label || "";
 
-    const dUnit = displayRows || [];
+    const formatBaru = pakaiFormatBaru(viewPeriod);
+    const dUnit = formatBaru ? displayRowsSaatAudit : displayRows;
     const dDipajang = dUnit.filter((r) => !r.turun);
-    const dLewat = dDipajang.filter((r) => r.batas_hari != null && umurSaatAudit(r.tanggal_pajang) > r.batas_hari);
+    const dLewat = dDipajang.filter((r) => formatBaru
+      ? r.status_umur === "Lewat Batas"
+      : r.batas_hari != null && umurTerhadap(r.tanggal_pajang, auditDate) > r.batas_hari);
     const dBatas = dUnit.length && dUnit[0].batas_hari != null ? dUnit[0].batas_hari : 60;
 
     const displayInfo = skorD == null
@@ -1187,7 +1185,7 @@ export default function BeritaAcara({ profile }) {
     // Mulai periode September 2026 dokumennya MENGALIR tiga poin dengan
     // tanda tangan di halaman terakhir. Periode sebelumnya tetap memakai
     // template lama di bawah ini, tidak disentuh sama sekali.
-    if (pakaiFormatBaru(viewPeriod)) {
+    if (formatBaru) {
       const barisStok = (judul, rows) => rows.map((r, i) => {
         const bad = r.status === "Selisih";
         return `<tr><td>${i === 0 ? `<b>${esc(judul.toUpperCase())}</b>` : ""}</td>`
@@ -1210,7 +1208,6 @@ export default function BeritaAcara({ profile }) {
       // tanpa galat, tanpa yang kosong.
       const displayBarisBaru = barisDisplayHtml(dUnit, {
         esc, labelKondisi, labelPerlakuan,
-        tglAudit: auditDate,
         kelasOk: "k-ok", kelasBad: "k-bad",
         sertakanCatatan: true,
       });
@@ -1235,7 +1232,7 @@ export default function BeritaAcara({ profile }) {
         displayFotoHtml,
         displayDipajang: dDipajang.length,
         displayLewat: dLewat.length,
-        displayBatas: dBatas,
+        displayTanggalAudit: auditDate,
         skorD,
         displayInfo,
         // Dokumennya memanggil dialog cetaknya sendiri, seperti template lama.
@@ -1900,7 +1897,7 @@ export default function BeritaAcara({ profile }) {
               </div>
             ) : (
               <DisplaySection
-                rows={displayRows}
+                rows={displayRowsSaatAudit}
                 perlakuanOpsi={perlakuanOpsi}
                 kondisiOpsi={kondisiOpsi}
                 canEdit={canEdit}
