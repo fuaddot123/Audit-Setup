@@ -12,9 +12,9 @@ import { pakaiFormatBaru, namaPeriode, INVENTARIS_ITEMS, kunciItem, statusKatego
 import { cetakBaruHtml } from "./BeritaAcaraCetakBaru";
 import { NexaImportedRow } from "./NexaOpnameImport";
 import { nexaBaReference, nexaAppendixHtml } from "../lib/nexaOpnameImport";
-import { barisDisplayHtml, displaySaatAudit, umurTerhadap } from "../lib/baris-display";
+import { barisDisplayHtml, batasTanggalPajangBA, displaySaatAudit, mulaiSetelahBA, umurTerhadap } from "../lib/baris-display";
 import {
-  DisplaySection, muatDisplay, simpanDisplay, periksaDisplay,
+  DisplaySection, muatDisplay, muatSkorDisplayBA, simpanDisplay, periksaDisplay,
   barisDisplayBaru, uploadDisplayMedia, hapusDisplayUntukPeriode,
   resetDisplayUntukCabang,
 } from "./DisplayMonitoring";
@@ -230,7 +230,13 @@ export default function BeritaAcara({ profile }) {
   const [kondisiOpsi, setKondisiOpsi] = useState([]);
   const [displayUploadIdx, setDisplayUploadIdx] = useState(null);
   const [displayError, setDisplayError] = useState(null);
-  const displayRowsSaatAudit = displayRows.map((row) => displaySaatAudit(row, auditDate));
+  const batasTanggalDisplay = batasTanggalPajangBA(viewPeriod, auditDate);
+  const displayRowsForm = displayRows.flatMap((row, indeksForm) => {
+    const setelahBA = mulaiSetelahBA(row, batasTanggalDisplay);
+    if (setelahBA && !row.baru) return [];
+    return [{ ...displaySaatAudit(row, auditDate), indeksForm, setelahBA }];
+  });
+  const displayRowsSaatAudit = displayRowsForm.filter((row) => !row.setelahBA);
 
   // ── Laporan Kunjungan (teks ringkas buat WA/chat ke bos) ──
   const [laporanKunjunganTeks, setLaporanKunjunganTeks] = useState(null);
@@ -472,7 +478,7 @@ export default function BeritaAcara({ profile }) {
   }
 
   function addDisplay() {
-    setDisplayRows((prev) => [...prev, barisDisplayBaru()]);
+    setDisplayRows((prev) => [...prev, barisDisplayBaru(batasTanggalDisplay)]);
     setSaved(false);
   }
 
@@ -493,7 +499,7 @@ export default function BeritaAcara({ profile }) {
     // ringkasannya nggak keitung dobel kalau updater-nya sempat jalan 2x.
     const akanTurun = displayRows.filter((r) => {
       const sn = kunci(r.serial_number);
-      return !r.baru && r.masih_dipajang && !r.turun && sn && !snDiFile.has(sn);
+      return !r.baru && !mulaiSetelahBA(r, batasTanggalDisplay) && r.masih_dipajang && !r.turun && sn && !snDiFile.has(sn);
     });
 
     setDisplayRows((prev) => {
@@ -585,7 +591,8 @@ export default function BeritaAcara({ profile }) {
       // pengecekan ini ada di bawah, sesudah Berita Acara & Inventaris
       // tersimpan — kalau gagal, ID barisnya belum sempat dicatat dan
       // simpan ulang membuat baris DOBEL.
-      const galatDisplay = periksaDisplay(displayRows);
+      const displayDisimpan = displayRows.filter((row) => row.baru || !mulaiSetelahBA(row, batasTanggalDisplay));
+      const galatDisplay = periksaDisplay(displayDisimpan, batasTanggalDisplay);
       if (galatDisplay.length) throw new Error(galatDisplay.join(" "));
 
       const beritaPayload = {
@@ -646,9 +653,9 @@ export default function BeritaAcara({ profile }) {
 
       // Simpan data display sesudah berita acara tersimpan, supaya
       // tanggal audit yang dipakai sama persis.
-      if (displayRows.length) {
+      if (displayDisimpan.length) {
         await simpanDisplay({
-          rows: displayRows, branchId: selectedBranch.id, period: viewPeriod,
+          rows: displayDisimpan, branchId: selectedBranch.id, period: viewPeriod,
           auditDate, userId: user.id, kondisiOpsi, perlakuanOpsi,
         });
         // Dimuat ulang termasuk DAFTAR PILIHANNYA — istilah baru yang barusan
@@ -1119,16 +1126,14 @@ export default function BeritaAcara({ profile }) {
     }).join("");
 
     // ── Data Monitoring Display untuk cetakan ──
-    // Skor diambil dari view v_display_skor_periode, TIDAK dihitung ulang di
-    // sini. Dua tempat yang menghitung hal yang sama adalah cara paling andal
-    // untuk melahirkan dua angka yang berbeda.
+    const formatBaru = pakaiFormatBaru(viewPeriod);
     let skorD = null;
-    try {
+    if (formatBaru) {
+      skorD = await muatSkorDisplayBA({ branchId: selectedBranch.id, period: viewPeriod, batasTanggal: batasTanggalDisplay });
+    } else {
       const rSkor = await supabase.from("v_display_skor_periode").select("*")
         .eq("branch_id", selectedBranch.id).eq("period", viewPeriod).maybeSingle();
       skorD = rSkor.data || null;
-    } catch (errSkor) {
-      skorD = null; // tabel display belum ada — cetakan tetap jalan tanpa blok ini
     }
 
     // Umur dihitung terhadap TANGGAL AUDIT, bukan hari ini. Berita Acara
@@ -1136,7 +1141,6 @@ export default function BeritaAcara({ profile }) {
     const labelKondisi = (kode) => (kondisiOpsi.find((k) => k.kode === kode) || {}).label || "\u2014";
     const labelPerlakuan = (kode) => (perlakuanOpsi.find((p) => p.kode === kode) || {}).label || "";
 
-    const formatBaru = pakaiFormatBaru(viewPeriod);
     const dUnit = formatBaru ? displayRowsSaatAudit : displayRows;
     const dDipajang = dUnit.filter((r) => !r.turun);
     const dLewat = dDipajang.filter((r) => formatBaru
@@ -1897,7 +1901,7 @@ export default function BeritaAcara({ profile }) {
               </div>
             ) : (
               <DisplaySection
-                rows={displayRowsSaatAudit}
+                rows={displayRowsForm}
                 perlakuanOpsi={perlakuanOpsi}
                 kondisiOpsi={kondisiOpsi}
                 canEdit={canEdit}
