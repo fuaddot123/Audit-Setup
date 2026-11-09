@@ -189,7 +189,8 @@ console.log("\n=== 9. PEMANGGILNYA memakai kelas yang benar ===");
   cek("jalur lama memakai tanggal audit", !!lama && lama.includes("tglAudit: auditDate"));
   cek("jalur baru menerima umur audit yang dipakai form", !!baru && !baru.includes("tglAudit:")
     && ba.includes("formatBaru ? displayRowsSaatAudit : displayRows")
-    && ba.includes("rows={displayRowsSaatAudit}"));
+    && ba.includes("rows={displayRowsForm}")
+    && ba.includes("displayRowsForm.filter((row) => !row.setelahBA)"));
 
   // Gaya cetak format baru memang hanya punya k-*; kalau suatu saat ia
   // menambah .status-*, pagar di atas jadi kurang berarti dan perlu ditinjau.
@@ -198,6 +199,21 @@ console.log("\n=== 9. PEMANGGILNYA memakai kelas yang benar ===");
     !gaya.includes(".status-bad") && !gaya.includes(".status-ok"));
   cek("gaya cetak baru mendefinisikan .k-ok & .k-bad",
     gaya.includes(".k-ok{") && gaya.includes(".k-bad{"));
+}
+
+{
+  const batas = M.batasTanggalPajangBA("2026-10", "2026-11-02");
+  cek("BA Oktober berhenti 31 Oktober meski tanggal audit melewati bulan", batas === "2026-10-31");
+  cek("audit tengah bulan tidak memasukkan unit yang mulai setelah kunjungan",
+    M.batasTanggalPajangBA("2026-10", "2026-10-12") === "2026-10-12");
+  const valid = { display_unit_id: "lama", audit_date: "2026-10-31", unit: { tanggal_pajang: "2026-10-31", brand: "Acer" }, skor_saat_audit: 75 };
+  const november = { ...valid, display_unit_id: "november", unit: { tanggal_pajang: "2026-11-01" }, skor_saat_audit: 100 };
+  const sebelumMulai = { ...valid, display_unit_id: "belum-pajang", audit_date: "2026-10-15" };
+  const standar = { maks_hari_pajang: 60, bobot_umur: 70, bobot_kondisi: 30 };
+  const skor = M.hitungSkorDisplayBA([november, sebelumMulai, valid], standar, new Map(), batas);
+  cek("skor mengeluarkan unit November dan penilaian sebelum mulai pajang",
+    skor.unit_dinilai === 1 && skor.unit_dalam_batas === 1 && skor.skor_display === 92.5);
+  cek("unit baru masuk pada hari mulai pajang", !M.mulaiSetelahBA(november.unit, "2026-11-01"));
 }
 
 fs.unlinkSync(tmp);

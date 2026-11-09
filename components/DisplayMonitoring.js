@@ -18,6 +18,7 @@ import { useState } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { compressImage } from "./AuditInventaris";
 import { pecahTeksTabel, olahMatriks } from "../lib/impor-display";
+import { hitungSkorDisplayBA, mulaiSetelahBA } from "../lib/baris-display";
 
 // ── Bantuan ────────────────────────────────────────────────────────────
 
@@ -70,7 +71,7 @@ async function pastikanOpsi({ tabel, label, tambahan, daftar, userId }) {
   return d2.kode;
 }
 
-export function barisDisplayBaru() {
+export function barisDisplayBaru(tanggalPajang = new Date().toISOString().slice(0, 10)) {
   return {
     id: null,                 // null = unit baru, belum ada di database
     kondisi_id: null,         // id baris display_kondisi periode ini (kalau sudah pernah disimpan)
@@ -80,7 +81,7 @@ export function barisDisplayBaru() {
     sku: "",
     program_brand: false,
     program_nama: "",
-    tanggal_pajang: new Date().toISOString().slice(0, 10),
+    tanggal_pajang: tanggalPajang,
     umur_hari: 0,
     batas_hari: null,
     status_umur: "Aman",
@@ -369,12 +370,41 @@ export async function muatDisplay({ branchId, period, isolate, userId }) {
   };
 }
 
+export async function muatSkorDisplayBA({ branchId, period, batasTanggal }) {
+  const [standarRes, brandRes] = await Promise.all([
+    supabase.from("display_standar").select("maks_hari_pajang,bobot_umur,bobot_kondisi").eq("id", 1).maybeSingle(),
+    supabase.from("display_standar_brand").select("brand,maks_hari_pajang"),
+  ]);
+  if (standarRes.error) throw standarRes.error;
+  if (brandRes.error) throw brandRes.error;
+  if (!standarRes.data) return null;
+
+  const catatan = [];
+  const ukuranHalaman = 500;
+  for (let offset = 0; ; offset += ukuranHalaman) {
+    const { data, error } = await supabase.from("display_kondisi")
+      .select("id,display_unit_id,audit_date,skor_saat_audit,batas_hari_saat_audit,unit:display_unit!inner(tanggal_pajang,brand),opsi:display_kondisi_opsi(skor)")
+      .eq("period", period)
+      .eq("unit.branch_id", branchId)
+      .lte("unit.tanggal_pajang", batasTanggal)
+      .order("audit_date", { ascending: false })
+      .order("created_at", { ascending: false })
+      .order("id")
+      .range(offset, offset + ukuranHalaman - 1);
+    if (error) throw error;
+    catatan.push(...data);
+    if (data.length < ukuranHalaman) break;
+  }
+  const batasBrand = new Map(brandRes.data.map((row) => [row.brand, row.maks_hari_pajang]));
+  return hitungSkorDisplayBA(catatan, standarRes.data, batasBrand, batasTanggal);
+}
+
 // ── Periksa sebelum simpan ─────────────────────────────────────────────
 // Database sudah punya pagar (constraint display_unit_turun_wajib_perlakuan),
 // tapi galat dari Postgres tidak enak dibaca auditor. Diperiksa dulu di sini
 // supaya pesannya jelas; constraint tetap jadi jaring terakhir.
 
-export function periksaDisplay(rows) {
+export function periksaDisplay(rows, batasTanggal) {
   const galat = [];
   rows.forEach((r, i) => {
     const nama = `${r.brand} ${r.model}`.trim() || `Baris ${i + 1}`;
@@ -382,6 +412,7 @@ export function periksaDisplay(rows) {
       if (!r.brand.trim()) galat.push(`${nama}: brand belum diisi.`);
       if (!r.model.trim()) galat.push(`${nama}: model belum diisi.`);
       if (!r.tanggal_pajang) galat.push(`${nama}: tanggal mulai pajang belum diisi.`);
+      else if (mulaiSetelahBA(r, batasTanggal)) galat.push(`${nama}: tanggal mulai pajang melewati batas BA (${batasTanggal}).`);
       if (r.program_brand && !r.program_nama.trim())
         galat.push(`${nama}: ditandai ikut program brand tapi nama programnya kosong.`);
     }
@@ -833,23 +864,24 @@ export function DisplaySection({
     if (!onReset) return;
     if (!window.confirm(
       `Reset TOTAL Monitoring Display cabang ${cabang}?\n\n` +
-      `Semua ${rows.length} unit + seluruh histori umur pajang bakal DIHAPUS PERMANEN, ` +
+      `Seluruh unit cabang ini beserta histori umur pajangnya bakal DIHAPUS PERMANEN, ` +
       `dari SEMUA bulan (bukan cuma periode yang lagi dibuka). Cabang lain tidak kesentuh.\n\n` +
       `Lanjut?`
     )) return;
     onReset();
   }
 
-  const dipajang = rows.filter((r) => !r.turun).length;
-  const lewat = rows.filter((r) => !r.turun && r.status_umur === "Lewat Batas").length;
-  const mendekati = rows.filter((r) => !r.turun && r.status_umur === "Mendekati Batas").length;
-  const batasBelumDiketahui = rows.filter((r) => !r.turun && r.status_umur === "Belum diketahui").length;
+  const unitDipajang = rows.filter((r) => !r.turun && !r.setelahBA);
+  const dipajang = unitDipajang.length;
+  const lewat = unitDipajang.filter((r) => r.status_umur === "Lewat Batas").length;
+  const mendekati = unitDipajang.filter((r) => r.status_umur === "Mendekati Batas").length;
+  const batasBelumDiketahui = unitDipajang.filter((r) => r.status_umur === "Belum diketahui").length;
   const belumDicek = rows.filter((r) => !r.kondisi_kode).length;
 
-  const indexed = rows.map((row, i) => ({ row, i }));
+  const indexed = rows.map((row, i) => ({ row, i: row.indeksForm ?? i }));
   const shown =
     filter === "perhatian"
-      ? indexed.filter(({ row }) => row.turun || ["Lewat Batas", "Mendekati Batas"].includes(row.status_umur))
+      ? indexed.filter(({ row }) => !row.setelahBA && (row.turun || ["Lewat Batas", "Mendekati Batas"].includes(row.status_umur)))
       : filter === "belum"
       ? indexed.filter(({ row }) => !row.kondisi_kode)
       : indexed;
@@ -859,8 +891,8 @@ export function DisplaySection({
   function tandaiSemuaSama() {
     const terbaik = kondisiOpsi[0];
     if (!terbaik) return;
-    rows.forEach((r, i) => {
-      if (!r.kondisi_kode && !r.turun) onUpdate(i, "kondisi_kode", terbaik.kode);
+    indexed.forEach(({ row, i }) => {
+      if (!row.kondisi_kode && !row.turun && !row.setelahBA) onUpdate(i, "kondisi_kode", terbaik.kode);
     });
   }
 
@@ -969,6 +1001,7 @@ function KartuUnit({ row, idx, canEdit, kondisiOpsi, perlakuanOpsi, mengunggah, 
 
   return (
     <div style={{ background: "var(--surface-alt)", padding: "12px 12px 12px 14px", borderRadius: 10, borderLeft: `3px solid ${warna}` }}>
+      {row.setelahBA && <p style={{ fontSize: 12, color: WARNA_STATUS["Lewat Batas"] }}>Tanggal mulai pajang setelah batas BA. Sesuaikan tanggal untuk memasukkan unit ini.</p>}
 
       {/* Baris identitas unit */}
       {row.baru ? (
