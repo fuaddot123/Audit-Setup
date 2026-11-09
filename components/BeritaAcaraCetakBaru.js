@@ -231,7 +231,7 @@ export function cetakBaruHtml({
   auditor, teamLeader, storeManager,
   inventaris,
   stokBarisHtml, stokTotal, stokSelisih, stokPct, kat1Pct, kat2Pct, nexaLampiranHtml = "",
-  displayBarisHtml, displayFotoHtml, displayDipajang, displayLewat, displayBatas,
+  displayBarisHtml, displayFotoHtml, displayDipajang, displayLewat, displayTanggalAudit,
   skorD, displayInfo,
   // Bawaannya MATI. Lihat catatan SKRIP_CETAK di bawah.
   otomatisCetak = false,
@@ -274,12 +274,12 @@ export function cetakBaruHtml({
        ["Tidak ada", `${inv.tidakAda} item`]])
   + `</div>`
   + `<div style="margin-bottom:9px">`
-  + kKartu("\ud83d\udda5\ufe0f", "3. MONITORING DISPLAY", pctDisplay,
+  + kKartu("\ud83d\udda5\ufe0f", "3. MONITORING DISPLAY · SKOR BULANAN CABANG", pctDisplay,
       displayInfo.color, String(displayInfo.lbl).toUpperCase(),
       skorD == null ? [["Belum ada unit dinilai", "\u2014"]]
         : [["Dalam batas umur", `${skorD.unit_dalam_batas}/${skorD.unit_dinilai} unit \u00b7 ${skorD.skor_umur}%`],
            ["Kondisi fisik", `${skorD.skor_kondisi}%`],
-           ["Lewat batas", `${displayLewat} unit`]], 1)
+           ["Lewat batas saat audit", `${displayLewat} unit`]], 1)
   + `</div>`
 
   + `<div class="k-strip"><span>1. AUDIT STOCK OPNAME</span>`
@@ -297,7 +297,8 @@ export function cetakBaruHtml({
   + blokBelumTersedia(inventaris)
 
   + `<div class="k-strip"><span>3. AUDIT MONITORING DISPLAY</span>`
-  + `<span class="kanan">${displayDipajang} dipajang \u00b7 ${displayLewat} lewat batas \u00b7 batas ${displayBatas} hari</span></div>`
+  + `<span class="kanan">${displayDipajang} dipajang \u00b7 ${displayLewat} lewat batas`
+  + (displayTanggalAudit ? ` \u00b7 per ${esc(displayTanggalAudit)}` : "") + `</span></div>`
   + `<table class="k-tbl"><thead><tr><th style="width:23%">Brand / Model</th><th style="width:12%">Serial</th>`
   + `<th style="width:11%">Mulai Pajang</th><th style="width:14%">Umur saat audit</th>`
   + `<th style="width:15%">Kondisi</th><th>Program / Perlakuan</th></tr></thead>`

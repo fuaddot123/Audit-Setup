@@ -9,7 +9,7 @@
 // di Berita Acara tetap satu-satunya tombol simpan.
 //
 // Beda dengan Stock Opname: daftar unit TIDAK diketik ulang tiap bulan.
-// Unit yang masih dipajang otomatis muncul lengkap dengan umurnya hari ini,
+// Unit yang masih dipajang otomatis muncul, dengan umur pada tanggal audit,
 // karena tanggal_pajang tersimpan permanen di tabel display_unit. Auditor
 // tinggal: konfirmasi kondisi, tandai yang turun, atau tambah unit baru.
 // ============================================================
@@ -97,16 +97,6 @@ export function barisDisplayBaru() {
     harga_jual_display: "",
     baru: true,
   };
-}
-
-// Untuk unit baru yang belum tersimpan, umur dihitung di sini. Untuk unit
-// yang sudah ada, angkanya datang dari view v_display_monitoring supaya
-// aturan batas per-brand ikut terpakai.
-export function hitungUmurHari(tanggalPajang) {
-  if (!tanggalPajang) return 0;
-  const mulai = new Date(tanggalPajang + "T00:00:00");
-  const kini = new Date(new Date().toISOString().slice(0, 10) + "T00:00:00");
-  return Math.max(0, Math.round((kini - mulai) / 86400000));
 }
 
 const WARNA_STATUS = {
@@ -290,14 +280,16 @@ export async function muatDisplay({ branchId, period, isolate, userId }) {
   let unitQ = supabase.from("v_display_monitoring").select("*")
     .eq("branch_id", branchId).order("umur_hari", { ascending: false });
   if (idTerisolasi) unitQ = unitQ.in("id", idTerisolasi);
-  const [unitRes, perlakuanRes, kondisiOpsiRes] = await Promise.all([
+  const [unitRes, perlakuanRes, kondisiOpsiRes, standarRes] = await Promise.all([
     unitQ,
     supabase.from("display_perlakuan").select("*").eq("aktif", true).order("urutan"),
     supabase.from("display_kondisi_opsi").select("*").eq("aktif", true).order("urutan"),
+    supabase.from("display_standar").select("peringatan_sebelum_hari").eq("id", 1).maybeSingle(),
   ]);
   if (unitRes.error) throw unitRes.error;
   if (perlakuanRes.error) throw perlakuanRes.error;
   if (kondisiOpsiRes.error) throw kondisiOpsiRes.error;
+  if (standarRes.error) throw standarRes.error;
 
   const semuaUnit = unitRes.data || [];
 
@@ -348,9 +340,9 @@ export async function muatDisplay({ branchId, period, isolate, userId }) {
       program_brand: !!u.program_brand,
       program_nama: u.program_nama || "",
       tanggal_pajang: u.tanggal_pajang,
-      umur_hari: u.umur_hari,
+      tanggal_turun: u.tanggal_turun,
       batas_hari: u.batas_hari,
-      status_umur: u.status_umur,
+      peringatan_sebelum_hari: standarRes.data?.peringatan_sebelum_hari,
       masih_dipajang: u.masih_dipajang,
       kondisi_kode: k ? k.kondisi_kode : "",
       kondisi_baru_label: "",
@@ -851,12 +843,13 @@ export function DisplaySection({
   const dipajang = rows.filter((r) => !r.turun).length;
   const lewat = rows.filter((r) => !r.turun && r.status_umur === "Lewat Batas").length;
   const mendekati = rows.filter((r) => !r.turun && r.status_umur === "Mendekati Batas").length;
+  const batasBelumDiketahui = rows.filter((r) => !r.turun && r.status_umur === "Belum diketahui").length;
   const belumDicek = rows.filter((r) => !r.kondisi_kode).length;
 
   const indexed = rows.map((row, i) => ({ row, i }));
   const shown =
     filter === "perhatian"
-      ? indexed.filter(({ row }) => row.status_umur !== "Aman" || row.turun)
+      ? indexed.filter(({ row }) => row.turun || ["Lewat Batas", "Mendekati Batas"].includes(row.status_umur))
       : filter === "belum"
       ? indexed.filter(({ row }) => !row.kondisi_kode)
       : indexed;
@@ -910,7 +903,9 @@ export function DisplaySection({
           {dipajang} unit dipajang
           {lewat > 0 && <> &middot; <span style={{ color: WARNA_STATUS["Lewat Batas"] }}>{lewat} lewat batas</span></>}
           {mendekati > 0 && <> &middot; <span style={{ color: WARNA_STATUS["Mendekati Batas"] }}>{mendekati} mendekati</span></>}
-          {lewat === 0 && mendekati === 0 && dipajang > 0 && <> &middot; semua dalam batas umur</>}
+          {batasBelumDiketahui > 0 && <> &middot; {batasBelumDiketahui} belum ada batas umur</>}
+          {lewat === 0 && mendekati === 0 && batasBelumDiketahui === 0 && dipajang > 0 && <> &middot; semua dalam batas umur</>}
+          {tanggalAudit && <> &middot; per {tanggalAudit}</>}
         </span>
         {rows.length > 0 && (
           <div style={{ display: "flex", gap: 4, background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: 3 }}>
@@ -968,7 +963,7 @@ function FilterBtn({ aktif, onClick, warna, children }) {
 }
 
 function KartuUnit({ row, idx, canEdit, kondisiOpsi, perlakuanOpsi, mengunggah, onUpdate, onRemove, onUploadFoto, onHapusFoto }) {
-  const umur = row.baru ? hitungUmurHari(row.tanggal_pajang) : row.umur_hari;
+  const umur = row.umur_hari;
   const warna = row.turun ? "#888" : warnaStatus(row.status_umur);
   const sisa = row.batas_hari == null ? null : row.batas_hari - umur;
 
