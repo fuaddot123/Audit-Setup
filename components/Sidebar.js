@@ -25,6 +25,8 @@ const MODULES = [
     ],
   },
   { key: "berita_acara", label: "Berita Acara", ready: true },
+  // Berisi catatan tentang orang (wawancara leader/sales): hanya untuk yang boleh mengisinya.
+  { key: "analisis_toko", label: "Analisis Toko", ready: true, hanyaPeran: ["auditor", "super_admin"] },
   { key: "rekap_stock_opname", label: "Rekap Stock Opname", ready: true },
   { key: "kpi", label: "KPI", ready: true },
   { key: "biaya_dinas", label: "Biaya Dinas", ready: true },
@@ -81,7 +83,9 @@ export default function Sidebar({ active, activeSub, onSelect, profile, profileA
         <div className="display" style={{ color: "var(--sidebar-text)", fontSize: 18, fontWeight: 600 }}>KLA Radar</div>
       </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1, overflowY: "auto" }}>
-        {MODULES.filter((m) => !m.hanyaSuperAdmin || profileAsli?.role === "super_admin").map((m) => {
+        {MODULES.filter((m) => !m.hanyaSuperAdmin || profileAsli?.role === "super_admin")
+          .filter((m) => !m.hanyaPeran || m.hanyaPeran.includes((profileAsli || profile)?.role))
+          .map((m) => {
           const isActive = active === m.key;
           const isOpen = !!expanded[m.key];
           return (
