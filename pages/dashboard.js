@@ -12,6 +12,7 @@ import BeritaAcara from "../components/BeritaAcara";
 import RekapStockOpname from "../components/RekapStockOpname";
 import LaporanBulanan from "../components/LaporanBulanan";
 import LaporanTahunan from "../components/LaporanTahunan";
+import AnalisisToko from "../components/AnalisisToko";
 import BiayaDinas from "../components/BiayaDinas";
 import DashboardAudit from "../components/DashboardAudit";
 import MasterDisplay from "../components/MasterDisplay";
@@ -94,6 +95,8 @@ export default function Dashboard() {
         <LaporanBulanan profile={profileEfektif} />
       ) : active === "laporan_tahunan" ? (
         <LaporanTahunan profile={profileEfektif} />
+      ) : active === "analisis_toko" ? (
+        <AnalisisToko profile={profileEfektif} />
       ) : (
         <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: "var(--text-faint)", flexDirection: "column" }}>
           <div className="display" style={{ fontSize: 19, fontWeight: 600, color: "var(--text-secondary)", marginBottom: 6 }}>Modul ini belum dibuat</div>
