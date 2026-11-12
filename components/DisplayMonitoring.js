@@ -8,10 +8,13 @@
 // dan menyediakan fungsi muat/simpan. Jadi tombol Simpan yang sudah ada
 // di Berita Acara tetap satu-satunya tombol simpan.
 //
-// Beda dengan Stock Opname: daftar unit TIDAK diketik ulang tiap bulan.
-// Unit yang masih dipajang otomatis muncul, dengan umur pada tanggal audit,
-// karena tanggal_pajang tersimpan permanen di tabel display_unit. Auditor
-// tinggal: konfirmasi kondisi, tandai yang turun, atau tambah unit baru.
+// DAFTAR UNIT PER BULAN: tiap bulan dimulai KOSONG, sama seperti Stock Opname.
+// Unit baru muncul di bulan itu kalau auditor menambah atau mengimpornya
+// (tercatat di tabel display_unit_periode). Daftar bulan lalu TIDAK terbawa.
+// tanggal_pajang tetap tersimpan permanen di display_unit, jadi umur pajang
+// tetap dihitung benar walau unit yang sama didaftarkan lagi bulan depan
+// (impor ulang mengenali unit lewat Serial Number dan memakai ulang barisnya).
+// Reset dan hapus audit hanya menyentuh bulan yang dibuka.
 // ============================================================
 
 import { useState } from "react";
@@ -110,24 +113,43 @@ function warnaStatus(status) {
   return WARNA_STATUS[status] || "#888";
 }
 
-// ── Hapus lengkap Monitoring Display buat 1 audit yang dihapus ─────────
-// Dipanggil dari deleteRecord() di BeritaAcara.js, SEBELUM/SESUDAH baris
-// berita_acara-nya sendiri dihapus (urutan nggak penting, dua tabel beda).
-// Treat penghapusan audit ini kayak "audit bulan itu nggak pernah kejadian":
-//   - Unit yang catatan kondisinya CUMA ada di periode ini (nggak punya
-//     riwayat dari bulan lain) → berarti unit itu baru lahir di audit ini,
-//     dihapus TOTAL (bukan tebak dari tanggal — dicek dari riwayat beneran).
-//   - Unit yang punya riwayat dari bulan lain → cuma catatan kondisi
-//     periode ini yang dihapus; kalau dia ditandai "turun" PAS di audit
-//     ini (tanggal_turun jatuh di periode ini), itu di-undo balik jadi
-//     "masih dipajang".
-// Foto-foto kondisi yang kehapus ikut dibersihkan dari Storage.
-// isolate/userId: samain kayak muatDisplay/resetDisplayUntukCabang — cuma
-// unit & catatan kondisi punya auditor ini (dicatat_oleh === userId) yang
-// disentuh, biar nggak ada efek ke unit auditor lain yang nggak keliatan
-// di layarnya sama sekali.
+// ── Penanda unit per bulan (tabel display_unit_periode) ────────────────
+// Satu baris = "unit ini terdaftar di daftar bulan X". Dipisah dari
+// display_kondisi karena unit yang BELUM DICEK tidak punya catatan kondisi,
+// tapi tetap harus muncul di daftar bulannya dan ikut terhapus saat reset.
+
+function potong(arr, n = 100) {
+  const out = [];
+  for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+  return out;
+}
+
+// Id unit (dari `ids`) yang terdaftar di `period`.
+async function ambilUnitPeriode({ period, ids }) {
+  const hasil = new Set();
+  for (const bagian of potong(ids, 150)) {
+    const { data, error } = await supabase.from("display_unit_periode")
+      .select("display_unit_id").eq("period", period).in("display_unit_id", bagian);
+    if (error) throw error;
+    (data || []).forEach((r) => hasil.add(r.display_unit_id));
+  }
+  return hasil;
+}
+
+// ── Reset / hapus Monitoring Display untuk SATU periode ────────────────
+// Dipakai tombol "Reset bulan ini" DAN deleteRecord() di BeritaAcara.js.
+// Hanya menyentuh periode yang diminta; bulan lain tidak berubah:
+//   - Unit yang HANYA ada di periode ini (tidak punya catatan kondisi atau
+//     penanda di bulan lain) berarti baru lahir bulan ini -> dihapus TOTAL,
+//     supaya impor ulang bisa memperbaiki tanggal pajang yang salah input.
+//   - Unit yang punya jejak di bulan lain -> hanya catatan kondisi dan
+//     penanda periode ini yang dihapus; kalau ia ditandai "turun" PAS di
+//     periode ini, itu di-undo balik jadi "masih dipajang".
+// Foto kondisi periode ini ikut dibersihkan dari Storage.
+// isolate/userId: hanya unit dan catatan milik auditor ini (dicatat_oleh)
+// yang disentuh, sama seperti muatDisplay.
 export async function hapusDisplayUntukPeriode({ branchId, period, isolate, userId }) {
-  // 1) Semua unit cabang ini + catatan kondisi periode yang dihapus.
+  // 1) Semua unit cabang ini (terisolasi kalau perlu).
   let unitQ = supabase.from("display_unit").select("id, tanggal_turun").eq("branch_id", branchId);
   if (isolate && userId) unitQ = unitQ.eq("dicatat_oleh", userId);
   const { data: unitRows, error: uErr } = await unitQ;
@@ -135,28 +157,42 @@ export async function hapusDisplayUntukPeriode({ branchId, period, isolate, user
   const unitIds = (unitRows || []).map((u) => u.id);
   if (!unitIds.length) return;
 
-  let kondisiQ = supabase.from("display_kondisi").select("id, display_unit_id, photos")
-    .eq("period", period).in("display_unit_id", unitIds);
-  if (isolate && userId) kondisiQ = kondisiQ.eq("dicatat_oleh", userId);
-  const { data: kondisiPeriodeIni, error: kErr } = await kondisiQ;
-  if (kErr) throw kErr;
-  if (!kondisiPeriodeIni || !kondisiPeriodeIni.length) return; // nggak ada yang perlu dibersihin
+  // 2) Yang terdaftar di periode ini (penanda) + catatan kondisinya.
+  const terdaftar = await ambilUnitPeriode({ period, ids: unitIds });
 
-  const unitIdsPeriodeIni = [...new Set(kondisiPeriodeIni.map((k) => k.display_unit_id))];
+  const kondisiPeriodeIni = [];
+  for (const bagian of potong(unitIds, 150)) {
+    let kq = supabase.from("display_kondisi").select("id, display_unit_id, photos")
+      .eq("period", period).in("display_unit_id", bagian);
+    if (isolate && userId) kq = kq.eq("dicatat_oleh", userId);
+    const { data, error } = await kq;
+    if (error) throw error;
+    kondisiPeriodeIni.push(...(data || []));
+  }
 
-  // 2) Buat tiap unit yang kesentuh, cek: dia punya catatan kondisi dari
-  //    periode LAIN nggak? Kalau nggak ada sama sekali → baru lahir bulan ini.
-  let riwayatQ = supabase.from("display_kondisi").select("display_unit_id")
-    .in("display_unit_id", unitIdsPeriodeIni).neq("period", period);
-  if (isolate && userId) riwayatQ = riwayatQ.eq("dicatat_oleh", userId);
-  const { data: riwayatLain, error: rErr } = await riwayatQ;
-  if (rErr) throw rErr;
-  const punyaRiwayatLain = new Set((riwayatLain || []).map((r) => r.display_unit_id));
+  const unitIdsPeriodeIni = [...new Set([...terdaftar, ...kondisiPeriodeIni.map((k) => k.display_unit_id)])];
+  if (!unitIdsPeriodeIni.length) return; // tidak ada yang perlu dibersihkan
 
-  const idUnitBaruLahir = unitIdsPeriodeIni.filter((id) => !punyaRiwayatLain.has(id));
-  const idUnitLama = unitIdsPeriodeIni.filter((id) => punyaRiwayatLain.has(id));
+  // 3) Jejak di bulan LAIN (catatan kondisi atau penanda periode).
+  const punyaJejakLain = new Set();
+  for (const bagian of potong(unitIdsPeriodeIni, 150)) {
+    let rq = supabase.from("display_kondisi").select("display_unit_id")
+      .in("display_unit_id", bagian).neq("period", period);
+    if (isolate && userId) rq = rq.eq("dicatat_oleh", userId);
+    const r1 = await rq;
+    if (r1.error) throw r1.error;
+    (r1.data || []).forEach((r) => punyaJejakLain.add(r.display_unit_id));
 
-  // 3) Kumpulin & hapus semua foto dari Storage (kondisi periode ini doang).
+    const r2 = await supabase.from("display_unit_periode").select("display_unit_id")
+      .in("display_unit_id", bagian).neq("period", period);
+    if (r2.error) throw r2.error;
+    (r2.data || []).forEach((r) => punyaJejakLain.add(r.display_unit_id));
+  }
+
+  const idUnitBaruLahir = unitIdsPeriodeIni.filter((id) => !punyaJejakLain.has(id));
+  const idUnitLama = unitIdsPeriodeIni.filter((id) => punyaJejakLain.has(id));
+
+  // 4) Foto kondisi periode ini -> hapus dari Storage.
   const semuaFoto = kondisiPeriodeIni.flatMap((k) => Array.isArray(k.photos) ? k.photos : []);
   if (semuaFoto.length) {
     const paths = semuaFoto.map((m) => {
@@ -166,33 +202,36 @@ export async function hapusDisplayUntukPeriode({ branchId, period, isolate, user
     if (paths.length) await supabase.storage.from("findings").remove(paths);
   }
 
-  // 4) Unit yang baru lahir bulan ini → hapus TOTAL (kondisi ikut kehapus
-  //    otomatis lewat foreign key CASCADE kalau ada; kalau nggak ada, hapus
-  //    manual dulu barisnya biar nggak nyangkut FK constraint).
-  if (idUnitBaruLahir.length) {
-    await supabase.from("display_kondisi").delete().in("display_unit_id", idUnitBaruLahir);
-    await supabase.from("display_unit").delete().in("id", idUnitBaruLahir);
+  // 5) Catatan kondisi + penanda periode ini dihapus untuk SEMUA unit yang kesentuh.
+  for (const bagian of potong(unitIdsPeriodeIni)) {
+    const dk = await supabase.from("display_kondisi").delete().eq("period", period).in("display_unit_id", bagian);
+    if (dk.error) throw dk.error;
+    const dp = await supabase.from("display_unit_periode").delete().eq("period", period).in("display_unit_id", bagian);
+    if (dp.error) throw dp.error;
   }
 
-  // 5) Unit lama → cuma catatan kondisi periode ini yang dihapus.
-  if (idUnitLama.length) {
-    await supabase.from("display_kondisi").delete().eq("period", period).in("display_unit_id", idUnitLama);
+  // 6) Unit yang baru lahir bulan ini -> hapus TOTAL (kondisi/penanda bulan lain
+  //    memang tidak ada untuk unit ini).
+  for (const bagian of potong(idUnitBaruLahir)) {
+    const du = await supabase.from("display_unit").delete().in("id", bagian);
+    if (du.error) throw du.error;
   }
 
-  // 6) Unit yang "turun"-nya PAS jatuh di periode yang dihapus → undo,
-  //    balikin jadi "masih dipajang" (unit lama doang, yang baru lahir
-  //    udah kehapus total di langkah 4).
+  // 7) Unit lama yang "turun"-nya PAS jatuh di periode ini -> undo.
   const idUnitTurunBulanIni = (unitRows || [])
     .filter((u) => idUnitLama.includes(u.id) && (u.tanggal_turun || "").slice(0, 7) === period)
     .map((u) => u.id);
-  if (idUnitTurunBulanIni.length) {
-    await supabase.from("display_unit").update({
+  for (const bagian of potong(idUnitTurunBulanIni)) {
+    const up = await supabase.from("display_unit").update({
       tanggal_turun: null, perlakuan_kode: null, perlakuan_tanggal: null,
       perlakuan_catatan: null, harga_jual_display: null,
-    }).in("id", idUnitTurunBulanIni);
+    }).in("id", bagian);
+    if (up.error) throw up.error;
   }
 }
 
+// ── (TIDAK dipakai lagi oleh tombol Reset di layar — sekarang Reset hanya untuk bulan yang
+// dibuka, lewat hapusDisplayUntukPeriode. Dibiarkan ada untuk keperluan darurat manual.)
 // ── Reset TOTAL Monitoring Display buat 1 cabang (semua unit, semua periode) ──
 // BEDA dari hapusDisplayUntukPeriode di atas: fungsi itu ngurusin 1 audit
 // yang dihapus (cuma nyentuh catatan periode itu). Ini tombol TERPISAH —
@@ -294,11 +333,13 @@ export async function muatDisplay({ branchId, period, isolate, userId }) {
 
   const semuaUnit = unitRes.data || [];
 
-  // Yang ditampilkan: unit yang masih dipajang, DITAMBAH unit yang baru
-  // diturunkan pada periode ini (supaya perlakuannya masih bisa dikoreksi
-  // sebelum bulan ditutup).
+  // Yang ditampilkan: unit yang TERDAFTAR di periode ini (ditambah/diimpor
+  // bulan ini), DITAMBAH unit yang diturunkan pada periode ini (supaya
+  // perlakuannya masih bisa dikoreksi sebelum bulan ditutup). Bulan baru
+  // dimulai kosong: unit bulan lalu tidak ikut terbawa.
+  const terdaftarPeriode = await ambilUnitPeriode({ period, ids: semuaUnit.map((u) => u.id) });
   const relevan = semuaUnit.filter(
-    (u) => u.masih_dipajang || (u.tanggal_turun || "").slice(0, 7) === period
+    (u) => terdaftarPeriode.has(u.id) || (u.tanggal_turun || "").slice(0, 7) === period
   );
 
   // Catatan kondisi yang SUDAH tersimpan untuk periode ini — supaya form
@@ -552,6 +593,17 @@ export async function simpanDisplay({ rows, branchId, period, auditDate, userId,
         if (error) throw new Error(`${r.brand} ${r.model}: ${error.message}`);
         unitId = data.id;
       }
+    }
+
+    // Daftarkan unit di periode ini, SUDAH DICEK ATAU BELUM, supaya tetap
+    // muncul di daftar bulan ini setelah halaman dimuat ulang dan ikut
+    // terhapus kalau bulan ini direset. (Tanpa ini unit yang belum dicek
+    // tidak meninggalkan jejak apa pun di bulan ini.)
+    if (unitId) {
+      const { error: errDaftar } = await supabase.from("display_unit_periode")
+        .upsert({ display_unit_id: unitId, period, dicatat_oleh: userId },
+          { onConflict: "display_unit_id,period", ignoreDuplicates: true });
+      if (errDaftar) throw new Error(`${r.brand} ${r.model}: gagal mencatat unit di periode ini — ${errDaftar.message}`);
     }
 
     // Unit ditandai turun pada kunjungan ini
@@ -853,19 +905,21 @@ function PanelImpor({ onMasuk, onTutup, cabang, tanggalAcuan }) {
 export function DisplaySection({
   rows, perlakuanOpsi, kondisiOpsi, canEdit, uploadingIdx,
   onUpdate, onAdd, onRemove, onUploadFoto, onHapusFoto, onImpor, onReset,
-  cabang, tanggalAudit,
+  cabang, tanggalAudit, periodeLabel,
 }) {
   const [filter, setFilter] = useState("all"); // "all" | "perhatian" | "belum"
   const [bukaImpor, setBukaImpor] = useState(false);
 
-  // Reset TOTAL — 1x confirm aja, pesannya dibikin jelas biar tetep nggak
-  // kepencet asal, tapi nggak nyuruh ngetik ulang nama cabang segala.
+  // Reset HANYA bulan yang lagi dibuka — 1x confirm, pesannya menyebut bulannya
+  // dan apa saja yang ikut terhapus.
   function handleResetClick() {
     if (!onReset) return;
+    const bulan = periodeLabel || "bulan ini";
     if (!window.confirm(
-      `Reset TOTAL Monitoring Display cabang ${cabang}?\n\n` +
-      `Seluruh unit cabang ini beserta histori umur pajangnya bakal DIHAPUS PERMANEN, ` +
-      `dari SEMUA bulan (bukan cuma periode yang lagi dibuka). Cabang lain tidak kesentuh.\n\n` +
+      `Reset Monitoring Display cabang ${cabang} untuk ${bulan}?\n\n` +
+      `Yang dihapus HANYA data ${bulan}: daftar unit, catatan kondisi, dan foto bulan ini. ` +
+      `Unit yang baru didaftarkan di bulan ini dan belum punya riwayat bulan lain ikut dihapus. ` +
+      `Data bulan lain dan cabang lain tidak tersentuh.\n\n` +
       `Lanjut?`
     )) return;
     onReset();
@@ -916,7 +970,7 @@ export function DisplaySection({
             {onReset && rows.length > 0 && (
               <button className="btn-ghost" onClick={handleResetClick}
                 style={{ fontSize: 12, color: "var(--danger-text)", borderColor: "var(--danger-text)" }}>
-                🗑️ Reset semua
+                🗑️ Reset bulan ini
               </button>
             )}
           </div>
@@ -954,8 +1008,8 @@ export function DisplaySection({
 
       {rows.length === 0 ? (
         <div style={{ fontSize: 12, color: "var(--text-faint)" }}>
-          Belum ada unit display tercatat di cabang ini. Klik &ldquo;+ Tambah Unit&rdquo; untuk mendaftarkan yang pertama.
-          Bulan depan daftarnya muncul sendiri &mdash; tidak perlu diketik ulang.
+          Belum ada unit display di {periodeLabel || "bulan ini"}. Klik &ldquo;+ Tambah Unit&rdquo; atau &ldquo;Impor Excel&rdquo; untuk mengisi.
+          Tiap bulan dimulai kosong &mdash; daftar bulan lalu tidak ikut terbawa.
         </div>
       ) : shown.length === 0 ? (
         <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Tidak ada unit yang cocok dengan saringan ini.</div>

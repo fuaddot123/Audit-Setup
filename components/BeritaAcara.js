@@ -1,4 +1,3 @@
-import { TEMPORARY_ADJUST_FILTER } from "../lib/stockAdjustFilter";
 import { useState, useEffect } from "react";
 import { supabase } from "../lib/supabaseClient";
 import { sortBranches } from "../lib/branchOrder";
@@ -12,11 +11,11 @@ import { pakaiFormatBaru, namaPeriode, INVENTARIS_ITEMS, kunciItem, statusKatego
 import { cetakBaruHtml } from "./BeritaAcaraCetakBaru";
 import { NexaImportedRow } from "./NexaOpnameImport";
 import { nexaBaReference, nexaAppendixHtml } from "../lib/nexaOpnameImport";
-import { barisDisplayHtml, batasTanggalPajangBA, displaySaatAudit, mulaiSetelahBA, umurTerhadap } from "../lib/baris-display";
+import { barisDisplayHtml } from "../lib/baris-display";
 import {
-  DisplaySection, muatDisplay, muatSkorDisplayBA, simpanDisplay, periksaDisplay,
+  DisplaySection, muatDisplay, simpanDisplay, periksaDisplay,
   barisDisplayBaru, uploadDisplayMedia, hapusDisplayUntukPeriode,
-  resetDisplayUntukCabang,
+  hitungUmurHari,
 } from "./DisplayMonitoring";
 import { listFailedItems, scoreInfo, formatRupiah, getCatsForRecord, isCriticalItem, isLegacyChecklistRecord } from "../lib/sopConfig";
 import { formatRatioPct, formatKesehatanPct } from "../lib/stokConfig";
@@ -223,20 +222,13 @@ export default function BeritaAcara({ profile }) {
   const [invFilter, setInvFilter] = useState("all"); // "all" | "rusak"
 
   // ── Monitoring Display ──
-  // displayRows tidak diketik ulang tiap bulan: unit yang masih dipajang
-  // datang sendiri dari tabel display_unit lewat view v_display_monitoring.
+  // displayRows dimulai KOSONG tiap bulan: yang tampil hanya unit yang terdaftar
+  // di periode ini (tabel display_unit_periode). Unit bulan lalu tidak terbawa.
   const [displayRows, setDisplayRows] = useState([]);
   const [perlakuanOpsi, setPerlakuanOpsi] = useState([]);
   const [kondisiOpsi, setKondisiOpsi] = useState([]);
   const [displayUploadIdx, setDisplayUploadIdx] = useState(null);
   const [displayError, setDisplayError] = useState(null);
-  const batasTanggalDisplay = batasTanggalPajangBA(viewPeriod, auditDate);
-  const displayRowsForm = displayRows.flatMap((row, indeksForm) => {
-    const setelahBA = mulaiSetelahBA(row, batasTanggalDisplay);
-    if (setelahBA && !row.baru) return [];
-    return [{ ...displaySaatAudit(row, auditDate), indeksForm, setelahBA }];
-  });
-  const displayRowsSaatAudit = displayRowsForm.filter((row) => !row.setelahBA);
 
   // ── Laporan Kunjungan (teks ringkas buat WA/chat ke bos) ──
   const [laporanKunjunganTeks, setLaporanKunjunganTeks] = useState(null);
@@ -478,7 +470,7 @@ export default function BeritaAcara({ profile }) {
   }
 
   function addDisplay() {
-    setDisplayRows((prev) => [...prev, barisDisplayBaru(batasTanggalDisplay)]);
+    setDisplayRows((prev) => [...prev, barisDisplayBaru()]);
     setSaved(false);
   }
 
@@ -499,7 +491,7 @@ export default function BeritaAcara({ profile }) {
     // ringkasannya nggak keitung dobel kalau updater-nya sempat jalan 2x.
     const akanTurun = displayRows.filter((r) => {
       const sn = kunci(r.serial_number);
-      return !r.baru && !mulaiSetelahBA(r, batasTanggalDisplay) && r.masih_dipajang && !r.turun && sn && !snDiFile.has(sn);
+      return !r.baru && r.masih_dipajang && !r.turun && sn && !snDiFile.has(sn);
     });
 
     setDisplayRows((prev) => {
@@ -591,8 +583,7 @@ export default function BeritaAcara({ profile }) {
       // pengecekan ini ada di bawah, sesudah Berita Acara & Inventaris
       // tersimpan — kalau gagal, ID barisnya belum sempat dicatat dan
       // simpan ulang membuat baris DOBEL.
-      const displayDisimpan = displayRows.filter((row) => row.baru || !mulaiSetelahBA(row, batasTanggalDisplay));
-      const galatDisplay = periksaDisplay(displayDisimpan, batasTanggalDisplay);
+      const galatDisplay = periksaDisplay(displayRows);
       if (galatDisplay.length) throw new Error(galatDisplay.join(" "));
 
       const beritaPayload = {
@@ -653,9 +644,9 @@ export default function BeritaAcara({ profile }) {
 
       // Simpan data display sesudah berita acara tersimpan, supaya
       // tanggal audit yang dipakai sama persis.
-      if (displayDisimpan.length) {
+      if (displayRows.length) {
         await simpanDisplay({
-          rows: displayDisimpan, branchId: selectedBranch.id, period: viewPeriod,
+          rows: displayRows, branchId: selectedBranch.id, period: viewPeriod,
           auditDate, userId: user.id, kondisiOpsi, perlakuanOpsi,
         });
         // Dimuat ulang termasuk DAFTAR PILIHANNYA — istilah baru yang barusan
@@ -762,18 +753,17 @@ export default function BeritaAcara({ profile }) {
     }
   }
 
-  // Reset TOTAL Monitoring Display cabang yang lagi dibuka — terpisah dari
-  // deleteRecord() di atas (yang cuma ngurusin 1 audit). Ini buat auditor
-  // yang mau isi ulang dari nol pakai Impor Excel baru. Konfirmasinya sudah
-  // dua lapis di DisplaySection (window.confirm + ketik nama cabang), jadi
-  // di sini tinggal eksekusi.
+  // Reset Monitoring Display cabang + BULAN yang lagi dibuka — terpisah dari
+  // deleteRecord() di atas (yang ngurusin 1 audit). Buat auditor yang mau isi
+  // ulang bulan ini dari nol pakai Impor Excel baru. Bulan lain TIDAK kesentuh.
+  // Konfirmasinya (menyebut bulannya) ada di DisplaySection.
   async function resetMonitoringDisplay() {
     if (!selectedBranch) return;
     setSaving(true);
     setError(null);
     try {
-      await resetDisplayUntukCabang({
-        branchId: selectedBranch.id,
+      await hapusDisplayUntukPeriode({
+        branchId: selectedBranch.id, period: viewPeriod,
         isolate: profile?.role === "auditor" && viewPeriod >= ISOLATION_START_PERIOD, userId: profile.id,
       });
       // Muat ulang dari server (bukan langsung set kosong) — biar kalau
@@ -969,11 +959,11 @@ export default function BeritaAcara({ profile }) {
       const stockLengkap = semuaStock.filter((r) => r.status === "Lengkap").length;
       const stockSelisih = semuaStock.filter((r) => r.status === "Selisih");
       const invHitung = hitungInventaris(inventaris, viewPeriod);
-      const unitDipajang = displayRowsSaatAudit.filter((r) => !r.turun);
+      const unitDipajang = displayRows.filter((r) => !r.turun);
       const unitLewat = unitDipajang.filter((r) => r.status_umur === "Lewat Batas").length;
       const unitMendekati = unitDipajang.filter((r) => r.status_umur === "Mendekati Batas").length;
       const unitTua = unitDipajang
-        .map((r) => ({ ...r, umur: r.umur_hari }))
+        .map((r) => ({ ...r, umur: r.baru ? hitungUmurHari(r.tanggal_pajang) : r.umur_hari }))
         .filter((r) => r.status_umur === "Lewat Batas" || r.status_umur === "Mendekati Batas")
         .sort((a, b) => b.umur - a.umur);
 
@@ -1126,26 +1116,32 @@ export default function BeritaAcara({ profile }) {
     }).join("");
 
     // ── Data Monitoring Display untuk cetakan ──
-    const formatBaru = pakaiFormatBaru(viewPeriod);
+    // Skor diambil dari view v_display_skor_periode, TIDAK dihitung ulang di
+    // sini. Dua tempat yang menghitung hal yang sama adalah cara paling andal
+    // untuk melahirkan dua angka yang berbeda.
     let skorD = null;
-    if (formatBaru) {
-      skorD = await muatSkorDisplayBA({ branchId: selectedBranch.id, period: viewPeriod, batasTanggal: batasTanggalDisplay });
-    } else {
+    try {
       const rSkor = await supabase.from("v_display_skor_periode").select("*")
         .eq("branch_id", selectedBranch.id).eq("period", viewPeriod).maybeSingle();
       skorD = rSkor.data || null;
+    } catch (errSkor) {
+      skorD = null; // tabel display belum ada — cetakan tetap jalan tanpa blok ini
     }
 
     // Umur dihitung terhadap TANGGAL AUDIT, bukan hari ini. Berita Acara
     // Agustus yang dicetak ulang bulan Desember harus memuat angka yang sama.
+    function umurSaatAudit(tglPajang) {
+      if (!tglPajang || !auditDate) return 0;
+      const a = new Date(tglPajang + "T00:00:00");
+      const b = new Date(auditDate + "T00:00:00");
+      return Math.max(0, Math.round((b - a) / 86400000));
+    }
     const labelKondisi = (kode) => (kondisiOpsi.find((k) => k.kode === kode) || {}).label || "\u2014";
     const labelPerlakuan = (kode) => (perlakuanOpsi.find((p) => p.kode === kode) || {}).label || "";
 
-    const dUnit = formatBaru ? displayRowsSaatAudit : displayRows;
+    const dUnit = displayRows || [];
     const dDipajang = dUnit.filter((r) => !r.turun);
-    const dLewat = dDipajang.filter((r) => formatBaru
-      ? r.status_umur === "Lewat Batas"
-      : r.batas_hari != null && umurTerhadap(r.tanggal_pajang, auditDate) > r.batas_hari);
+    const dLewat = dDipajang.filter((r) => r.batas_hari != null && umurSaatAudit(r.tanggal_pajang) > r.batas_hari);
     const dBatas = dUnit.length && dUnit[0].batas_hari != null ? dUnit[0].batas_hari : 60;
 
     const displayInfo = skorD == null
@@ -1189,7 +1185,7 @@ export default function BeritaAcara({ profile }) {
     // Mulai periode September 2026 dokumennya MENGALIR tiga poin dengan
     // tanda tangan di halaman terakhir. Periode sebelumnya tetap memakai
     // template lama di bawah ini, tidak disentuh sama sekali.
-    if (formatBaru) {
+    if (pakaiFormatBaru(viewPeriod)) {
       const barisStok = (judul, rows) => rows.map((r, i) => {
         const bad = r.status === "Selisih";
         return `<tr><td>${i === 0 ? `<b>${esc(judul.toUpperCase())}</b>` : ""}</td>`
@@ -1212,6 +1208,7 @@ export default function BeritaAcara({ profile }) {
       // tanpa galat, tanpa yang kosong.
       const displayBarisBaru = barisDisplayHtml(dUnit, {
         esc, labelKondisi, labelPerlakuan,
+        tglAudit: auditDate,
         kelasOk: "k-ok", kelasBad: "k-bad",
         sertakanCatatan: true,
       });
@@ -1226,7 +1223,7 @@ export default function BeritaAcara({ profile }) {
         storeManager: storeManagerName,
         inventaris,
         stokBarisHtml,
-        nexaLampiranHtml: nexaAppendixHtml([...stockKat1, ...stockKat2], selectedEntryId, esc, TEMPORARY_ADJUST_FILTER),
+        nexaLampiranHtml: nexaAppendixHtml([...stockKat1, ...stockKat2], selectedEntryId, esc),
         stokTotal: stockTotalCount,
         stokSelisih: stockSelisihCount,
         stokPct: stockPct,
@@ -1236,7 +1233,7 @@ export default function BeritaAcara({ profile }) {
         displayFotoHtml,
         displayDipajang: dDipajang.length,
         displayLewat: dLewat.length,
-        displayTanggalAudit: auditDate,
+        displayBatas: dBatas,
         skorD,
         displayInfo,
         // Dokumennya memanggil dialog cetaknya sendiri, seperti template lama.
@@ -1489,7 +1486,7 @@ export default function BeritaAcara({ profile }) {
           </div>
         </div>
 
-        ${nexaAppendixHtml([...stockKat1, ...stockKat2], selectedEntryId, esc, TEMPORARY_ADJUST_FILTER)}
+        ${nexaAppendixHtml([...stockKat1, ...stockKat2], selectedEntryId, esc)}
         <div class="footer-row">
           <div class="sign-box">
             <div class="t">MENGETAHUI</div>
@@ -1636,7 +1633,7 @@ export default function BeritaAcara({ profile }) {
                             <span style={{ fontSize: 11, color: "var(--text-faint)" }}>selisih dari {totalItem} item</span>
                           </div>
                           <span style={{ display: "inline-block", marginTop: 6, padding: "2px 9px", borderRadius: 20, background: selisihCount > 0 ? "#a3202022" : "#1a9e6e22", color: selisihCount > 0 ? "#a32020" : "#1a9e6e", fontSize: 10.5, fontWeight: 600 }}>
-                            {selisihCount > 0 ? "Ada temuan" : [...kat1, ...kat2].some((r) => r.status === "Di luar filter") ? "Tidak ada selisih sesuai filter" : "Semua lengkap"}
+                            {selisihCount > 0 ? "Ada temuan" : "Semua lengkap"}
                           </span>
                           <div style={{ fontSize: 10.5, color: "var(--text-faint)", marginTop: 6 }}>Terakhir: {shortDate(entry.audit_date)}</div>
                         </>
@@ -1845,7 +1842,7 @@ export default function BeritaAcara({ profile }) {
               return (
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", background: "var(--surface-alt)", border: "1px solid var(--border)", borderRadius: 10, padding: "10px 16px", marginBottom: 16 }}>
                   <span style={{ fontSize: 13, fontWeight: 600, color: "var(--text-secondary)" }}>
-                    {allRows.length} item dicek &middot; {selisihCount === 0 ? (allRows.some((r) => r.status === "Di luar filter") ? "tidak ada selisih sesuai filter" : "semua lengkap") : `${selisihCount} selisih ditemukan`}
+                    {allRows.length} item dicek &middot; {selisihCount === 0 ? "semua lengkap" : `${selisihCount} selisih ditemukan`}
                   </span>
                   <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                     <span style={{ fontSize: 20, fontWeight: 800, color: selisihCount > 0 ? "#a32020" : "#1a9e6e" }}>{selisihCount}</span>
@@ -1901,7 +1898,7 @@ export default function BeritaAcara({ profile }) {
               </div>
             ) : (
               <DisplaySection
-                rows={displayRowsForm}
+                rows={displayRows}
                 perlakuanOpsi={perlakuanOpsi}
                 kondisiOpsi={kondisiOpsi}
                 canEdit={canEdit}
@@ -1915,6 +1912,7 @@ export default function BeritaAcara({ profile }) {
                 onReset={resetMonitoringDisplay}
                 cabang={selectedBranch.name}
                 tanggalAudit={auditDate}
+                periodeLabel={namaPeriode(viewPeriod)}
               />
             )}
 
@@ -1973,7 +1971,7 @@ function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove, onUp
       {rows.length === 0 ? (
         <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Belum ada baris.</div>
       ) : shown.length === 0 ? (
-        <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Tidak ada item berstatus selisih sesuai filter pada kategori ini.</div>
+        <div style={{ fontSize: 12, color: "var(--text-faint)" }}>Semua item di kategori ini "Lengkap" &mdash; nggak ada yang selisih.</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {shown.map(({ row, i }) => {
@@ -1982,13 +1980,13 @@ function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove, onUp
             return (
               <div key={i} style={{ display: "grid", gridTemplateColumns: "1.6fr auto 1.8fr auto", gap: 8, alignItems: "center", background: "var(--surface-alt)", padding: "10px 10px 10px 12px", borderRadius: 8, borderLeft: `3px solid ${isSelisih ? "#a32020" : "#1a9e6e55"}` }}>
                 <input className="input" placeholder="Nama Barang/Brand" value={row.nama} disabled={!canEdit} onChange={(e) => onUpdate(i, "nama", e.target.value)} style={{ fontSize: 12.5 }} />
-                {row.status === "Di luar filter" ? <span className="stock-pill">Di luar filter</span> : <StatusToggle
+                <StatusToggle
                   value={row.status}
                   onChange={(v) => onUpdate(i, "status", v)}
                   disabled={!canEdit}
                   okLabel="Lengkap"
                   badLabel="Selisih"
-                />}
+                />
                 <input className="input" placeholder="Keterangan" value={row.keterangan} disabled={!canEdit} onChange={(e) => onUpdate(i, "keterangan", e.target.value)} style={{ fontSize: 12.5 }} />
                 {canEdit && <span onClick={() => onRemove(i)} style={{ cursor: "pointer", color: "var(--danger-text)", fontSize: 18, textAlign: "center" }}>&times;</span>}
                 {isSelisih && (() => {
