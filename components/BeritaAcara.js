@@ -1975,7 +1975,16 @@ function StockSubSection({ title, rows, canEdit, onAdd, onUpdate, onRemove, onUp
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           {shown.map(({ row, i }) => {
-            if (row.nexa) return <NexaImportedRow key={i} row={row} canEdit={canEdit} onRemove={() => onRemove(i)} onNote={(v) => onUpdate(i, "keterangan", v)} onPrice={(j, v) => onUpdateBarang(i, j, "harga", v)} />;
+            if (row.nexa) return (
+              <div key={i} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                {/* Status baris Nexa ditentukan AUDITOR, sama seperti baris manual. */}
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", fontSize: 12.5, color: "var(--text-secondary)" }}>
+                  <span>Status pemeriksaan (ditentukan auditor):</span>
+                  <StatusToggle value={row.status} onChange={(v) => onUpdate(i, "status", v)} disabled={!canEdit} okLabel="Lengkap" badLabel="Selisih" />
+                </div>
+                <NexaImportedRow row={row} canEdit={canEdit} onRemove={() => onRemove(i)} onNote={(v) => onUpdate(i, "keterangan", v)} onPrice={(j, v) => onUpdateBarang(i, j, "harga", v)} />
+              </div>
+            );
             const isSelisih = row.status === "Selisih";
             return (
               <div key={i} style={{ display: "grid", gridTemplateColumns: "1.6fr auto 1.8fr auto", gap: 8, alignItems: "center", background: "var(--surface-alt)", padding: "10px 10px 10px 12px", borderRadius: 8, borderLeft: `3px solid ${isSelisih ? "#a32020" : "#1a9e6e55"}` }}>
